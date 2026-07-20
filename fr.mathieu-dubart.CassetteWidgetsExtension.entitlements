@@ -4,7 +4,7 @@
 <dict>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.fr.mathieu-dubart.Cassette</string>
+		<string>group.com.kyumin.Cassette</string>
 	</array>
 </dict>
 </plist>
