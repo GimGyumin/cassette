@@ -8,9 +8,22 @@ import Foundation
 // IMPORTANT: Never persist outside of Keychain.
 nonisolated struct ServerCredentials: Codable, Sendable {
     let password: String
+    /// Jellyfin-scoped token obtained through Quick Connect. Used only with Jellyfin when no
+    /// password was supplied and remains in Keychain alongside the Jellyfin token copy.
+    let jellyfinAccessToken: String?
     /// Custom HTTP headers injected on all requests (e.g. Cloudflare Access tokens).
     /// Treated as secrets — never logged, never stored outside Keychain.
     let customHeaders: [String: String]
+
+    init(
+        password: String,
+        customHeaders: [String: String],
+        jellyfinAccessToken: String? = nil
+    ) {
+        self.password = password
+        self.jellyfinAccessToken = jellyfinAccessToken
+        self.customHeaders = customHeaders
+    }
 
     static func keychainKey(for serverId: UUID) -> String {
         "cassette.server.\(serverId.uuidString)"
@@ -18,9 +31,9 @@ nonisolated struct ServerCredentials: Codable, Sendable {
 }
 
 extension ServerCredentials: CustomStringConvertible {
-    var description: String { "ServerCredentials(password: [REDACTED], customHeaders: [REDACTED])" }
+    var description: String { "ServerCredentials(password: [REDACTED], jellyfinAccessToken: [REDACTED], customHeaders: [REDACTED])" }
 }
 
 extension ServerCredentials: CustomDebugStringConvertible {
-    var debugDescription: String { "ServerCredentials(password: [REDACTED], customHeaders: [REDACTED])" }
+    var debugDescription: String { "ServerCredentials(password: [REDACTED], jellyfinAccessToken: [REDACTED], customHeaders: [REDACTED])" }
 }

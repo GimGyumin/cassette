@@ -48,4 +48,10 @@ actor RadioService: RadioServiceProtocol {
         stationsCache = nil
         Logger.radio.debug("Radio station cache cleared.")
     }
+
+    func invalidateClientCache() async {
+        cachedClient = nil
+        cachedServerId = nil
+        stationsCache = nil
+    }
 }

@@ -6,110 +6,80 @@
 import Foundation
 import MediaPlayer
 import OSLog
+#if os(iOS)
+import UIKit
+#endif
 
 /// Manages MPNowPlayingInfoCenter + MPRemoteCommandCenter.
 /// Active from v1 (lockscreen, Control Center, AirPods, Apple Watch).
 /// Architected as the direct extension point for CarPlay (v1.2) — no refactor needed.
 actor NowPlayingService: NowPlayingServiceProtocol {
-    private let playerService: any PlayerServiceProtocol
-    private let artworkLoader = ArtworkLoader()
-    private let artworkImageCache: ArtworkImageCache
-    private var commandsRegistered = false
-    private var currentSong: NowPlayingSnapshot?
-
-    init(playerService: any PlayerServiceProtocol, artworkImageCache: ArtworkImageCache) {
-        self.playerService = playerService
-        self.artworkImageCache = artworkImageCache
+    enum RemoteCommand: Sendable {
+        case play
+        case pause
+        case toggle
+        case next
+        case previous
+        case seek(TimeInterval)
     }
 
-    // MARK: - Lifecycle
+    let playerService: any PlayerServiceProtocol
+    let artworkLoader = ArtworkLoader()
+    let artworkImageCache: ArtworkImageCache
+    let serverState: ServerState?
+    /// Album id → the cover a downloaded album stored during library preparation. Lets the lock
+    /// screen prefer downloaded artwork over a server fetch, matching the in-app player.
+    let preparedCoverIdProvider: (@MainActor (String?) -> String?)?
+    var modernMediaSession: AnyObject?
+    var commandsRegistered = false
+    var currentSong: NowPlayingSnapshot?
+    var artworkGeneration = 0
+    var hasArtwork = false
+    var artworkRetryDate = Date.distantPast
+    var artworkRetryAttempt = 0
+    var artworkRetryTask: Task<Void, Never>?
+    nonisolated static let maximumArtworkRetryAttempts = 3
+    let artworkRevision = NowPlayingArtworkRevision()
+    /// Failed current-track artwork is retried with a bounded exponential backoff and once
+    /// again on foreground entry. This avoids both a blank Watch/lock screen and an endless
+    /// 30-second network retry loop for tracks whose server artwork is permanently missing.
+    var pendingArtwork: (snapshot: NowPlayingSnapshot, headers: [String: String])?
+    var foregroundRetryObserver: NSObjectProtocol?
+    var originalArtworkObserver: NSObjectProtocol?
+    /// Remote events can arrive in a burst (for example a lock-screen tap followed by an
+    /// AirPods gesture). Keep their order instead of letting detached tasks race each other.
+    var remoteCommandTail: Task<Void, Never>?
 
-    func start() async {
-        guard !commandsRegistered else { return }
-        commandsRegistered = true
-
-        let playerService = playerService
-
-        // Register every command handler SYNCHRONOUSLY, on the MAIN THREAD, in ONE atomic block — before any
-        // actor suspension and before the first now-playing info is set. MPRemoteCommandCenter is a main-thread
-        // API: registering it from the NowPlayingService actor (off-main) let iOS snapshot setSupportedCommands
-        // mid-registration — capturing only {Play, Pause} and never re-snapshotting, so Next / Previous /
-        // scrubber showed greyed out (partial/random by run = the registration-vs-snapshot race). One
-        // main-thread block guarantees the supported set is COMPLETE at iOS's single snapshot. addTarget is what
-        // makes a command "supported"; isEnabled (in updateRemoteCommandsAvailability) only greys/ungreys it.
-        await MainActor.run {
-            let center = MPRemoteCommandCenter.shared()
-
-            center.playCommand.addTarget { [playerService] _ in
-                Task.detached(priority: .userInitiated) {
-                    await playerService.resume()
-                }
-                return .success
-            }
-
-            center.pauseCommand.addTarget { [playerService] _ in
-                Task.detached(priority: .userInitiated) {
-                    await playerService.pause()
-                }
-                return .success
-            }
-
-            center.togglePlayPauseCommand.addTarget { [playerService] _ in
-                Task.detached(priority: .userInitiated) {
-                    await playerService.togglePlayPause()
-                }
-                return .success
-            }
-
-            center.nextTrackCommand.addTarget { [playerService] _ in
-                Task.detached(priority: .userInitiated) {
-                    do {
-                        try await playerService.skipToNext()
-                    } catch {
-                        Logger.nowPlaying.error("[PLAYBACK] skipToNext failed: \(error, privacy: .public)")
-                    }
-                }
-                return .success
-            }
-
-            center.previousTrackCommand.addTarget { [playerService] _ in
-                Task.detached(priority: .userInitiated) {
-                    do {
-                        try await playerService.skipToPrevious()
-                    } catch {
-                        Logger.nowPlaying.error("[PLAYBACK] skipToPrevious failed: \(error, privacy: .public)")
-                    }
-                }
-                return .success
-            }
-
-            #if os(macOS)
-            // macOS Control Center may route the previous-track gesture through skipBackwardCommand
-            // instead of previousTrackCommand. Register both so the gesture works on either path.
-            center.skipBackwardCommand.preferredIntervals = [NSNumber(value: 0)]
-            center.skipBackwardCommand.addTarget { [playerService] _ in
-                Task.detached(priority: .userInitiated) {
-                    try? await playerService.skipToPrevious()
-                }
-                return .success
-            }
-            #endif
-
-            center.changePlaybackPositionCommand.addTarget { [playerService] event in
-                guard let seekEvent = event as? MPChangePlaybackPositionCommandEvent else {
-                    return .commandFailed
-                }
-                let position = seekEvent.positionTime
-                Task.detached(priority: .userInitiated) {
-                    await playerService.seek(to: position)
-                }
-                return .success
-            }
-        }
+    init(
+        playerService: any PlayerServiceProtocol,
+        artworkImageCache: ArtworkImageCache,
+        serverState: ServerState? = nil,
+        preparedCoverIdProvider: (@MainActor (String?) -> String?)? = nil
+    ) {
+        self.playerService = playerService
+        self.artworkImageCache = artworkImageCache
+        self.serverState = serverState
+        self.preparedCoverIdProvider = preparedCoverIdProvider
     }
 
     func stop() async {
+        artworkRetryTask?.cancel()
+        artworkRetryTask = nil
+        artworkGeneration &+= 1
+        let generation = artworkGeneration
+        currentSong = nil
+        pendingArtwork = nil
+        hasArtwork = false
+        artworkRetryAttempt = 0
+        artworkRetryDate = .distantPast
+        #if os(iOS)
+        if #available(iOS 27.0, *),
+           let controller = modernMediaSession as? CassetteMediaSessionController {
+            await controller.stop()
+        }
+        #endif
         await MainActor.run {
+            guard artworkRevision.accept(generation) else { return }
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             #if os(macOS)
             MPNowPlayingInfoCenter.default().playbackState = .stopped
@@ -120,279 +90,8 @@ actor NowPlayingService: NowPlayingServiceProtocol {
         #endif
     }
 
-    // MARK: - Update
-
-    func update(with snapshot: NowPlayingSnapshot) async {
-        if snapshot.isLiveStream {
-            // Live stream: fresh dict with the IsLiveStream flag set.
-            // Duration and elapsed time are intentionally omitted — Control Center hides
-            // the scrubber automatically when MPNowPlayingInfoPropertyIsLiveStream is true.
-            var info: [String: Any] = [
-                MPMediaItemPropertyTitle: snapshot.title,
-                MPNowPlayingInfoPropertyIsLiveStream: true,
-                MPNowPlayingInfoPropertyPlaybackRate: snapshot.playbackRate,
-                MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0
-            ]
-            if let artist = snapshot.artist { info[MPMediaItemPropertyArtist] = artist }
-            let baseInfo = info
-            await MainActor.run {
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = baseInfo
-                #if os(macOS)
-                MPNowPlayingInfoCenter.default().playbackState = .playing
-                #endif
-            }
-            #if os(macOS)
-            postDiscordRPC(.nowPlaying(.init(
-                title: snapshot.title,
-                artist: snapshot.artist ?? "",
-                album: snapshot.album ?? "",
-                duration: snapshot.duration,
-                startedAt: Date().timeIntervalSince1970
-            )))
-            #endif
-
-            // Check ArtworkImageCache — use hero tier for lock screen / Control Center quality.
-            if let coverArtId = snapshot.coverArtId,
-               let cachedImage = await artworkImageCache.cached(for: coverArtId, tier: .hero) {
-                let artwork = MPMediaItemArtwork(boundsSize: CGSize(width: 600, height: 600)) { _ in cachedImage }
-                await MainActor.run {
-                    var infoWithArt = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? baseInfo
-                    infoWithArt[MPMediaItemPropertyArtwork] = artwork
-                    MPNowPlayingInfoCenter.default().nowPlayingInfo = infoWithArt
-                    #if os(macOS)
-                    MPNowPlayingInfoCenter.default().playbackState = .playing
-                    #endif
-                }
-            }
-
-            updateRemoteCommandsAvailability(isLiveStream: true)
-            return
-        }
-
-        updateRemoteCommandsAvailability(isLiveStream: false)
-
-        if snapshot.artworkURL == nil {
-            // Position-only update (pause/resume/seek): merge into the existing dict so
-            // artwork already loaded for the current track is preserved.
-            await MainActor.run {
-                var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-                info[MPMediaItemPropertyTitle] = snapshot.title
-                info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = snapshot.position
-                info[MPMediaItemPropertyPlaybackDuration] = snapshot.duration
-                info[MPNowPlayingInfoPropertyPlaybackRate] = snapshot.playbackRate
-                info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
-                if let artist = snapshot.artist { info[MPMediaItemPropertyArtist] = artist }
-                if let album = snapshot.album { info[MPMediaItemPropertyAlbumTitle] = album }
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-                #if os(macOS)
-                MPNowPlayingInfoCenter.default().playbackState = snapshot.playbackRate > 0 ? .playing : .paused
-                #endif
-            }
-            #if os(macOS)
-            if snapshot.playbackRate == 0 {
-                postDiscordRPC(.stopped)
-            } else if let song = currentSong {
-                postDiscordRPC(.nowPlaying(.init(
-                    title: song.title,
-                    artist: song.artist ?? "",
-                    album: song.album ?? "",
-                    duration: song.duration,
-                    startedAt: Date().timeIntervalSince1970
-                )))
-            }
-            #endif
-            return
-        }
-
-        // New track: build from scratch so stale artwork from the previous track is cleared
-        // before the new one loads. Text metadata is committed first so the lockscreen
-        // doesn't flash empty while the artwork fetch is in progress.
-        var info: [String: Any] = [
-            MPMediaItemPropertyTitle: snapshot.title,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: snapshot.position,
-            MPMediaItemPropertyPlaybackDuration: snapshot.duration,
-            MPNowPlayingInfoPropertyPlaybackRate: snapshot.playbackRate,
-            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0
-        ]
-        if let artist = snapshot.artist { info[MPMediaItemPropertyArtist] = artist }
-        if let album = snapshot.album { info[MPMediaItemPropertyAlbumTitle] = album }
-        currentSong = snapshot
-        let baseInfo = info
-        await MainActor.run {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = baseInfo
-            #if os(macOS)
-            MPNowPlayingInfoCenter.default().playbackState = snapshot.playbackRate > 0 ? .playing : .paused
-            #endif
-        }
-        #if os(macOS)
-        postDiscordRPC(.nowPlaying(.init(
-            title: snapshot.title,
-            artist: snapshot.artist ?? "",
-            album: snapshot.album ?? "",
-            duration: snapshot.duration,
-            startedAt: Date().timeIntervalSince1970
-        )))
-        #endif
-
-        // Fast path: image already in ArtworkImageCache (pre-loaded when the card was visible).
-        if let coverArtId = snapshot.coverArtId,
-           let cachedImage = await artworkImageCache.cached(for: coverArtId, tier: .hero) {
-            let artwork = MPMediaItemArtwork(boundsSize: CGSize(width: 600, height: 600)) { _ in cachedImage }
-            let fallback = baseInfo
-            await MainActor.run {
-                var infoWithArt = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? fallback
-                infoWithArt[MPMediaItemPropertyArtwork] = artwork
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = infoWithArt
-                #if os(macOS)
-                MPNowPlayingInfoCenter.default().playbackState = snapshot.playbackRate > 0 ? .playing : .paused
-                #endif
-            }
-            return
-        }
-
-        // Slow path: fetch from URL and populate both caches.
-        if let artworkURL = snapshot.artworkURL,
-           let artwork = await artworkLoader.artwork(for: artworkURL, headers: snapshot.artworkHeaders) {
-            let fallback = baseInfo
-            await MainActor.run {
-                var infoWithArt = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? fallback
-                infoWithArt[MPMediaItemPropertyArtwork] = artwork
-                MPNowPlayingInfoCenter.default().nowPlayingInfo = infoWithArt
-                #if os(macOS)
-                MPNowPlayingInfoCenter.default().playbackState = snapshot.playbackRate > 0 ? .playing : .paused
-                #endif
-            }
-        }
+    func clearArtworkCache() async {
+        await artworkLoader.clearCache()
     }
 
-    // MARK: - Periodic position push
-
-    func pushPosition(elapsed: TimeInterval, rate: Float, duration: TimeInterval) async {
-        guard elapsed >= 0, duration > 0, elapsed <= duration else { return }
-        await MainActor.run {
-            var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-            info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed
-            info[MPNowPlayingInfoPropertyPlaybackRate] = rate
-            info[MPMediaItemPropertyPlaybackDuration] = duration
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-            #if os(macOS)
-            MPNowPlayingInfoCenter.default().playbackState = .playing
-            #endif
-        }
-    }
-
-    // MARK: - Remote command availability
-
-    private func updateRemoteCommandsAvailability(isLiveStream: Bool) {
-        let center = MPRemoteCommandCenter.shared()
-        // Skip, previous, and scrubbing are meaningless for a live stream.
-        // play/pause/togglePlayPause remain enabled in both modes (always-on).
-        Logger.nowPlaying.debug("[REMOTE] updateRemoteCommandsAvailability — isLiveStream=\(isLiveStream, privacy: .public) nextEnabled=\(!isLiveStream, privacy: .public)")
-        Logger.nowPlaying.debug("[REMOTE] nextTrackCommand.isEnabled BEFORE=\(center.nextTrackCommand.isEnabled, privacy: .public)")
-        Logger.nowPlaying.debug("[REMOTE] previousTrackCommand.isEnabled BEFORE=\(center.previousTrackCommand.isEnabled, privacy: .public)")
-        appendToDebugLog("[RCC] updateRemoteCommandsAvailability called — isLiveStream=\(isLiveStream)")
-        appendToDebugLog("[RCC] nextTrack BEFORE=\(center.nextTrackCommand.isEnabled)")
-        appendToDebugLog("[RCC] previousTrack BEFORE=\(center.previousTrackCommand.isEnabled)")
-        center.nextTrackCommand.isEnabled = !isLiveStream
-        center.previousTrackCommand.isEnabled = !isLiveStream
-        #if os(macOS)
-        center.skipBackwardCommand.isEnabled = !isLiveStream
-        #endif
-        center.changePlaybackPositionCommand.isEnabled = !isLiveStream
-        Logger.nowPlaying.debug("[REMOTE] nextTrackCommand.isEnabled AFTER=\(center.nextTrackCommand.isEnabled, privacy: .public)")
-        Logger.nowPlaying.debug("[REMOTE] previousTrackCommand.isEnabled AFTER=\(center.previousTrackCommand.isEnabled, privacy: .public)")
-        appendToDebugLog("[RCC] nextTrack AFTER=\(center.nextTrackCommand.isEnabled)")
-        appendToDebugLog("[RCC] previousTrack AFTER=\(center.previousTrackCommand.isEnabled)")
-    }
-
-    // MARK: - Discord RPC
-
-    #if os(macOS)
-    private nonisolated func postDiscordRPC(_ event: DiscordRPCEvent) {
-        let port = 47832
-        let urlString: String
-        var body: Data?
-
-        switch event {
-        case .nowPlaying(let info):
-            urlString = "http://localhost:\(port)/now-playing"
-            body = try? JSONEncoder().encode(info)
-        case .stopped:
-            urlString = "http://localhost:\(port)/playback-stopped"
-        }
-
-        guard let url = URL(string: urlString) else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody = body
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 2
-
-        URLSession.shared.dataTask(with: request) { _, _, _ in }.resume()
-    }
-    #endif
-
-    private func appendToDebugLog(_ message: String) {
-        // Forward to the off-actor, opt-in, size-capped logger — no synchronous disk I/O on the playback
-        // actor or the track-change path (audit finding L4). Disabled by default; see RemoteCommandDebugLog.
-        RemoteCommandDebugLog.log(message)
-    }
 }
-
-/// Opt-in, size-capped, off-actor file logger for the MPRemoteCommandCenter skip/previous diagnostic.
-///
-/// This is the active diagnostic for the remote-command (next/previous) bug, so the capability is kept —
-/// but made safe. It is OFF by default and enabled at runtime via the UserDefaults flag `debug.rccFileLog`
-/// (so it can be turned on for a release build on a real device, unlike a `#if DEBUG` gate). When enabled it
-/// appends on a background serial queue — never blocking the playback actor — and rotates the file at a size
-/// cap so `cassette_debug.log` can never grow unbounded.
-private enum RemoteCommandDebugLog {
-    /// Runtime toggle, default OFF. Set this UserDefaults bool to true to capture the log while diagnosing.
-    nonisolated static let enabledKey = "debug.rccFileLog"
-    /// Rotate when the active log reaches this size; total on disk is bounded to ~2x this (.log + .log.1).
-    private nonisolated static let maxBytes = 256 * 1024
-    private nonisolated static let queue = DispatchQueue(label: "fr.mathieu-dubart.cassette.rcc-debug-log", qos: .utility)
-
-    nonisolated static func log(_ message: String) {
-        #if os(iOS)
-        // Cheap in-memory flag check on the caller; when disabled (the default) we do zero work and zero I/O.
-        guard UserDefaults.standard.bool(forKey: enabledKey) else { return }
-        let line = "\(Date()): \(message)\n"
-        queue.async {
-            let fm = FileManager.default
-            guard let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first,
-                  let data = line.data(using: .utf8) else { return }
-            let file = docs.appendingPathComponent("cassette_debug.log")
-            // Rotate before appending once at/over the cap so the file can't grow without bound.
-            if let attrs = try? fm.attributesOfItem(atPath: file.path),
-               let size = attrs[.size] as? Int, size >= maxBytes {
-                let rotated = docs.appendingPathComponent("cassette_debug.log.1")
-                try? fm.removeItem(at: rotated)
-                try? fm.moveItem(at: file, to: rotated)
-            }
-            if let handle = try? FileHandle(forWritingTo: file) {
-                defer { try? handle.close() }
-                handle.seekToEndOfFile()
-                handle.write(data)
-            } else {
-                try? data.write(to: file)
-            }
-        }
-        #endif
-    }
-}
-
-#if os(macOS)
-private nonisolated enum DiscordRPCEvent {
-    case nowPlaying(DiscordNowPlayingInfo)
-    case stopped
-}
-
-private nonisolated struct DiscordNowPlayingInfo: Encodable {
-    let title: String
-    let artist: String
-    let album: String
-    let duration: Double
-    let startedAt: Double
-}
-#endif

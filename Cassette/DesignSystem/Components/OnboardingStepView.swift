@@ -5,10 +5,75 @@
 
 import SwiftUI
 
-/// Reusable layout container for optional onboarding steps.
-/// Renders a branded header (icon + title + subtitle + progress dots),
-/// the step's settings content in a scrollable middle area, and
-/// Skip / Continue buttons pinned at the bottom via safeAreaInset.
+struct SetupBackground: View {
+    var body: some View {
+        #if os(iOS)
+        Color(uiColor: .systemBackground).ignoresSafeArea()
+        #else
+        Color(nsColor: .windowBackgroundColor).ignoresSafeArea()
+        #endif
+    }
+}
+
+struct SetupHeader: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(systemName: icon)
+                .symbolRenderingMode(.monochrome)
+                .font(.system(size: 54, weight: .regular))
+                .foregroundStyle(.blue)
+                .frame(height: 68)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.largeTitle.bold())
+                .foregroundStyle(.primary)
+                .accessibilityAddTraits(.isHeader)
+            Text(subtitle)
+                .font(.body)
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 28)
+        .padding(.bottom, 24)
+    }
+}
+
+struct SetupPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(.semibold))
+            .foregroundStyle(isEnabled ? Color.white : Color.secondary)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(isEnabled ? Color.blue.opacity(configuration.isPressed ? 0.75 : 1) : Color.secondary.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+struct SetupFormStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
+            .background { SetupBackground() }
+            .tint(.blue)
+            #if os(iOS)
+            .listSectionSpacing(18)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .navigationTitle("")
+    }
+}
+
 struct OnboardingStepView<Content: View>: View {
     let icon: String
     let title: String
@@ -17,89 +82,39 @@ struct OnboardingStepView<Content: View>: View {
     let totalSteps: Int
     let onSkip: () -> Void
     let onContinue: () -> Void
+    var skipTitle: String? = nil
     @ViewBuilder let content: () -> Content
 
-    private var continueLabel: String {
-        stepIndex == totalSteps - 1 ? "Done" : "Continue"
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            headerView
-                .background(CassetteColors.backgroundPrimary)
-            content()
-                .safeAreaInset(edge: .bottom) {
-                    bottomActions
+        NavigationStack {
+            Form {
+                Section {
+                    SetupHeader(icon: icon, title: title, subtitle: subtitle)
                 }
-        }
-    }
-
-    // MARK: - Header
-
-    private var headerView: some View {
-        VStack(spacing: CassetteSpacing.m) {
-            ZStack {
-                Circle()
-                    .fill(CassetteColors.accentBackground)
-                    .frame(width: 60, height: 60)
-                Image(systemName: icon)
-                    .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(CassetteColors.accent)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                content()
             }
-
-            VStack(spacing: CassetteSpacing.xs) {
-                Text(title)
-                    .font(.system(.title3, design: .rounded, weight: .bold))
-                    .foregroundStyle(CassetteColors.textPrimary)
-                    .multilineTextAlignment(.center)
-
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(CassetteColors.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(2)
-            }
-            .padding(.horizontal, CassetteSpacing.xxxl)
-
-            progressDots
-        }
-        .padding(.top, CassetteSpacing.xxl)
-        .padding(.bottom, CassetteSpacing.l)
-    }
-
-    // MARK: - Progress dots
-
-    private var progressDots: some View {
-        HStack(spacing: CassetteSpacing.s) {
-            ForEach(0..<totalSteps, id: \.self) { i in
-                Capsule()
-                    .fill(i == stepIndex ? CassetteColors.accent : Color.secondary.opacity(0.3))
-                    .frame(width: i == stepIndex ? 20 : 6, height: 6)
-                    .animation(.easeInOut(duration: 0.25), value: stepIndex)
+            .modifier(SetupFormStyle())
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 12) {
+                    Text(String(localized: "Step \(stepIndex + 1) of \(totalSteps)", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button(String(localized: "Continue", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), action: onContinue)
+                        .buttonStyle(SetupPrimaryButtonStyle())
+                    Button(skipTitle ?? String(localized: "Set Up Later", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), action: onSkip)
+                        .font(.body)
+                        .foregroundStyle(.blue)
+                        .frame(minHeight: 36)
+                        .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+                .frame(maxWidth: 560)
+                .frame(maxWidth: .infinity)
+                .background { SetupBackground() }
             }
         }
-    }
-
-    // MARK: - Bottom actions
-
-    private var bottomActions: some View {
-        VStack(spacing: CassetteSpacing.m) {
-            Button(action: onContinue) {
-                Text(continueLabel)
-                    .font(.system(.body, design: .default, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .tint(CassetteColors.accent)
-
-            Button("Skip", action: onSkip)
-                .font(.subheadline)
-                .foregroundStyle(CassetteColors.textSecondary)
-        }
-        .padding(.horizontal, CassetteSpacing.xxxl)
-        .padding(.top, CassetteSpacing.l)
-        .padding(.bottom, CassetteSpacing.xxl)
-        .background(.regularMaterial)
     }
 }

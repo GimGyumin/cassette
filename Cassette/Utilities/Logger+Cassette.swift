@@ -42,4 +42,6 @@ extension Logger {
     nonisolated static let boot               = Logger(subsystem: "app.cassette.boot",               category: "Boot")
     nonisolated static let migration          = Logger(subsystem: "app.cassette.migration",          category: "Migration")
     nonisolated static let crossfade          = Logger(subsystem: "app.cassette.crossfade",          category: "Crossfade")
+    nonisolated static let siri               = Logger(subsystem: "app.cassette.siri",               category: "Siri")
+    nonisolated static let performance        = Logger(subsystem: "app.cassette.performance",        category: "PerformanceGovernor")
 }

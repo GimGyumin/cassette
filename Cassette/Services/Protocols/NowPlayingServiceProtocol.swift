@@ -15,6 +15,9 @@ protocol NowPlayingServiceProtocol: AnyObject, Sendable {
     /// Deregisters all handlers and clears now playing info.
     func stop() async
 
+    /// Releases reusable artwork without removing the currently displayed Now Playing item.
+    func clearArtworkCache() async
+
     /// Pushes a full metadata + artwork update (called from PlayerService on track change or seek).
     func update(with snapshot: NowPlayingSnapshot) async
 
@@ -22,4 +25,19 @@ protocol NowPlayingServiceProtocol: AnyObject, Sendable {
     /// touching title, artist, or artwork. Called on every periodic tick to prevent iOS
     /// extrapolation drift on the lock screen.
     func pushPosition(elapsed: TimeInterval, rate: Float, duration: TimeInterval) async
+
+    /// Patches ISRC into the current Now Playing info for system Music Haptics.
+    func setISRC(_ isrc: String) async
+
+    /// Immediately updates playback rate in Now Playing (Music Haptics follows this).
+    func setPlaybackRate(_ rate: Float) async
+
+    /// Removes ISRC from Now Playing so system Music Haptics detach from the prior track.
+    func clearISRC() async
+
+    /// Publishes title/artist/album/rate/ISRC without waiting for artwork (track transitions).
+    func publishTrackChange(_ snapshot: NowPlayingSnapshot) async
+
+    /// Re-enable skip / previous / scrub after sleep or route changes (CarPlay / lock screen).
+    func reassertRemoteCommands() async
 }

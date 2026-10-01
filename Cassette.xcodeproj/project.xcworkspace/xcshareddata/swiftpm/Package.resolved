@@ -1,13 +1,13 @@
 {
-  "originHash" : "44c5ad6c4fd29dc28ef1de55acda57c7e6a51dfc887031a1c7b3cdc19fa3d8b7",
+  "originHash" : "312cab4068d4f428c0a94f553780dd9c515cdbc8cc323e4e49a2b1a47770cf26",
   "pins" : [
     {
       "identity" : "audiostreaming",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/dimitris-c/AudioStreaming",
       "state" : {
-        "revision" : "a729ee28fece29d80a749419d96df0693200f124",
-        "version" : "1.4.4"
+        "revision" : "e28a74b7b8632fc14312b7a79dcd82fa302779af",
+        "version" : "1.4.5"
       }
     },
     {
@@ -17,15 +17,6 @@
       "state" : {
         "revision" : "c0e822e18738ad913864e98d9614927ac1e9337c",
         "version" : "0.1.2"
-      }
-    },
-    {
-      "identity" : "swiftsonic",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/MathieuDubart/swiftsonic",
-      "state" : {
-        "revision" : "d3e7b5fbee546a39108b48b6ed933dfd4ab41359",
-        "version" : "0.8.2"
       }
     },
     {

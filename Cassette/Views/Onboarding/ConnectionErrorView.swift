@@ -24,12 +24,12 @@ struct ConnectionErrorView: View {
 
             Text(error.presentation.title)
                 .font(.headline)
-                .foregroundStyle(CassetteColors.textPrimary)
+                .foregroundStyle(CassetteColors.SemanticLabel.primary)
                 .padding(.bottom, CassetteSpacing.xs)
 
             Text(error.presentation.description)
                 .font(.subheadline)
-                .foregroundStyle(CassetteColors.textSecondary)
+                .foregroundStyle(CassetteColors.SemanticLabel.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, CassetteSpacing.m)
 

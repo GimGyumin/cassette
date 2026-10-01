@@ -22,16 +22,20 @@ struct ListenBrainzSettingsView: View {
                     scrobblingConfigSection(vm: vm)
                 }
                 .formStyle(.grouped)
+                .modifier(SettingsSubpageStyle())
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationTitle("ListenBrainz")
+        .navigationTitle(String(localized: "ListenBrainz", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         #if os(macOS)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Close") { dismiss() }
+                Button(String(localized: "Close", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) { dismiss() }
             }
         }
         #endif
@@ -49,17 +53,24 @@ struct ListenBrainzSettingsView: View {
 
     private func aboutSection() -> some View {
         Section {
-            Text("ListenBrainz is an open-source music scrobbling and recommendation service by the MetaBrainz Foundation. Cassette can submit your listening history and surface personalized fresh releases and similar artists.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Button("Visit ListenBrainz →") {
-                ExternalLinkOpener.open(CassetteURLs.listenBrainz)
+            Label {
+                Text(String(localized: "ListenBrainz is an open-source music scrobbling and recommendation service by the MetaBrainz Foundation. Cassette can submit your listening history and surface personalized fresh releases and similar artists.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } icon: {
+                SettingsIcon(systemImage: "waveform.path.ecg", color: .red)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-            .font(.footnote)
+            Button {
+                ExternalLinkOpener.open(CassetteURLs.listenBrainz)
+            } label: {
+                Label {
+                    Text(String(localized: "Visit ListenBrainz", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "safari.fill", color: .blue)
+                }
+            }
         } header: {
-            Text("About ListenBrainz")
+            SettingsSectionHeader(verbatim: String(localized: "About ListenBrainz", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
 
@@ -80,29 +91,32 @@ struct ListenBrainzSettingsView: View {
     private func notConnectedSection(vm: ListenBrainzSettingsViewModel) -> some View {
         @Bindable var vm = vm
         return Section {
-            TextField("Username", text: $vm.usernameInput)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.asciiCapable)
-                #endif
-                .onChange(of: vm.usernameInput) { _, _ in
-                    vm.validateUsernameInputLocally()
-                }
+            SettingsTextFieldRow(title: "Username", systemImage: "person.fill", color: .blue) {
+                TextField(String(localized: "Username", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), text: $vm.usernameInput)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.asciiCapable)
+                    #endif
+                    .onChange(of: vm.usernameInput) { _, _ in
+                        vm.validateUsernameInputLocally()
+                    }
+            }
 
             Button {
                 Task { await vm.connect() }
             } label: {
-                HStack(spacing: CassetteSpacing.s) {
-                    if vm.isProcessing {
-                        ProgressView().scaleEffect(0.8)
+                Label {
+                    HStack(spacing: CassetteSpacing.s) {
+                        Text(String(localized: "Connect", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        if vm.isProcessing {
+                            ProgressView().scaleEffect(0.8)
+                        }
                     }
-                    Text("Connect")
+                } icon: {
+                    SettingsIcon(systemImage: "link.circle.fill", color: .blue)
                 }
-                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(CassetteColors.accent)
             .disabled(vm.usernameInput.isEmpty || vm.usernameInputValidationError != nil || vm.isProcessing)
 
             if let error = vm.userFacingError {
@@ -111,12 +125,12 @@ struct ListenBrainzSettingsView: View {
                     .foregroundStyle(.red)
             }
         } header: {
-            Text("Recommendations Account")
+            SettingsSectionHeader(verbatim: String(localized: "Recommendations Account", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         } footer: {
             if let error = vm.usernameInputValidationError {
                 Text(error).foregroundStyle(.red)
             } else {
-                Text("Enter your ListenBrainz username to enable music recommendations.")
+                Text(String(localized: "Enter your ListenBrainz username to enable music recommendations.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             }
         }
     }
@@ -128,19 +142,35 @@ struct ListenBrainzSettingsView: View {
         status: ValidationStatus
     ) -> some View {
         Section {
-            LabeledContent("Connected as") {
+            LabeledContent {
                 Text(username).fontWeight(.medium)
+            } label: {
+                Label {
+                    Text(String(localized: "Connected as", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "person.crop.circle.fill", color: .blue)
+                }
             }
-            LabeledContent("Status") {
+            LabeledContent {
                 statusBadge(for: status)
+            } label: {
+                Label {
+                    Text(String(localized: "Status", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "checkmark.circle.fill", color: statusColor(for: status))
+                }
             }
             if case .invalid = status {
                 Button {
                     Task { await vm.revalidate() }
                 } label: {
-                    HStack(spacing: CassetteSpacing.s) {
-                        if vm.isProcessing { ProgressView().scaleEffect(0.8) }
-                        Text("Retry connection")
+                    Label {
+                        HStack(spacing: CassetteSpacing.s) {
+                            if vm.isProcessing { ProgressView().scaleEffect(0.8) }
+                            Text(String(localized: "Retry connection", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        }
+                    } icon: {
+                        SettingsIcon(systemImage: "arrow.clockwise", color: .orange)
                     }
                 }
                 .disabled(vm.isProcessing)
@@ -149,68 +179,95 @@ struct ListenBrainzSettingsView: View {
                 Text(error).font(.footnote).foregroundStyle(.red)
             }
         } header: {
-            Text("Recommendations Account")
+            SettingsSectionHeader(verbatim: String(localized: "Recommendations Account", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
 
         Section {
             Button {
                 Task { await vm.disconnect() }
             } label: {
-                HStack(spacing: CassetteSpacing.s) {
-                    if vm.isProcessing { ProgressView().scaleEffect(0.8) }
-                    Text("Disconnect")
+                Label {
+                    HStack(spacing: CassetteSpacing.s) {
+                        if vm.isProcessing { ProgressView().scaleEffect(0.8) }
+                        Text(String(localized: "Disconnect", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    }
+                } icon: {
+                    SettingsIcon(systemImage: "pause.circle.fill", color: .gray)
                 }
             }
             .disabled(vm.isProcessing)
 
-            Button("Forget username", role: .destructive) {
+            Button(role: .destructive) {
                 showForgetAlert = true
+            } label: {
+                Label {
+                    Text(String(localized: "Forget username", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "trash.fill", color: .red)
+                }
             }
         }
-        .alert("Forget ListenBrainz Account?", isPresented: $showForgetAlert) {
-            Button("Forget", role: .destructive) { Task { await vm.resetCredentials() } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Your username will be removed. You can reconnect anytime.")
+        .cassetteDestructiveAlert(
+            String(localized: "Forget ListenBrainz Account?", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+            isPresented: $showForgetAlert,
+            message: String(localized: "Your username will be removed. You can reconnect anytime.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+            destructiveButtonTitle: String(localized: "Forget", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        ) {
+            Task { await vm.resetCredentials() }
         }
     }
 
     @ViewBuilder
     private func previouslyConnectedSection(vm: ListenBrainzSettingsViewModel, username: String) -> some View {
         Section {
-            LabeledContent("Previously connected as") {
+            LabeledContent {
                 Text(username).fontWeight(.medium)
+            } label: {
+                Label {
+                    Text(String(localized: "Previously connected as", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "person.crop.circle.badge.clock", color: .orange)
+                }
             }
 
             Button {
                 vm.usernameInput = username
                 Task { await vm.connect() }
             } label: {
-                HStack(spacing: CassetteSpacing.s) {
-                    if vm.isProcessing { ProgressView().scaleEffect(0.8) }
-                    Text("Reconnect")
+                Label {
+                    HStack(spacing: CassetteSpacing.s) {
+                        Text(String(localized: "Reconnect", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        if vm.isProcessing { ProgressView().scaleEffect(0.8) }
+                    }
+                } icon: {
+                    SettingsIcon(systemImage: "arrow.clockwise.circle.fill", color: .blue)
                 }
-                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(CassetteColors.accent)
             .disabled(vm.isProcessing)
 
-            Button("Forget username", role: .destructive) {
+            Button(role: .destructive) {
                 showForgetAlert = true
+            } label: {
+                Label {
+                    Text(String(localized: "Forget username", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "trash.fill", color: .red)
+                }
             }
 
             if let error = vm.userFacingError {
                 Text(error).font(.footnote).foregroundStyle(.red)
             }
         } header: {
-            Text("Recommendations Account")
+            SettingsSectionHeader(verbatim: String(localized: "Recommendations Account", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
-        .alert("Forget ListenBrainz Account?", isPresented: $showForgetAlert) {
-            Button("Forget", role: .destructive) { Task { await vm.resetCredentials() } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Your username will be removed. You can reconnect anytime.")
+        .cassetteDestructiveAlert(
+            String(localized: "Forget ListenBrainz Account?", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+            isPresented: $showForgetAlert,
+            message: String(localized: "Your username will be removed. You can reconnect anytime.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+            destructiveButtonTitle: String(localized: "Forget", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        ) {
+            Task { await vm.resetCredentials() }
         }
     }
 
@@ -219,16 +276,21 @@ struct ListenBrainzSettingsView: View {
     private func scrobblingToggleSection(vm: ListenBrainzSettingsViewModel) -> some View {
         Section {
             Toggle(
-                "Submit listens to ListenBrainz",
                 isOn: Binding(
                     get: { vm.isScrobblingToggleOn },
                     set: { on in Task { await vm.toggleScrobbling(on) } }
                 )
-            )
+            ) {
+                Label {
+                    Text(String(localized: "Submit listens to ListenBrainz", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "dot.radiowaves.left.and.right", color: .red)
+                }
+            }
         } header: {
-            Text("Scrobbling")
+            SettingsSectionHeader(verbatim: String(localized: "Scrobbling", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         } footer: {
-            Text("If your server already relays listens to ListenBrainz, leave this disabled to avoid duplicate scrobbles.")
+            Text(String(localized: "If your server already relays listens to ListenBrainz, leave this disabled to avoid duplicate scrobbles.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
 
@@ -244,32 +306,37 @@ struct ListenBrainzSettingsView: View {
     private func scrobblingInputSection(vm: ListenBrainzSettingsViewModel) -> some View {
         @Bindable var vm = vm
         return Section {
-            SecureField("User token", text: $vm.tokenInput)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textContentType(.password)
-                #endif
+            SettingsTextFieldRow(title: "User token", systemImage: "key.fill", color: .orange) {
+                SecureField(String(localized: "User token", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), text: $vm.tokenInput)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textContentType(.password)
+                    #endif
+            }
 
-            TextField("Server URL", text: $vm.serverURLInput)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                #endif
+            SettingsTextFieldRow(title: "Server URL", systemImage: "network", color: .gray) {
+                TextField(String(localized: "Server URL", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), text: $vm.serverURLInput)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    #endif
+            }
 
             Button {
                 Task { await vm.validateScrobblingToken() }
             } label: {
-                HStack(spacing: CassetteSpacing.s) {
-                    if case .validating = vm.scrobblingConnectionState {
-                        ProgressView().scaleEffect(0.8)
+                Label {
+                    HStack(spacing: CassetteSpacing.s) {
+                        Text(String(localized: "Validate", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        if case .validating = vm.scrobblingConnectionState {
+                            ProgressView().scaleEffect(0.8)
+                        }
                     }
-                    Text("Validate")
+                } icon: {
+                    SettingsIcon(systemImage: "checkmark.seal.fill", color: .green)
                 }
-                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(CassetteColors.accent)
             .disabled(vm.tokenInput.isEmpty || vm.isScrobblingProcessing)
 
             if case .failed(let message) = vm.scrobblingConnectionState {
@@ -278,40 +345,66 @@ struct ListenBrainzSettingsView: View {
                     .foregroundStyle(.red)
             }
         } header: {
-            Text("Token")
+            SettingsSectionHeader(verbatim: String(localized: "Token", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         } footer: {
-            Text("Find your user token at listenbrainz.org → Profile → Music Services & API.")
+            Text(String(localized: "Find your user token at listenbrainz.org > Profile > Music Services & API.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
 
     @ViewBuilder
     private func scrobblingConnectedSection(vm: ListenBrainzSettingsViewModel, username: String?) -> some View {
         Section {
-            LabeledContent("Connected as") {
-                Text(username ?? "ListenBrainz").fontWeight(.medium)
+            LabeledContent {
+                Text(username ?? String(localized: "ListenBrainz", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)).fontWeight(.medium)
+            } label: {
+                Label {
+                    Text(String(localized: "Connected as", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "person.crop.circle.fill", color: .blue)
+                }
             }
-            LabeledContent("Scrobbling") {
-                Text(vm.scrobblingSnapshot.isEnabled ? "Active" : "Paused")
+            LabeledContent {
+                Text(vm.scrobblingSnapshot.isEnabled ? String(localized: "Active", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Paused", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                     .foregroundStyle(vm.scrobblingSnapshot.isEnabled ? .green : .secondary)
+            } label: {
+                Label {
+                    Text(String(localized: "Scrobbling", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "dot.radiowaves.left.and.right", color: vm.scrobblingSnapshot.isEnabled ? .green : .gray)
+                }
             }
-            Button("Replace token") {
+            Button {
                 vm.startTokenReplacement()
+            } label: {
+                Label {
+                    Text(String(localized: "Replace token", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "key.fill", color: .orange)
+                }
             }
         } header: {
-            Text("Token")
+            SettingsSectionHeader(verbatim: String(localized: "Token", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
 
         Section {
-            Button("Forget credentials", role: .destructive) {
+            Button(role: .destructive) {
                 showForgetScrobblingAlert = true
+            } label: {
+                Label {
+                    Text(String(localized: "Forget credentials", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } icon: {
+                    SettingsIcon(systemImage: "trash.fill", color: .red)
+                }
             }
             .disabled(vm.isScrobblingProcessing)
         }
-        .alert("Forget Scrobbling Credentials?", isPresented: $showForgetScrobblingAlert) {
-            Button("Forget", role: .destructive) { Task { await vm.resetScrobblingToken() } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Your token will be removed and scrobbling disabled. You can reconnect anytime.")
+        .cassetteDestructiveAlert(
+            String(localized: "Forget Scrobbling Credentials?", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+            isPresented: $showForgetScrobblingAlert,
+            message: String(localized: "Your token will be removed and scrobbling disabled. You can reconnect anytime.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+            destructiveButtonTitle: String(localized: "Forget", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        ) {
+            Task { await vm.resetScrobblingToken() }
         }
     }
 
@@ -330,18 +423,18 @@ struct ListenBrainzSettingsView: View {
 
     private func statusColor(for status: ValidationStatus) -> Color {
         switch status {
-        case .valid:            .green
+        case .valid: .green
         case .validating, .unknown: .orange
-        case .invalid:          .red
+        case .invalid: .red
         }
     }
 
     private func statusLabel(for status: ValidationStatus) -> String {
         switch status {
-        case .valid:      "Connected"
-        case .validating: "Validating…"
-        case .unknown:    "Validation pending"
-        case .invalid:    "Connection issue"
+        case .valid: String(localized: "Connected", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .validating: String(localized: "Validating…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .unknown: String(localized: "Validation pending", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .invalid: String(localized: "Connection issue", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         }
     }
 }

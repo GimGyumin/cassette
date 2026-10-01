@@ -3,17 +3,9 @@
 > A native iOS and macOS client for Subsonic, OpenSubsonic, and Navidrome servers. Built for people who self-host their music.
 
 [![License: MPL 2.0](https://img.shields.io/badge/license-MPL--2.0-brightgreen.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-iOS%2026%2B%20%7C%20macOS%2015%2B-blue.svg)](#requirements)
-[![Swift](https://img.shields.io/badge/Swift-6-orange.svg)](https://swift.org)
+[![Platform](https://img.shields.io/badge/platform-iOS%2018.6%2B%20%7C%20macOS%2015.6%2B-blue.svg)](#requirements)
+[![Swift](https://img.shields.io/badge/Swift-5%20language%20mode-orange.svg)](https://swift.org)
 [![Discord](https://badgen.net/badge/icon/discord?icon=discord&label)](https://discord.gg/zQxUQedpex)
-
----
-
-## Screenshots
-
-| Home | Album | Player | Playlist | Artist |
-|------|-------|--------|----------|--------|
-| ![](docs/screenshots/home.jpeg) | ![](docs/screenshots/album.jpeg) | ![](docs/screenshots/player.jpeg) | ![](docs/screenshots/playlist.jpeg) | ![](docs/screenshots/artist.jpeg) |
 
 ---
 
@@ -30,10 +22,11 @@ Licensed under MPL-2.0.
 ## Features
 
 **Listening**
-- Native iOS 26 / macOS 15 client with a Liquid Glass design language
+- Native iOS 18.6 / macOS 15.6 client that adopts the newest system materials where available
 - Background playback with lock screen and Control Center controls, plus AirPlay
 - True offline mode: download albums, playlists, or individual tracks
 - Playback powered by the AudioStreaming engine — FLAC, MP3, AAC, WAV, and Ogg/Vorbis
+- Gapless playback — consecutive tracks (albums, playlists, Autoplay) run into each other without silence
 - Persistent playback session — pick up where you left off after relaunching
 - Lyrics support
 - Shuffle, repeat, and full queue management
@@ -54,7 +47,9 @@ Licensed under MPL-2.0.
 **Server & privacy**
 - Subsonic and OpenSubsonic API, with OpenSubsonic extensions where available
 - Custom HTTP headers for servers behind a reverse proxy (Cloudflare Access, Authelia, etc.)
-- Credentials stored only in the iOS / macOS Keychain — zero tracking, zero analytics, all traffic direct to your server
+- Server passwords, custom authentication headers, API keys, and integration tokens are stored in Keychain
+- Zero tracking and zero analytics. Optional integrations contact their respective services only when enabled
+- OpenAI Translation sends the selected lyric text to OpenAI, which may retain API inputs and outputs for up to 30 days for abuse monitoring; Apple Translation uses the system translation framework
 
 ---
 
@@ -76,7 +71,7 @@ Join the beta: <https://testflight.apple.com/join/pxCpfpxF>
 ### Build from source
 
 1. **Requirements**
-   - macOS 15 or later with Xcode 26 or later
+   - macOS 15.6 or later with Xcode 26 or later
    - A Subsonic / OpenSubsonic / Navidrome server to connect to
    - An Apple Developer account (the free tier works for personal device builds)
 
@@ -90,7 +85,7 @@ Join the beta: <https://testflight.apple.com/join/pxCpfpxF>
 
 3. **Sign and run**
    - Select your team in Signing & Capabilities
-   - Choose an iOS 26+ device/simulator or **My Mac**
+   - Choose an iOS 18.6+ device/simulator or **My Mac** running macOS 15.6+
    - Build and run (⌘R)
 
 4. **First launch**
@@ -102,7 +97,7 @@ Join the beta: <https://testflight.apple.com/join/pxCpfpxF>
 
 ## Requirements
 
-- iOS 26 or later, or macOS 15 (Sequoia) or later
+- iOS 18.6 or later, or macOS 15.6 or later
 - A running Subsonic, OpenSubsonic, or Navidrome server
 
 ---
@@ -124,7 +119,7 @@ For developers curious about the internals:
 - **Playback** — the [AudioStreaming](https://github.com/dimitris-c/AudioStreaming) engine, wired to `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter` for lock screen, Control Center, and AirPlay.
 - **Subsonic API** — [SwiftSonic](https://github.com/MathieuDubart/swiftsonic) (same author, separate repo, MIT) handles all Subsonic / OpenSubsonic communication.
 - **Persistence** — SwiftData for app data (downloads, playlists, favorites cache); Keychain for credentials.
-- **Concurrency** — Swift 6 strict concurrency, `Sendable` throughout, `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`.
+- **Concurrency** — Swift 5 language mode with approachable concurrency, `Sendable` adoption, and `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`.
 - **Dependencies** — SwiftSonic and AudioStreaming (which brings Ogg/Vorbis binary frameworks for lossless decoding). That's the full list.
 
 ---
@@ -153,8 +148,9 @@ For the full roadmap and discussion, see [GitHub Discussions](https://github.com
 
 Contributions are welcome. A few things before you start:
 
+- **Read the map first** — [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) covers the layers, DI container, playback pipeline and known debt; [`CONTRIBUTING.md`](CONTRIBUTING.md) lists the quality gates and the CI jobs that enforce them.
 - **Discuss before coding** — open an issue or discussion before working on a feature, especially architectural changes. A PR that contradicts a design decision may be closed.
-- **Match the existing style** — Swift 6 strict concurrency, no Foundation / UIKit leakage outside the service layer, dependencies kept minimal (SwiftSonic + AudioStreaming).
+- **Match the existing style** — preserve actor isolation and `Sendable` boundaries, keep UI concerns out of services, and keep dependencies minimal.
 - **Test on real devices** — audio playback and Liquid Glass effects behave differently in the Simulator.
 - **Conventional commits** — `feat`, `fix`, `refactor`, `docs`, `chore`, etc.
 
@@ -177,12 +173,11 @@ Dependencies: [SwiftSonic](https://github.com/MathieuDubart/swiftsonic) (MIT) an
 ## Acknowledgments
 
 - The [Navidrome](https://www.navidrome.org) team for an excellent self-hosted music server
-- The [OpenSubsonic](https://opensubsonic.netlify.app) community for modernizing the Subsonic API
 - Substreamer, Ultrasonic, and Symfonium for raising the bar on what a self-hosted music client should feel like
 
 ---
 
-Built by [Mathieu Dubart](https://github.com/MathieuDubart).
+This customized fork is maintained by Kyumin (© 2026 Kyumin). Cassette was originally created by [Mathieu Dubart](https://github.com/MathieuDubart); original copyright and MPL-2.0 notices are retained.
 
 ## Star History
 

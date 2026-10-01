@@ -3,16 +3,14 @@
 // Licensed under the Mozilla Public License 2.0.
 // See LICENSE file in the project root for full license information.
 
-#if os(iOS)
 import SwiftUI
-import UIKit
 import WidgetKit
 
 nonisolated struct NowPlayingEntry: TimelineEntry {
     let date: Date
     let track: SharedTrackInfo?
     let isPlaying: Bool
-    let coverImage: UIImage?
+    let coverImage: PlatformImage?
     let dominantColor: Color
 
     static var placeholder: NowPlayingEntry {
@@ -39,12 +37,13 @@ struct NowPlayingProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<NowPlayingEntry>) -> Void) {
         let entry = makeEntry()
-        let nextUpdate = Date().addingTimeInterval(15 * 60)
+        // Short fallback refresh; track changes also call reloadTimelines from the app.
+        let nextUpdate = Date().addingTimeInterval(5 * 60)
         completion(Timeline(entries: [entry], policy: .after(nextUpdate)))
     }
 
     private func makeEntry() -> NowPlayingEntry {
-        guard let data = SharedStorage.defaults.data(forKey: SharedStorageKey.nowPlayingState.rawValue),
+        guard let data = SharedStorage.read({ $0.data(forKey: SharedStorageKey.nowPlayingState.rawValue) }),
               let state = try? JSONDecoder().decode(SharedNowPlayingState.self, from: data) else {
             return .empty
         }
@@ -62,4 +61,3 @@ struct NowPlayingProvider: TimelineProvider {
         )
     }
 }
-#endif

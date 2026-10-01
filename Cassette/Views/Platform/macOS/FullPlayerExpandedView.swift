@@ -8,8 +8,11 @@ import SwiftUI
 import AppKit
 import OSLog
 import UniformTypeIdentifiers
+import SwiftSonic
 
 private enum RightPanel { case lyrics, queue }
+
+private let fullPlayerLastPanelKey = "cassette.fullPlayerLastPanel"
 
 struct FullPlayerExpandedView: View {
     @Binding var isPresented: Bool
@@ -25,13 +28,18 @@ struct FullPlayerExpandedView: View {
     @State private var artworkImage: PlatformImage? = nil
     @State private var isFavorite = false
     @State private var selectedPanel: RightPanel = {
-        UserDefaults.standard.bool(forKey: "cassette.fullPlayerLastPanel") ? .lyrics : .queue
+        guard UserDefaults.standard.object(forKey: fullPlayerLastPanelKey) != nil else {
+            return .lyrics
+        }
+        return UserDefaults.standard.bool(forKey: fullPlayerLastPanelKey) ? .lyrics : .queue
     }()
     @State private var lyricsViewModel: LyricsViewModel?
     @State private var isMuted = false
     @State private var volumeBeforeMute: Double = 0.7
-    @State private var showVolumeSlider = false
     @State private var showAddToPlaylist = false
+    @State private var showSongInfo = false
+    @State private var isDownloadingTrack = false
+    @State private var isTrackDownloaded = false
     @State private var draggedQueueIndex: Int?
     @State private var dropTargetGap: Int?
     @AppStorage("cassette.lastVolume") private var localVolume: Double = 0.7
@@ -45,6 +53,32 @@ struct FullPlayerExpandedView: View {
     private var queue: [DisplayableSong] { playerState?.queue ?? [] }
     private var currentIndex: Int { playerState?.currentIndex ?? 0 }
     private var isOnline: Bool { container?.serverState.isOnline == true }
+
+    private var playbackQuality: AudioQualityKind? {
+        guard let playerState, !playerState.isLiveStream, let track = currentTrack else { return nil }
+        return AudioQualityClassifier.displayablePlaybackQuality(
+            for: track,
+            isExpensive: container?.serverState.isExpensive == true,
+            isTranscoding: playerState.isDeliveringTranscodedAudio
+        )
+    }
+
+    private var shouldShowLyricsTranslate: Bool {
+        guard LyricsTranslationSettings.shared.isTranslationEnabled,
+              let lyricsVM = lyricsViewModel,
+              case .loaded = lyricsVM.state else { return false }
+        return lyricsVM.needsTranslation
+    }
+
+    private var songInfoLyricsLines: [String] {
+        guard let lyricsViewModel else { return [] }
+        switch lyricsViewModel.state {
+        case .loaded(let lyrics):
+            return lyrics.line.map(\.value).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        default:
+            return []
+        }
+    }
 
     private var dominantColor: Color {
         colorExtractor.dominantColor(for: currentTrack?.coverArtId, image: artworkImage)
@@ -68,26 +102,41 @@ struct FullPlayerExpandedView: View {
     }
 
     var body: some View {
-        ZStack {
-            meshGradientBackground
-                .ignoresSafeArea()
-
-            GeometryReader { geo in
-                contentLayout(geo)
-            }
+        GeometryReader { geo in
+            adaptiveMain(geo)
+                .frame(width: geo.size.width, height: geo.size.height)
         }
-        // Cross-fade the dominant-color-derived chrome (mesh background + accent) when the track changes,
-        // like Apple Music. Scoped to dominantColor so it never animates the mesh's per-frame wave motion.
-        // Separable from the contrast fix — drop this one modifier if the transition isn't wanted.
-        .animation(.easeInOut(duration: 0.5), value: dominantColor)
+        // Background must NOT be a ZStack sibling — blurred art was stealing layout size
+        // and collapsing chrome + lyrics.
+        .background { softArtBackground }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .topLeading) {
             topLeadingButtons
+                .padding(.leading, 78)
+                .padding(.top, 12)
+        }
+        .overlay(alignment: .topTrailing) {
+            topTrailingControls
+                .padding(.trailing, 20)
+                .padding(.top, 12)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            panelTogglePill
+                .padding(.trailing, 24)
+                .padding(.bottom, 20)
         }
         .task(id: currentTrack?.id) {
-            colorExtractor.invalidate(for: currentTrack?.coverArtId)
             artworkImage = nil
-            artworkImage = await artworkCache.load(coverArtId: currentTrack?.coverArtId, tier: .hero)
+            let coverID = container?.playbackCoverId(for: currentTrack) ?? currentTrack?.effectiveCoverArtId
+            let local = await artworkCache.load(coverArtId: coverID, tier: .hero, allowNetwork: false)
+                ?? artworkCache.cached(for: coverID, tier: .thumb)
+            let resolved = if let local { local } else {
+                await artworkCache.load(coverArtId: coverID, tier: .hero)
+            }
+            guard !Task.isCancelled else { return }
+            artworkImage = resolved
             await refreshFavorite()
+            await refreshDownloadState()
         }
         .task(id: currentTrack?.id) {
             guard let track = currentTrack,
@@ -111,12 +160,11 @@ struct FullPlayerExpandedView: View {
         .onReceive(NotificationCenter.default.publisher(for: .cassetteOpenFullPlayerLyrics)) { _ in
             selectedPanel = .lyrics
         }
-        .onChange(of: selectedPanel) { _, newPanel in
-            UserDefaults.standard.set(newPanel == .lyrics, forKey: "cassette.fullPlayerLastPanel")
+        .onReceive(NotificationCenter.default.publisher(for: .cassetteToggleQueue)) { _ in
+            selectedPanel = .queue
         }
-        .onAppear {
-            let remembered = UserDefaults.standard.bool(forKey: "cassette.fullPlayerLastPanel")
-            selectedPanel = remembered ? .lyrics : .queue
+        .onChange(of: selectedPanel) { _, newPanel in
+            UserDefaults.standard.set(newPanel == .lyrics, forKey: fullPlayerLastPanelKey)
         }
         .environment(\.colorScheme, .dark)
         .environment(\.cassettePlayingAccent, playerAccent)
@@ -126,140 +174,151 @@ struct FullPlayerExpandedView: View {
                     .environment(artworkCache)
             }
         }
+        .sheet(isPresented: $showSongInfo) {
+            if let track = currentTrack {
+                SongInfoSheet(song: track, lyricsLines: songInfoLyricsLines)
+            }
+        }
     }
 
     // MARK: - Layout
 
     @ViewBuilder
-    private func contentLayout(_ geo: GeometryProxy) -> some View {
-        if geo.size.width >= 900 {
-            wideLayout(geo)
-        } else {
-            narrowLayout(geo)
+    private func adaptiveMain(_ geo: GeometryProxy) -> some View {
+        let useWide = geo.size.width >= 720 && geo.size.height >= 380
+        Group {
+            if useWide {
+                wideLayout(geo)
+            } else {
+                narrowLayout(geo)
+            }
         }
+        // Leave room so overlays never cover art / lyrics.
+        .padding(.top, 56)
+        .padding(.bottom, 56)
     }
 
+    /// Close + Mini Player — separate glass capsule beside traffic lights (Apple Music).
     private var topLeadingButtons: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.3)) { isPresented = false }
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .help("Close")
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.3)) { isPresented = false }
-                    openWindow(id: "mini-player")
-                } label: {
-                    Image(systemName: "pip.enter")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .help("Mini Player")
+        HStack(spacing: 0) {
+            chromeIconButton(systemImage: "xmark", help: "Close") {
+                withAnimation(.easeInOut(duration: 0.3)) { isPresented = false }
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background {
-                if #available(macOS 26.0, *) {
-                    Capsule().fill(.clear).glassEffect(.regular, in: Capsule())
-                } else {
-                    Capsule().fill(.ultraThinMaterial)
-                }
-            }
-            .clipShape(Capsule())
 
-            HStack(spacing: 8) {
-                AirPlayButton()
-                    .frame(width: 20, height: 20)
-
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        showVolumeSlider.toggle()
-                    }
-                } label: {
-                    Image(systemName: volumeIconName)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white)
-                        .frame(width: 16, height: 16)
-                }
-                .buttonStyle(.plain)
-
-                if showVolumeSlider {
-                    Slider(value: Binding(
-                        get: { localVolume },
-                        set: { newVal in
-                            localVolume = newVal
-                            isMuted = newVal == 0
-                            Task { await container?.playerService.setVolume(Float(newVal)) }
-                        }
-                    ), in: 0...1)
-                    .frame(width: 80)
-                    .tint(.white)
-                    .transition(.opacity.combined(with: .move(edge: .leading)))
-                }
+            chromeIconButton(systemImage: "rectangle.on.rectangle", help: "Mini Player") {
+                withAnimation(.easeInOut(duration: 0.3)) { isPresented = false }
+                openWindow(id: "mini-player")
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background {
-                if #available(macOS 26.0, *) {
-                    Capsule().fill(.clear).glassEffect(.regular, in: Capsule())
-                } else {
-                    Capsule().fill(.ultraThinMaterial)
-                }
-            }
-            .clipShape(Capsule())
         }
-        .padding(.horizontal, 20)
-        .padding(.top, -38)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+        .background { glassCapsuleBackground }
+        .clipShape(Capsule())
+    }
+
+    private var topTrailingControls: some View {
+        HStack(spacing: 10) {
+            AirPlayButton()
+                .frame(width: 20, height: 20)
+
+            Slider(value: Binding(
+                get: { localVolume },
+                set: { newVal in
+                    localVolume = newVal
+                    isMuted = newVal == 0
+                    Task { await container?.playerService.setVolume(Float(newVal)) }
+                }
+            ), in: 0...1)
+            .frame(width: 110)
+            .tint(.white)
+
+            Image(systemName: volumeIconName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 16, height: 16)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background { glassCapsuleBackground }
+        .clipShape(Capsule())
+    }
+
+    private func chromeIconButton(
+        systemImage: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    @ViewBuilder
+    private var glassCapsuleBackground: some View {
+        if #available(macOS 26.0, *) {
+            Capsule()
+                .fill(.clear)
+                .glassEffect(.regular, in: Capsule())
+        } else {
+            Capsule()
+                .fill(.ultraThinMaterial)
+        }
     }
 
     private func wideLayout(_ geo: GeometryProxy) -> some View {
-        HStack(spacing: 0) {
+        // Fixed split: ~40% player / ~60% lyrics — never let lyrics width collapse to 0.
+        let contentWidth = max(geo.size.width, 1)
+        let leftWidth = min(420, max(300, contentWidth * 0.38))
+        return HStack(alignment: .center, spacing: 0) {
             playerColumn(
-                artworkSize: artworkSize(for: geo, isWide: true),
-                maxWidth: geo.size.width >= 1200 ? 480 : 380
+                artworkSize: artworkSize(for: geo, isWide: true, columnWidth: leftWidth),
+                maxWidth: leftWidth - 32
             )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, 40)
-            .padding(.bottom, 40)
-
-            Divider()
-                .opacity(0.3)
+            .frame(width: leftWidth)
+            .frame(maxHeight: .infinity)
 
             rightPanelColumn
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
         }
+        .padding(.leading, 32)
+        .padding(.trailing, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func artworkSize(for geo: GeometryProxy, isWide: Bool) -> CGFloat {
+    private func artworkSize(for geo: GeometryProxy, isWide: Bool, columnWidth: CGFloat = 340) -> CGFloat {
         if isWide {
-            let available = geo.size.height - 80
-            let cap: CGFloat = geo.size.width >= 1200 ? 360 : 300
-            return max(160, min(cap, available - 244))
+            let heightBudget = max(140, geo.size.height - 280)
+            let widthBudget = max(140, columnWidth - 48)
+            return min(340, heightBudget, widthBudget)
         } else {
-            return max(100, min(260, geo.size.height * 0.55 - 220))
+            let heightBudget = max(110, geo.size.height * 0.40 - 140)
+            return min(220, heightBudget, max(110, geo.size.width - 80))
         }
     }
 
     private func narrowLayout(_ geo: GeometryProxy) -> some View {
-        VStack(spacing: 0) {
+        let topHeight = min(max(200, geo.size.height * 0.48), geo.size.height - 140)
+        return VStack(spacing: 0) {
             playerColumn(artworkSize: artworkSize(for: geo, isWide: false))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(40)
-                .frame(height: geo.size.height * 0.55)
+                .frame(maxWidth: .infinity)
+                .frame(height: topHeight)
 
             rightPanelColumn
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
         }
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - Mesh Gradient Background
+    // MARK: - Soft Art Background
 
     private struct ColorPalette {
         let dark: Color
@@ -284,37 +343,43 @@ struct FullPlayerExpandedView: View {
         )
     }
 
-    private var meshGradientBackground: some View {
+    /// Apple Music–like soft blurred cover wash (static — no mesh motion).
+    private var softArtBackground: some View {
         let palette = generatePalette(from: dominantColor)
+        return Color.black
+            .overlay {
+                ZStack {
+                    if let artworkImage {
+                        Image(platformImage: artworkImage)
+                            .resizable()
+                            .scaledToFill()
+                            .scaleEffect(1.35)
+                            .blur(radius: 72, opaque: true)
+                            .opacity(0.55)
+                    }
 
-        return TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-            let t = Float(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 12.0) / 12.0)
-            let wave  = sin(t * .pi * 2)
-            let wave2 = sin(t * .pi * 2 + 1.0)
+                    LinearGradient(
+                        colors: [
+                            palette.mid.opacity(0.55),
+                            palette.dark.opacity(0.75),
+                            Color.black.opacity(0.55),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
 
-            MeshGradient(
-                width: 3,
-                height: 3,
-                points: [
-                    SIMD2<Float>(0.0, 0.0),
-                    SIMD2<Float>(0.5 + wave  * 0.05, 0.0),
-                    SIMD2<Float>(1.0, 0.0),
-
-                    SIMD2<Float>(0.0, 0.5 + wave2 * 0.04),
-                    SIMD2<Float>(0.5, 0.5),
-                    SIMD2<Float>(1.0, 0.5 - wave2 * 0.04),
-
-                    SIMD2<Float>(0.0, 1.0),
-                    SIMD2<Float>(0.5 - wave  * 0.05, 1.0),
-                    SIMD2<Float>(1.0, 1.0)
-                ],
-                colors: [
-                    palette.dark,   palette.mid,    palette.dark,
-                    palette.mid,    palette.bright, palette.mid,
-                    palette.dark,   palette.mid,    palette.dark
-                ]
-            )
-        }
+                    RadialGradient(
+                        colors: [Color.clear, Color.black.opacity(0.35)],
+                        center: .center,
+                        startRadius: 80,
+                        endRadius: 700
+                    )
+                }
+                .clipped()
+            }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .animation(.easeInOut(duration: 0.5), value: dominantColor)
     }
 
     // MARK: - Player Column
@@ -352,11 +417,11 @@ struct FullPlayerExpandedView: View {
         let shadowColor = dominantColor == .clear ? Color.black : dominantColor
         ZStack {
             if let track = currentTrack {
-                CoverArtView(id: track.coverArtId ?? track.id, size: Int(size), tier: .hero)
+                CoverArtView(id: container?.playbackCoverId(for: track) ?? track.effectiveCoverArtId, size: Int(size), tier: .hero)
                     .frame(width: size, height: size)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else {
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color.secondary.opacity(0.15))
                     .frame(width: size, height: size)
                     .overlay {
@@ -387,7 +452,7 @@ struct FullPlayerExpandedView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.9))
                         if let album = currentTrack?.albumName {
-                            Text("·")
+                            Text("—")
                                 .foregroundStyle(.secondary)
                             Text(album)
                                 .font(.system(size: 15))
@@ -396,30 +461,11 @@ struct FullPlayerExpandedView: View {
                     }
                 }
                 .lineLimit(1)
-
-                if let format = currentTrack?.audioFormat {
-                    HStack(spacing: 6) {
-                        AudioFormatBadge(format: format, color: .white.opacity(0.7))
-                        Text(format)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                    .padding(.top, 2)
-                }
             }
 
             Spacer(minLength: 8)
 
             HStack(spacing: 14) {
-                Button {
-                    Task { await toggleFavorite() }
-                } label: {
-                    Image(systemName: isFavorite ? "heart.fill" : "heart")
-                        .foregroundStyle(isFavorite ? .white : .white.opacity(0.55))
-                }
-                .buttonStyle(.plain)
-                .disabled(noTrack)
-
                 trackOptionsMenu
             }
         }
@@ -428,22 +474,113 @@ struct FullPlayerExpandedView: View {
 
     private var trackOptionsMenu: some View {
         Menu {
-            Button("Go to Album") {
-                if let t = currentTrack { postNavigateToAlbum(track: t) }
+            if !isLiveStream {
+                ControlGroup {
+                    if isDownloadingTrack {
+                        Button {} label: {
+                            Label(String(localized: "Downloading…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "arrow.down.circle")
+                        }
+                        .disabled(true)
+                    } else if isTrackDownloaded {
+                        Button(role: .destructive) {
+                            Task { await removeCurrentDownload() }
+                        } label: {
+                            Label(String(localized: "Remove Download", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "arrow.down.circle.fill")
+                        }
+                    } else {
+                        Button {
+                            Task { await downloadCurrentTrack() }
+                        } label: {
+                            Label(String(localized: "Download", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "arrow.down.circle")
+                        }
+                        .disabled(!isOnline || currentTrack == nil)
+                    }
+
+                    Button {
+                        Task { await toggleFavorite() }
+                    } label: {
+                        Label(
+                            isFavorite
+                                ? String(localized: "Remove from Favorites", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                                : String(localized: "Add to Favorites", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                            systemImage: isFavorite ? "star.slash" : "star"
+                        )
+                    }
+                    .disabled(noTrack || !isOnline)
+
+                    if let track = currentTrack {
+                        CassetteShareButton(
+                            itemID: track.id,
+                            itemDescription: track.title,
+                            fallbackText: trackShareText
+                        )
+                    }
+                }
+
+                Button("Add to Playlist…", systemImage: "text.badge.plus") { showAddToPlaylist = true }
+                    .disabled(!isOnline)
+
+                Divider()
+
+                Button {
+                    Task { await triggerSmartShuffle() }
+                } label: {
+                    Label(String(localized: "Smart Shuffle", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "dot.radiowaves.left.and.right")
+                }
+
+                Divider()
+
+                Button {
+                    if let t = currentTrack { postNavigateToAlbum(track: t) }
+                } label: {
+                    GoToDestinationMenuLabel(
+                        title: String(localized: "Go to Album", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                        subtitle: currentTrack?.albumName,
+                        systemImage: "square.stack"
+                    )
+                }
+                .disabled(currentTrack?.albumId == nil)
+
+                Button {
+                    if let t = currentTrack { postNavigateToArtist(track: t) }
+                } label: {
+                    GoToDestinationMenuLabel(
+                        title: String(localized: "Go to Artist", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                        subtitle: currentTrack?.artist,
+                        systemImage: "music.mic"
+                    )
+                }
+                .disabled(currentTrack?.artistId == nil)
+
+                Button(String(localized: "View Credits", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "info.circle") {
+                    showSongInfo = true
+                }
+                .disabled(currentTrack == nil)
+            } else {
+                Button("Go to Album") {
+                    if let t = currentTrack { postNavigateToAlbum(track: t) }
+                }
+                .disabled(currentTrack?.albumId == nil)
+                Button("Go to Artist") {
+                    if let t = currentTrack { postNavigateToArtist(track: t) }
+                }
+                .disabled(currentTrack?.artistId == nil)
+                Divider()
+                Button("Add to Playlist…") { showAddToPlaylist = true }
+                    .disabled(!isOnline)
+                Divider()
+                Button {
+                    Task { await triggerSmartShuffle() }
+                } label: {
+                    Label(String(localized: "Smart Shuffle", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "dot.radiowaves.left.and.right")
+                }
             }
-            .disabled(currentTrack?.albumId == nil)
-            Button("Go to Artist") {
-                if let t = currentTrack { postNavigateToArtist(track: t) }
-            }
-            .disabled(currentTrack?.artistId == nil)
-            Divider()
-            Button("Add to Playlist…") { showAddToPlaylist = true }
-                .disabled(!isOnline)
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 14))
                 .foregroundStyle(Color.white.opacity(0.8))
         }
+        .menuOrder(.fixed)
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .foregroundStyle(Color.white.opacity(0.8))
@@ -452,14 +589,25 @@ struct FullPlayerExpandedView: View {
         .disabled(noTrack)
     }
 
+    private var trackShareText: String {
+        let title = currentTrack?.title ?? ""
+        let artist = currentTrack?.artist?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if artist.isEmpty { return title }
+        return "\(title) — \(artist)"
+    }
+
     private var scrubber: some View {
-        VStack(spacing: 6) {
+        let shown = isScrubbing ? localScrubPosition : (playerState?.position ?? 0)
+        let duration = playerState?.duration ?? 0
+        let remaining = max(duration - shown, 0)
+
+        return VStack(spacing: 2) {
             ProgressSlider(
                 value: Binding(
                     get: { isScrubbing ? localScrubPosition : (playerState?.position ?? 0) },
                     set: { localScrubPosition = $0 }
                 ),
-                total: max(1, playerState?.duration ?? 1),
+                total: max(1, duration),
                 onEditingChanged: { editing in
                     if editing { localScrubPosition = playerState?.position ?? 0 }
                     isScrubbing = editing
@@ -474,11 +622,21 @@ struct FullPlayerExpandedView: View {
             .disabled(noTrack)
 
             HStack {
-                Text(timeString(isScrubbing ? localScrubPosition : (playerState?.position ?? 0)))
+                Text(timeString(shown))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                Spacer()
-                Text(timeString(playerState?.duration ?? 0))
+                Spacer(minLength: 8)
+                if let quality = playbackQuality {
+                    // Flat mark + title under the bar — no pill chrome / padding (Apple Music desktop).
+                    AudioQualityLabelView(
+                        quality: quality,
+                        foreground: .white.opacity(0.7),
+                        interactive: false,
+                        usesGlass: false
+                    )
+                }
+                Spacer(minLength: 8)
+                Text("-\(timeString(remaining))")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -545,7 +703,10 @@ struct FullPlayerExpandedView: View {
     @ViewBuilder
     private var expandedPlayPauseButton: some View {
         if isLoading {
-            ProgressView()
+            // Same glyph as the live control, inert while the stream is still being acquired.
+            Image(systemName: "play.fill")
+                .font(.system(size: 38))
+                .foregroundStyle(noTrack ? .secondary : .primary)
                 .frame(width: 52, height: 52)
         } else {
             Button {
@@ -571,83 +732,115 @@ struct FullPlayerExpandedView: View {
     // MARK: - Right Panel
 
     private var rightPanelColumn: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(selectedPanel == .lyrics ? "Lyrics" : "Up Next")
-                    .font(.system(size: 14, weight: .semibold))
-                Spacer()
-                if selectedPanel == .queue, let ps = playerState {
-                    let isAutoExtend = ps.isAutoExtendEnabled
-                    Button {
-                        Task { await container?.playerService.setAutoExtendEnabled(!isAutoExtend) }
-                    } label: {
-                        Image(systemName: "infinity")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(isAutoExtend ? playerAccent : Color.white.opacity(0.6))
-                            .padding(6)
-                            .background(isAutoExtend ? CassetteColors.accentBackground : .clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Auto-extend with Smart Shuffle")
-                    .accessibilityValue(isAutoExtend ? "Enabled" : "Disabled")
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-
-            Divider()
-                .opacity(0.3)
-
+        ZStack(alignment: .topTrailing) {
             Group {
                 switch selectedPanel {
                 case .lyrics:
                     if let lyricsVM = lyricsViewModel {
-                        LyricsView(viewModel: lyricsVM)
+                        LyricsView(viewModel: lyricsVM, lineAlignment: .center)
                     } else {
                         ContentUnavailableView("No lyrics available", systemImage: "quote.bubble")
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 case .queue:
-                    queueContent
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text("Up Next")
+                                .font(.system(size: 14, weight: .semibold))
+                            Spacer()
+                            if let ps = playerState {
+                                let isAutoExtend = ps.isAutoExtendEnabled
+                                Button {
+                                    Task { await container?.playerService.setAutoExtendEnabled(!isAutoExtend) }
+                                } label: {
+                                    Image(systemName: "infinity")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(isAutoExtend ? playerAccent : Color.white.opacity(0.6))
+                                        .padding(6)
+                                        .background(isAutoExtend ? CassetteColors.accentBackground : .clear)
+                                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Auto-extend with Smart Shuffle")
+                                .accessibilityValue(isAutoExtend ? "Enabled" : "Disabled")
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+
+                        queueContent
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.bottom, 8)
 
-            Divider()
-                .opacity(0.3)
-
-            HStack(spacing: 24) {
-                Button {
-                    withAnimation(.smooth(duration: 0.3)) { selectedPanel = .lyrics }
-                } label: {
-                    Image(systemName: "quote.bubble")
-                        .foregroundStyle(.white)
-                        .padding(6)
-                        .background(selectedPanel == .lyrics ? CassetteColors.accentBackground : .clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-                .disabled(noTrack || isLiveStream)
-
-                Button {
-                    withAnimation(.smooth(duration: 0.3)) { selectedPanel = .queue }
-                } label: {
-                    Image(systemName: "list.bullet.indent")
-                        .foregroundStyle(.white)
-                        .padding(6)
-                        .background(selectedPanel == .queue ? CassetteColors.accentBackground : .clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
+            if selectedPanel == .lyrics, shouldShowLyricsTranslate, let lyricsVM = lyricsViewModel {
+                CassetteLyricsTranslateButton(
+                    lyricsViewModel: lyricsVM,
+                    contentColor: .white,
+                    buttonSize: 32,
+                    iconSize: 13
+                )
+                .padding(.top, 8)
+                .padding(.trailing, 8)
             }
-            .font(.system(size: 14))
-            .padding(16)
-
-            Color.clear.frame(height: 12)
         }
-        .frame(minWidth: 0, maxWidth: .infinity)
-        .clipped()
+        .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Apple Music–style lyrics / queue toggle — glass capsule, bottom-trailing.
+    private var panelTogglePill: some View {
+        HStack(spacing: 2) {
+            panelToggleButton(
+                systemImage: "quote.bubble.fill",
+                isSelected: selectedPanel == .lyrics,
+                accessibilityLabel: String(localized: "Lyrics", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+            ) {
+                withAnimation(.smooth(duration: 0.3)) { selectedPanel = .lyrics }
+            }
+            .disabled(noTrack || isLiveStream)
+
+            panelToggleButton(
+                systemImage: "list.bullet",
+                isSelected: selectedPanel == .queue,
+                accessibilityLabel: String(localized: "Queue", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+            ) {
+                withAnimation(.smooth(duration: 0.3)) { selectedPanel = .queue }
+            }
+        }
+        .padding(4)
+        .background { glassCapsuleBackground }
+        .overlay {
+            Capsule()
+                .strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5)
+        }
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 3)
+    }
+
+    private func panelToggleButton(
+        systemImage: String,
+        isSelected: Bool,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(isSelected ? Color.black.opacity(0.85) : Color.white.opacity(0.92))
+                .frame(width: 34, height: 34)
+                .background {
+                    if isSelected {
+                        Circle().fill(Color.white.opacity(0.92))
+                    }
+                }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -733,6 +926,55 @@ struct FullPlayerExpandedView: View {
         isFavorite = container.favoritesService.isFavorite(itemType: .song, itemId: track.id)
     }
 
+    private func refreshDownloadState() async {
+        isDownloadingTrack = false
+        guard let track = currentTrack,
+              let serverId = container?.serverState.activeServer?.id,
+              let downloadService = container?.downloadService else {
+            isTrackDownloaded = false
+            return
+        }
+        isTrackDownloaded = await downloadService.isDownloaded(songId: track.id, serverId: serverId)
+        isDownloadingTrack = await downloadService.isDownloading(songId: track.id, serverId: serverId)
+    }
+
+    private func downloadCurrentTrack() async {
+        guard let track = currentTrack,
+              let serverId = container?.serverState.activeServer?.id,
+              let downloadService = container?.downloadService else { return }
+        isDownloadingTrack = true
+        defer { isDownloadingTrack = false }
+        do {
+            try await downloadService.download(song: track.asSong(), serverId: serverId)
+            isTrackDownloaded = true
+        } catch {
+            container?.toastService.showError(error.localizedDescription)
+        }
+    }
+
+    private func removeCurrentDownload() async {
+        guard let track = currentTrack,
+              let serverId = container?.serverState.activeServer?.id,
+              let downloadService = container?.downloadService else { return }
+        try? await downloadService.remove(songId: track.id, serverId: serverId)
+        isTrackDownloaded = false
+    }
+
+    private func triggerSmartShuffle() async {
+        guard let container else { return }
+        do {
+            try await container.playerService.playSmartShuffle()
+        } catch {
+            if case CassetteError.smartShuffleEmpty = error {
+                container.toastService.showError(
+                    "Smart Shuffle unavailable — try playing some tracks first or download more music for offline use."
+                )
+            } else {
+                container.toastService.showError("Smart Shuffle failed. Please try again.")
+            }
+        }
+    }
+
     private func toggleFavorite() async {
         guard let track = currentTrack, let container else { return }
         do {
@@ -761,7 +1003,7 @@ private struct ExpandedQueueRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            CoverArtView(id: track.coverArtId ?? track.id, size: 36)
+            CoverArtView(id: container?.playbackCoverId(for: track) ?? track.effectiveCoverArtId, size: 36)
                 .frame(width: 36, height: 36)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
 

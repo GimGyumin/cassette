@@ -34,16 +34,28 @@ final class MockKeychain: KeychainServiceProtocol {
 
 @MainActor
 final class MockCacheService: CacheServiceProtocol {
-    var usedBytes: Int64 = 0
-    var trackCount: Int = 0
+    var usedBytes: Int64 {
+        get async { 0 }
+    }
+    var trackCount: Int {
+        get async { 0 }
+    }
+    var lyricsUsedBytes: Int64 {
+        get async { 0 }
+    }
+    var lyricsCount: Int {
+        get async { 0 }
+    }
     func cachedURL(forSongId songId: String, serverId: UUID) async -> URL? { nil }
     func touch(songId: String, serverId: UUID) async {}
     func store(data: Data, forSongId songId: String, serverId: UUID, mimeType: String) async throws -> URL {
         struct MockError: Error {}; throw MockError()
     }
-    func setMaxTracks(_ value: Int) async {}
+    func setMaxBytes(_ value: Int64) async {}
     func invalidate(songId: String, serverId: UUID) async {}
     func clearAll() async {}
+    func clearAudioTracksOnly() async {}
+    func clearLyricsCache() async {}
     func clearAllForServer(_ serverId: UUID) async {}
 }
 
@@ -92,6 +104,26 @@ struct ServerServiceTests {
 
         #expect(state.servers.count == 2)
         #expect(state.activeServer?.username == "user1")
+    }
+
+    @Test func addServer_afterActiveServerRemoved_activatesAndPersistsNewServer() async throws {
+        let (service, state) = try makeService()
+        try await service.addServer(displayName: "Active", baseURL: "https://first.example.com",
+                                    username: "first", password: "secret", customHeaders: [:])
+        let firstID = try #require(state.activeServer?.id)
+        try await service.addServer(displayName: "Inactive", baseURL: "https://second.example.com",
+                                    username: "second", password: "secret", customHeaders: [:])
+        try await service.removeServer(id: firstID)
+        #expect(state.activeServer == nil)
+        #expect(state.servers.count == 1)
+
+        try await service.addServer(displayName: "New login", baseURL: "https://third.example.com",
+                                    username: "third", password: "secret", customHeaders: [:])
+        let newID = try #require(state.activeServer?.id)
+        #expect(state.activeServer?.username == "third")
+        #expect(state.servers.count == 2)
+        await service.loadPersistedState()
+        #expect(state.activeServer?.id == newID)
     }
 
     @Test func addServer_invalidHeaderName_throwsInvalidHeaderName() async throws {

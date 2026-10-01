@@ -9,6 +9,8 @@ import SwiftData
 nonisolated enum PinnedItemType: String, CaseIterable, Sendable {
     case album
     case playlist
+    case song
+    case artist
 }
 
 /// Persists an item pinned to HomeView. Stores a metadata snapshot so the

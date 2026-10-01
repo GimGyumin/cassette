@@ -14,25 +14,29 @@ import Observation
 final class CacheSettings {
     // MARK: - Storage (observation ignored)
 
-    @ObservationIgnored private var _maxTracks: Int
+    @ObservationIgnored private var _maxCacheMegabytes: Int
     @ObservationIgnored private var _cacheFormat: CacheFormat
     @ObservationIgnored private var _cacheOverCellular: Bool
 
     // MARK: - Visible properties (manual observation hooks)
 
-    var maxTracks: Int {
+    var maxCacheMegabytes: Int {
         get {
-            access(keyPath: \.maxTracks)
-            return _maxTracks
+            access(keyPath: \.maxCacheMegabytes)
+            return _maxCacheMegabytes
         }
         set {
-            let clamped = max(Self.minMaxTracks, min(Self.maxMaxTracks, newValue))
-            withMutation(keyPath: \.maxTracks) {
-                _maxTracks = clamped
+            let resolved = Self.storageOptionsMB.min(by: {
+                abs($0 - newValue) < abs($1 - newValue)
+            }) ?? Self.defaultMaxCacheMegabytes
+            withMutation(keyPath: \.maxCacheMegabytes) {
+                _maxCacheMegabytes = resolved
             }
-            UserDefaults.standard.set(clamped, forKey: Self.maxTracksKey)
+            UserDefaults.standard.set(resolved, forKey: Self.maxCacheMegabytesKey)
         }
     }
+
+    var maxCacheBytes: Int64 { Int64(maxCacheMegabytes) * 1_024 * 1_024 }
 
     var cacheFormat: CacheFormat {
         get {
@@ -62,27 +66,36 @@ final class CacheSettings {
 
     // MARK: - Defaults & keys
 
-    static let defaultMaxTracks: Int = 10
-    static let minMaxTracks: Int = 1
-    static let maxMaxTracks: Int = 10
+    static let storageOptionsMB = [512, 1_024, 2_048, 4_096, 8_192, 16_384]
+    static let defaultMaxCacheMegabytes = 2_048
     static let defaultFormat: CacheFormat = .matchStream
     static let defaultCacheOverCellular: Bool = false
 
-    private static let maxTracksKey = "cassette.cache.maxTracks"
+    private static let maxCacheMegabytesKey = "cassette.cache.maxMegabytes"
     private static let cacheFormatKey = "cassette.cache.format"
     private static let cacheOverCellularKey = "cassette.cache.cellular"
 
     // MARK: - Init
 
     init() {
-        let loadedMaxTracks = UserDefaults.standard.integer(forKey: Self.maxTracksKey)
-        self._maxTracks = (loadedMaxTracks == 0)
-            ? Self.defaultMaxTracks
-            : max(Self.minMaxTracks, min(Self.maxMaxTracks, loadedMaxTracks))
+        CacheFormat.migrateLegacyStoredValues()
+        let loaded = UserDefaults.standard.integer(forKey: Self.maxCacheMegabytesKey)
+        self._maxCacheMegabytes = Self.storageOptionsMB.contains(loaded)
+            ? loaded : Self.defaultMaxCacheMegabytes
 
         let loadedFormatRaw = UserDefaults.standard.string(forKey: Self.cacheFormatKey)
         self._cacheFormat = CacheFormat(rawValue: loadedFormatRaw ?? "") ?? Self.defaultFormat
 
         self._cacheOverCellular = UserDefaults.standard.bool(forKey: Self.cacheOverCellularKey)
+    }
+
+    func reloadFromDefaults() {
+        CacheFormat.migrateLegacyStoredValues()
+        let loaded = UserDefaults.standard.integer(forKey: Self.maxCacheMegabytesKey)
+        _maxCacheMegabytes = Self.storageOptionsMB.contains(loaded)
+            ? loaded : Self.defaultMaxCacheMegabytes
+        let loadedFormatRaw = UserDefaults.standard.string(forKey: Self.cacheFormatKey)
+        _cacheFormat = CacheFormat(rawValue: loadedFormatRaw ?? "") ?? Self.defaultFormat
+        _cacheOverCellular = UserDefaults.standard.bool(forKey: Self.cacheOverCellularKey)
     }
 }

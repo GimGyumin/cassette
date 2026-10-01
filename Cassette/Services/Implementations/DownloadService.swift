@@ -8,11 +8,17 @@ import SwiftData
 import SwiftSonic
 import OSLog
 
-// TODO(v1.x): switch to background URLSession with resume-after-kill support.
-// v1 uses foreground URLSession — the user must keep the app open during download.
+private nonisolated struct JellyfinOriginalDownloadSource: Sendable {
+    let url: URL
+    let expectedSize: Int64?
+    let container: String?
+}
+
 actor DownloadService: DownloadServiceProtocol {
     private let serverService: any ServerServiceProtocol
     private let modelContainer: ModelContainer
+    private let mediaIdentityService: MediaIdentityService?
+    private let jellyfinService: JellyfinService?
     private let downloadsDirectory: URL
     private let coverArtsDirectory: URL
     private var progressContinuation: AsyncStream<[DownloadProgress]>.Continuation?
@@ -21,19 +27,42 @@ actor DownloadService: DownloadServiceProtocol {
     private var activeAlbumDownloads: Set<String> = []
     private var activePlaylistDownloads: Set<String> = []
     private let toastService: ToastService
-    private let downloadSession: URLSession
+    /// Small cover fetches stay on a foreground session (background sessions don't support data tasks).
+    private let coverSession: URLSession
+    #if os(macOS)
+    /// macOS keeps a long-lived foreground media session (no background-session relaunch path).
+    private let mediaSession: URLSession
+    #endif
 
     nonisolated let progressStream: AsyncStream<[DownloadProgress]>
 
-    init(serverService: any ServerServiceProtocol, modelContainer: ModelContainer, toastService: ToastService) {
+    init(
+        serverService: any ServerServiceProtocol,
+        modelContainer: ModelContainer,
+        toastService: ToastService,
+        mediaIdentityService: MediaIdentityService? = nil,
+        jellyfinService: JellyfinService? = nil
+    ) {
         self.serverService = serverService
         self.modelContainer = modelContainer
         self.toastService = toastService
+        self.mediaIdentityService = mediaIdentityService
+        self.jellyfinService = jellyfinService
 
-        let sessionConfig = URLSessionConfiguration.default
-        sessionConfig.timeoutIntervalForRequest = 30
-        sessionConfig.timeoutIntervalForResource = 30
-        self.downloadSession = URLSession(configuration: sessionConfig)
+        let coverConfig = URLSessionConfiguration.default
+        coverConfig.timeoutIntervalForRequest = 60
+        coverConfig.timeoutIntervalForResource = 120
+        self.coverSession = URLSession(configuration: coverConfig)
+        #if os(macOS)
+        let mediaConfig = URLSessionConfiguration.default
+        // Request idle timeout can stay modest; the full-file budget must not.
+        mediaConfig.timeoutIntervalForRequest = 60
+        mediaConfig.timeoutIntervalForResource = 600
+        self.mediaSession = URLSession(configuration: mediaConfig)
+        #else
+        // Warm the shared background media session so suspended downloads keep running.
+        _ = CassetteBackgroundDownloads.shared
+        #endif
 
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let base = docs.appendingPathComponent("app.cassette", isDirectory: true)
@@ -42,18 +71,35 @@ actor DownloadService: DownloadServiceProtocol {
 
         // AsyncStream.init closure is called synchronously — cont is guaranteed set before init returns.
         var cont: AsyncStream<[DownloadProgress]>.Continuation!
-        progressStream = AsyncStream<[DownloadProgress]> { cont = $0 }
+        progressStream = AsyncStream<[DownloadProgress]>(bufferingPolicy: .bufferingNewest(1)) { cont = $0 }
         progressContinuation = cont
     }
 
     // MARK: - Lookup
 
     func downloadedURL(forSongId songId: String, serverId: UUID) async -> URL? {
+        let candidates = await MainActor.run {
+            mediaIdentityService?.candidateRemoteIDs(for: songId, serverId: serverId, entityType: .song) ?? [songId]
+        }
+        let candidateSet = Set(candidates)
         let entry: (filePath: String, fileSize: Int64)? = await MainActor.run {
             let context = ModelContext(modelContainer)
-            let predicate = #Predicate<DownloadedTrack> { $0.songId == songId }
-            let tracks = (try? context.fetch(FetchDescriptor(predicate: predicate))) ?? []
-            return tracks.first(where: { $0.serverId == serverId }).map { ($0.filePath, $0.fileSize) }
+            let sid = serverId
+            let descriptor = FetchDescriptor<DownloadedTrack>(predicate: #Predicate { $0.serverId == sid })
+            guard let track = try? context.fetch(descriptor).first(where: {
+                candidateSet.contains($0.songId)
+                    || ($0.currentRemoteID.map(candidateSet.contains) ?? false)
+                    || !candidateSet.isDisjoint(with: $0.legacyRemoteIDs ?? [])
+            }) else { return nil }
+            // Older downloads kept source surround metadata even after lossy transcoding.
+            // Keep that file on disk, but allow a new original download to replace it.
+            let mime = track.mimeType.lowercased()
+            if (track.channelCount ?? 0) > 2,
+               !["mp3", "opus", "ogg", "oga"].contains(track.suffix?.lowercased() ?? ""),
+               ["audio/mpeg", "audio/mp3", "audio/opus", "audio/ogg"].contains(mime) {
+                return nil
+            }
+            return (track.filePath, track.fileSize)
         }
         guard let entry else { return nil }
         let url = downloadsDirectory.appendingPathComponent(entry.filePath)
@@ -74,21 +120,58 @@ actor DownloadService: DownloadServiceProtocol {
     }
 
     func downloadedSongIds(serverId: UUID) async -> Set<String> {
-        await MainActor.run {
+        let rawIDs: [String] = await MainActor.run {
             let context = ModelContext(modelContainer)
-            let all = (try? context.fetch(FetchDescriptor<DownloadedTrack>())) ?? []
-            return Set(all.filter { $0.serverId == serverId }.map(\.songId))
+            let sid = serverId
+            let descriptor = FetchDescriptor<DownloadedTrack>(
+                predicate: #Predicate { $0.serverId == sid }
+            )
+            let tracks = (try? context.fetch(descriptor)) ?? []
+            return tracks.flatMap { track in
+                [track.songId, track.currentRemoteID].compactMap { $0 } + (track.legacyRemoteIDs ?? [])
+            }
         }
+        var result = Set(rawIDs)
+        for id in rawIDs {
+            let aliases = await MainActor.run {
+                mediaIdentityService?.candidateRemoteIDs(for: id, serverId: serverId, entityType: .song) ?? [id]
+            }
+            result.formUnion(aliases)
+        }
+        return result
     }
 
     func localCoverArtURL(forId coverArtId: String) async -> URL? {
-        let url = coverArtsDirectory.appendingPathComponent(coverArtId)
-        let exists = FileManager.default.fileExists(atPath: url.path)
-        Logger.download.debug("localCoverArtURL id='\(coverArtId, privacy: .public)' path='\(url.path, privacy: .public)' exists=\(exists)")
-        return exists ? url : nil
+        let parts = coverArtId.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+        let baseID = String(parts[0])
+        let suffix = parts.count == 2 ? "@\(parts[1])" : ""
+        let serverID = await MainActor.run { serverService.state.activeServer?.id }
+        let candidates: [String]
+        if let serverID {
+            candidates = await MainActor.run {
+                mediaIdentityService?.candidateRemoteIDs(
+                    for: baseID,
+                    serverId: serverID,
+                    entityType: .coverArt
+                ) ?? [baseID]
+            }
+        } else {
+            candidates = [baseID]
+        }
+        let suffixes = suffix.isEmpty ? ["@original-v1", ""] : [suffix]
+        for preferredSuffix in suffixes {
+            for candidate in candidates {
+                let url = coverArtsDirectory.appendingPathComponent(candidate + preferredSuffix)
+                if FileManager.default.fileExists(atPath: url.path) { return url }
+            }
+        }
+        return nil
     }
 
     func persistCover(_ data: Data, forId coverArtId: String) async {
+        guard await MainActor.run(body: {
+            serverService.state.activeServer != nil && !serverService.state.isSigningOut
+        }) else { return }
         let url = coverArtsDirectory.appendingPathComponent(coverArtId)
         Logger.download.debug("persistCover id='\(coverArtId, privacy: .public)' path='\(url.path, privacy: .public)' bytes=\(data.count, privacy: .public)")
         do {
@@ -115,6 +198,19 @@ actor DownloadService: DownloadServiceProtocol {
         guard let entries = try? fm.contentsOfDirectory(at: coverArtsDirectory, includingPropertiesForKeys: nil) else {
             return 0
         }
+        var retainedIDs = referencedIds
+        if let serverID = await MainActor.run(body: { serverService.state.activeServer?.id }) {
+            for id in referencedIds {
+                let candidates = await MainActor.run {
+                    mediaIdentityService?.candidateRemoteIDs(
+                        for: id,
+                        serverId: serverID,
+                        entityType: .coverArt
+                    ) ?? [id]
+                }
+                retainedIDs.formUnion(candidates)
+            }
+        }
         var deletedCount = 0
         for fileURL in entries {
             let filename = fileURL.lastPathComponent
@@ -122,7 +218,7 @@ actor DownloadService: DownloadServiceProtocol {
             // managed by ArtworkImageCache's own eviction, not offline-download GC.
             guard !filename.contains("@") else { continue }
             let coverArtId = filename
-            if !referencedIds.contains(coverArtId) {
+            if !retainedIDs.contains(coverArtId) {
                 do {
                     try fm.removeItem(at: fileURL)
                 } catch {
@@ -138,19 +234,30 @@ actor DownloadService: DownloadServiceProtocol {
     }
 
     func localAlbumData(albumId: String, serverId: UUID) async -> LocalAlbumData? {
-        await MainActor.run {
+        let albumIDs = await MainActor.run {
+            Set(mediaIdentityService?.candidateRemoteIDs(
+                for: albumId,
+                serverId: serverId,
+                entityType: .album
+            ) ?? [albumId])
+        }
+        return await MainActor.run {
             let context = ModelContext(modelContainer)
             // Tracks are the primary source — present whether the album was downloaded
             // directly or via a playlist download that never created a DownloadedAlbum record.
-            let allTracks = (try? context.fetch(FetchDescriptor<DownloadedTrack>())) ?? []
-            let albumTracks = allTracks
-                .filter { $0.albumId == albumId && $0.serverId == serverId }
+            let sid = serverId
+            let albumTracks = ((try? context.fetch(FetchDescriptor<DownloadedTrack>(
+                predicate: #Predicate { $0.serverId == sid }
+            ))) ?? []).filter { track in
+                track.albumId.map(albumIDs.contains) ?? false
+            }
                 .sorted { ($0.trackNumber ?? Int.max) < ($1.trackNumber ?? Int.max) }
             guard !albumTracks.isEmpty else { return nil }
             let first = albumTracks[0]
             // DownloadedAlbum record may exist for richer metadata (direct album downloads).
-            let allAlbums = (try? context.fetch(FetchDescriptor<DownloadedAlbum>())) ?? []
-            let albumRecord = allAlbums.first(where: { $0.albumId == albumId && $0.serverId == serverId })
+            let albumRecord = try? context.fetch(FetchDescriptor<DownloadedAlbum>(
+                predicate: #Predicate { $0.serverId == sid }
+            )).first(where: { albumIDs.contains($0.albumId) })
             let songs = albumTracks.map { DisplayableSong(from: $0) }
             return LocalAlbumData(
                 albumId: albumId,
@@ -163,19 +270,36 @@ actor DownloadService: DownloadServiceProtocol {
     }
 
     func localPlaylistData(playlistId: String, serverId: UUID) async -> LocalPlaylistData? {
-        await MainActor.run {
+        let playlistIDs = await MainActor.run {
+            Set(mediaIdentityService?.candidateRemoteIDs(
+                for: playlistId,
+                serverId: serverId,
+                entityType: .playlist
+            ) ?? [playlistId])
+        }
+        return await MainActor.run {
             let context = ModelContext(modelContainer)
-            let allPlaylists = (try? context.fetch(FetchDescriptor<DownloadedPlaylist>())) ?? []
-            guard let playlist = allPlaylists.first(where: { $0.playlistId == playlistId && $0.serverId == serverId }) else { return nil }
+            let sid = serverId
+            guard let playlist = try? context.fetch(FetchDescriptor<DownloadedPlaylist>(
+                predicate: #Predicate { $0.serverId == sid }
+            )).first(where: { playlistIDs.contains($0.playlistId) }) else { return nil }
             // serverId-scoped lookup table — O(1) per id and avoids matching a track that was
             // re-downloaded under a different server with a colliding songId.
-            let tracksBySongId = Dictionary(
-                (((try? context.fetch(FetchDescriptor<DownloadedTrack>())) ?? [])
-                    .filter { $0.serverId == serverId })
-                    .map { ($0.songId, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            let songs = playlist.songIds.compactMap { tracksBySongId[$0] }.map { DisplayableSong(from: $0) }
+            let tracks = (try? context.fetch(FetchDescriptor<DownloadedTrack>(
+                predicate: #Predicate { $0.serverId == sid }
+            ))) ?? []
+            let songs = playlist.songIds.compactMap { storedID in
+                let candidates = Set(mediaIdentityService?.candidateRemoteIDs(
+                    for: storedID,
+                    serverId: serverId,
+                    entityType: .song
+                ) ?? [storedID])
+                return tracks.first {
+                    candidates.contains($0.songId)
+                        || ($0.currentRemoteID.map(candidates.contains) ?? false)
+                        || !candidates.isDisjoint(with: Set($0.legacyRemoteIDs ?? []))
+                }
+            }.map { DisplayableSong(from: $0) }
             return LocalPlaylistData(playlistId: playlist.playlistId, name: playlist.name, coverArtId: playlist.coverArtId, songs: songs)
         }
     }
@@ -183,15 +307,21 @@ actor DownloadService: DownloadServiceProtocol {
     func backfillPlaylistSongIds(playlistId: String, serverId: UUID, orderedSongIds: [String]) async {
         await MainActor.run {
             let context = ModelContext(modelContainer)
-            let playlists = (try? context.fetch(FetchDescriptor<DownloadedPlaylist>())) ?? []
+            let pid = playlistId
+            let sid = serverId
+            var playlistDescriptor = FetchDescriptor<DownloadedPlaylist>(
+                predicate: #Predicate { $0.playlistId == pid && $0.serverId == sid }
+            )
+            playlistDescriptor.fetchLimit = 1
             // Only repair records that are actually missing their order. DownloadedTrack carries
             // no playlist link, so membership cannot be recovered from disk alone — the order must
             // come from the authoritative API list, intersected with what is actually downloaded.
-            guard let record = playlists.first(where: { $0.playlistId == playlistId && $0.serverId == serverId }),
+            guard let record = try? context.fetch(playlistDescriptor).first,
                   record.songIds.isEmpty else { return }
             let downloaded = Set(
-                (((try? context.fetch(FetchDescriptor<DownloadedTrack>())) ?? [])
-                    .filter { $0.serverId == serverId })
+                ((try? context.fetch(FetchDescriptor<DownloadedTrack>(
+                    predicate: #Predicate { $0.serverId == sid }
+                ))) ?? [])
                     .map(\.songId)
             )
             let repaired = orderedSongIds.filter { downloaded.contains($0) }
@@ -215,8 +345,12 @@ actor DownloadService: DownloadServiceProtocol {
         }
 
         let key = taskKey(songId: song.id, serverId: serverId)
-        // If already in-flight, do nothing — caller can observe progressStream.
-        guard inFlightTasks[key] == nil else { return }
+        // Join an in-flight download instead of returning success while the file
+        // is still missing — that made the first tap look like a no-op/failure.
+        if let existing = inFlightTasks[key] {
+            try await existing.value
+            return
+        }
 
         let task = Task<Void, Error> {
             try await self._downloadSong(song, serverId: serverId, key: key)
@@ -230,16 +364,86 @@ actor DownloadService: DownloadServiceProtocol {
 
         let creds = try await serverService.activeCredentials()
         let client = try await serverService.makeSwiftSonicClient()
-        guard let streamURL = client.streamURL(id: song.id) else {
+        guard await MainActor.run(body: { serverService.state.activeServer?.id == serverId }) else {
+            throw CancellationError()
+        }
+        let formatRaw = UserDefaults.standard.string(forKey: "cassette.streaming.download")
+        let preserveBitstream = AudioQualityClassifier.shouldSkipTranscoding(DisplayableSong(from: song))
+        let requestedFormat: CacheFormat = preserveBitstream ? .flacOriginal : (CacheFormat(rawValue: formatRaw ?? "") ?? .matchStream)
+        var mediaURL: URL?
+        var expectedOriginalSize: Int64?
+        var originalContainer: String?
+        switch requestedFormat {
+        case .flacOriginal:
+            if let jellyfinService,
+               let jellyfinID = NavidromeJellyfinIDCodec.jellyfinGUID(fromCanonicalID: song.id) {
+                let source = try? await jellyfinService.perform(feature: .originalFile) { client -> JellyfinOriginalDownloadSource? in
+                    let playbackInfo = try await client.playbackInfo(itemID: jellyfinID)
+                    guard let url = client.downloadURL(itemID: jellyfinID)
+                        ?? client.originalFileURL(itemID: jellyfinID) else { return nil }
+                    return JellyfinOriginalDownloadSource(
+                        url: url,
+                        expectedSize: playbackInfo.mediaSources.first?.containerSize,
+                        container: playbackInfo.mediaSources.first?.container
+                    )
+                }
+                mediaURL = source?.url
+                expectedOriginalSize = source?.expectedSize
+                originalContainer = source?.container
+            } else {
+                mediaURL = nil
+            }
+            if mediaURL == nil {
+                mediaURL = client.streamURL(id: song.id, format: "raw")
+            }
+        case .matchStream:
+            mediaURL = client.streamURL(id: song.id, format: "raw")
+        default:
+            mediaURL = client.streamURL(
+                id: song.id,
+                maxBitRate: requestedFormat.subsonicMaxBitRate,
+                format: requestedFormat.subsonicFormat
+            )
+        }
+        guard let mediaURL else {
             throw CassetteError.mediaNotFound(songId: song.id)
         }
 
-        var request = URLRequest(url: streamURL)
+        var request = URLRequest(url: mediaURL)
         for (k, v) in creds.customHeaders { request.setValue(v, forHTTPHeaderField: k) }
 
         emit(progress: DownloadProgress(songId: song.id, serverId: serverId, progress: 0, totalBytes: nil, receivedBytes: 0))
 
-        let (tempURL, response) = try await downloadSession.download(for: request)
+        let progressSink = progressContinuation
+        let progressSongId = song.id
+        let progressServerId = serverId
+        let (tempURL, response): (URL, URLResponse)
+        #if os(iOS)
+        (tempURL, response) = try await CassetteBackgroundDownloads.shared.download(
+            request: request,
+            clientKey: key,
+            onProgress: { received, total in
+                let fraction: Double
+                if let total, total > 0 {
+                    fraction = min(1.0, Double(received) / Double(total))
+                } else {
+                    fraction = 0
+                }
+                progressSink?.yield([
+                    DownloadProgress(
+                        songId: progressSongId,
+                        serverId: progressServerId,
+                        progress: fraction,
+                        totalBytes: total,
+                        receivedBytes: received
+                    )
+                ])
+            }
+        )
+        #else
+        (tempURL, response) = try await mediaSession.download(for: request)
+        #endif
+        defer { try? FileManager.default.removeItem(at: tempURL) }
 
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -256,10 +460,27 @@ actor DownloadService: DownloadServiceProtocol {
             throw CassetteError.downloadFailed(songId: song.id, underlying: error)
         }
 
+        if let expectedOriginalSize, expectedOriginalSize > 0 {
+            let receivedSize = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? 0
+            guard receivedSize == expectedOriginalSize else {
+                struct OriginalSizeMismatch: Error & Sendable {
+                    let expected: Int64
+                    let received: Int64
+                }
+                throw CassetteError.downloadFailed(
+                    songId: song.id,
+                    underlying: OriginalSizeMismatch(expected: expectedOriginalSize, received: receivedSize)
+                )
+            }
+        }
+
         let mimeType = response.mimeType ?? "audio/mpeg"
         // Prefer the server-declared suffix (e.g. "mp3", "flac") over the MIME subtype.
         // audio/mpeg → "mpeg" which AVPlayer maps to a video UTI, not public.mp3.
-        let ext = song.suffix ?? mimeType.split(separator: "/").last.map(String.init) ?? "bin"
+        let ext = requestedFormat.downloadFileExtension(
+            mimeType: response.mimeType,
+            originalSuffix: song.suffix ?? originalContainer
+        )
         let relativePath = "\(serverId.uuidString)/\(song.id).\(ext)"
         let fileURL = downloadsDirectory.appendingPathComponent(relativePath)
 
@@ -269,12 +490,16 @@ actor DownloadService: DownloadServiceProtocol {
         }
         try FileManager.default.moveItem(at: tempURL, to: fileURL)
 
-        // Faststart-remux non-faststart m4a in place so AudioStreaming can play it offline
-        // (lossless passthrough; no-op for every other format). MUST run before the fileSize
-        // read below so DownloadedTrack.fileSize matches the on-disk (remuxed) file — otherwise
-        // downloadedURL's size-validity guard would reject the remuxed file as a mismatch.
-        if case .remuxed = await AudioFaststartRemuxer().remuxToFaststartIfNeeded(at: fileURL) {
+        // Faststart-remux non-faststart m4a for AudioStreaming offline playback.
+        // Skip Atmos / multichannel — remux can strip spatial bitstreams; those use AVPlayer.
+        let skipRemux: Bool = {
+            let probe = DisplayableSong(from: song)
+            return AudioQualityClassifier.requiresSystemPlayer(probe)
+        }()
+        if !skipRemux, case .remuxed = await AudioFaststartRemuxer().remuxToFaststartIfNeeded(at: fileURL) {
             Logger.download.info("Faststart-remuxed m4a download '\(song.id, privacy: .public)'")
+        } else if skipRemux {
+            Logger.download.info("[SPATIAL] Skipping faststart remux for Dolby/multichannel '\(song.id, privacy: .public)'")
         }
 
         // Capture only Sendable values for the MainActor closure.
@@ -286,9 +511,19 @@ actor DownloadService: DownloadServiceProtocol {
         let album = song.album
         let genre = song.genres?.first?.name ?? song.genre
         let track = song.track
+        let disc = song.discNumber
         let duration = song.duration
+        let mediaPath = song.path
+        let musicBrainzID = song.musicBrainzId
+        let isrc = song.isrc?.first
         let coverArtId = song.coverArt
-        let suffix = song.suffix
+        let isTranscoded = requestedFormat.subsonicMaxBitRate != nil
+        let suffix = ext
+        let bitRate = isTranscoded ? requestedFormat.subsonicMaxBitRate : song.bitRate
+        let bitDepth = isTranscoded ? nil : song.bitDepth
+        let samplingRate = isTranscoded ? nil : song.samplingRate
+        let channelCount = isTranscoded ? nil : song.channelCount
+        let comment = song.comment
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int64) ?? 0
         let rgTrackGain    = song.replayGain?.trackGain
         let rgTrackPeak    = song.replayGain?.trackPeak
@@ -297,20 +532,18 @@ actor DownloadService: DownloadServiceProtocol {
         let rgBaseGain     = song.replayGain?.baseGain
         let rgFallbackGain = song.replayGain?.fallbackGain
 
-        // Best-effort: persist cover art so it's available offline (compilations, playlist tracks).
-        // song.coverArt may differ from album.coverArt on some servers — download it per track.
-        // _downloadCoverArt is idempotent (physical file check), so no redundant network hit
-        // when all tracks in a standard album share the same coverArtId.
-        if let cid = coverArtId {
-            do {
-                try await _downloadCoverArt(id: cid)
-            } catch {
-                Logger.download.error("Cover art download failed for song '\(songId, privacy: .public)' (coverArtId: \(cid, privacy: .public)): \(error, privacy: .public)")
-            }
-        }
-
-        await MainActor.run {
+        // Commit audio before fetching optional artwork so slow covers cannot hide a finished track.
+        try await MainActor.run {
+            guard serverService.state.activeServer?.id == serverId,
+                  !serverService.state.isSigningOut else { throw CancellationError() }
+            let context = ModelContext(modelContainer)
+            let stableID = mediaIdentityService?.observe(
+                remoteID: songId,
+                serverId: serverId,
+                entityType: .song
+            )
             let record = DownloadedTrack(
+                localStableID: stableID,
                 songId: songId,
                 serverId: serverId,
                 albumId: albumId,
@@ -322,10 +555,19 @@ actor DownloadService: DownloadServiceProtocol {
                 artistId: artistId,
                 album: album,
                 trackNumber: track,
+                discNumber: disc,
                 durationSeconds: duration,
+                mediaPath: mediaPath,
+                musicBrainzID: musicBrainzID,
+                isrc: isrc,
                 coverArtId: coverArtId,
                 suffix: suffix,
                 genre: genre,
+                bitRate: bitRate,
+                bitDepth: bitDepth,
+                samplingRate: samplingRate,
+                channelCount: channelCount,
+                comment: comment,
                 replayGainTrackGain: rgTrackGain,
                 replayGainTrackPeak: rgTrackPeak,
                 replayGainAlbumGain: rgAlbumGain,
@@ -333,16 +575,28 @@ actor DownloadService: DownloadServiceProtocol {
                 replayGainBaseGain: rgBaseGain,
                 replayGainFallbackGain: rgFallbackGain
             )
-            modelContainer.mainContext.insert(record)
+            let previous = try context.fetch(FetchDescriptor<DownloadedTrack>(predicate: #Predicate {
+                $0.songId == songId && $0.serverId == serverId
+            }))
+            for old in previous { context.delete(old) }
+            context.insert(record)
             do {
-                try modelContainer.mainContext.save()
+                try context.save()
             } catch {
+                context.rollback()
+                try? FileManager.default.removeItem(at: fileURL)
                 Logger.download.error("DownloadService: track record save failed for '\(songId, privacy: .public)' — \(error)")
+                throw error
             }
         }
 
         emit(progress: DownloadProgress(songId: song.id, serverId: serverId, progress: 1.0, totalBytes: fileSize, receivedBytes: fileSize))
         Logger.download.info("Downloaded '\(song.id, privacy: .public)' (\(fileSize) bytes)")
+        do {
+            try await _downloadCoverArt(id: coverArtId ?? songId)
+        } catch {
+            Logger.download.error("Cover art download failed for '\(songId, privacy: .public)': \(error, privacy: .public)")
+        }
     }
 
     // MARK: - Album download
@@ -407,9 +661,13 @@ actor DownloadService: DownloadServiceProtocol {
         let coverPath = localCoverPath
 
         await MainActor.run {
+            guard serverService.state.activeServer?.id == serverId,
+                  !serverService.state.isSigningOut else { return }
             let context = ModelContext(modelContainer)
-            let existing = (try? context.fetch(FetchDescriptor<DownloadedAlbum>()))?
-                .first(where: { $0.albumId == albumId && $0.serverId == serverId })
+            let sid = serverId
+            let existing = (try? context.fetch(FetchDescriptor<DownloadedAlbum>(predicate: #Predicate {
+                $0.albumId == albumId && $0.serverId == sid
+            })))?.first
 
             if let existing {
                 existing.tracksCount = tracksSucceeded
@@ -436,8 +694,10 @@ actor DownloadService: DownloadServiceProtocol {
             }
         }
         Logger.download.info("Album '\(album.id, privacy: .public)': \(succeeded)/\(total) tracks downloaded.")
-        if succeeded == total {
+        if succeeded == total, total > 0 {
             await toastService.showSuccess("\(album.name) downloaded")
+        } else if succeeded == 0, total > 0 {
+            await toastService.showError(UserFacingError.downloadFailed.displayMessage)
         }
     }
 
@@ -501,9 +761,13 @@ actor DownloadService: DownloadServiceProtocol {
         let coverPath = localCoverPath
 
         await MainActor.run {
+            guard serverService.state.activeServer?.id == serverId,
+                  !serverService.state.isSigningOut else { return }
             let context = ModelContext(modelContainer)
-            let existing = (try? context.fetch(FetchDescriptor<DownloadedPlaylist>()))?
-                .first(where: { $0.playlistId == playlistId && $0.serverId == serverId })
+            let sid = serverId
+            let existing = (try? context.fetch(FetchDescriptor<DownloadedPlaylist>(predicate: #Predicate {
+                $0.playlistId == playlistId && $0.serverId == sid
+            })))?.first
 
             if let existing {
                 existing.tracksCount = tracksSucceeded
@@ -532,8 +796,10 @@ actor DownloadService: DownloadServiceProtocol {
             }
         }
         Logger.download.info("Playlist '\(playlist.id, privacy: .public)': \(tracksSucceeded)/\(total) tracks downloaded.")
-        if tracksSucceeded == totalTracks {
+        if tracksSucceeded == totalTracks, totalTracks > 0 {
             await toastService.showSuccess("\(playlist.name) downloaded")
+        } else if tracksSucceeded == 0, totalTracks > 0 {
+            await toastService.showError(UserFacingError.downloadFailed.displayMessage)
         }
     }
 
@@ -551,23 +817,38 @@ actor DownloadService: DownloadServiceProtocol {
 
     // MARK: - Cancel
 
+    func cancelAllDownloads() async {
+        let tasks = inFlightTasks
+        for (key, task) in tasks {
+            task.cancel()
+            #if os(iOS)
+            CassetteBackgroundDownloads.shared.cancel(clientKey: key)
+            #endif
+        }
+        for task in tasks.values { _ = await task.result }
+        progressContinuation?.yield([])
+    }
+
     func cancelDownload(songId: String, serverId: UUID) async {
         let key = taskKey(songId: songId, serverId: serverId)
         inFlightTasks[key]?.cancel()
         inFlightTasks.removeValue(forKey: key)
+        #if os(iOS)
+        CassetteBackgroundDownloads.shared.cancel(clientKey: key)
+        #endif
     }
 
     // MARK: - Remove
 
     func remove(songId: String, serverId: UUID) async throws {
-        let filePath: String? = await MainActor.run {
+        let storedTrack: (filePath: String, albumId: String?)? = await MainActor.run {
             let context = ModelContext(modelContainer)
             let predicate = #Predicate<DownloadedTrack> { $0.songId == songId }
             let tracks = (try? context.fetch(FetchDescriptor(predicate: predicate))) ?? []
-            return tracks.first(where: { $0.serverId == serverId })?.filePath
+            return tracks.first(where: { $0.serverId == serverId }).map { ($0.filePath, $0.albumId) }
         }
-        if let filePath {
-            let fileURL = downloadsDirectory.appendingPathComponent(filePath)
+        if let storedTrack {
+            let fileURL = downloadsDirectory.appendingPathComponent(storedTrack.filePath)
             if FileManager.default.fileExists(atPath: fileURL.path) {
                 try FileManager.default.removeItem(at: fileURL)
             }
@@ -583,6 +864,27 @@ actor DownloadService: DownloadServiceProtocol {
                 Logger.download.debug("DownloadService: remove track save failed — \(error)")
             }
         }
+        // Keep full-album metadata honest when a single track is removed from the storage screen.
+        // Delete the album record when its final track disappears; otherwise update its count.
+        if let albumId = storedTrack?.albumId {
+            await MainActor.run {
+                let context = ModelContext(modelContainer)
+                let sid = serverId
+                let aid = albumId
+                let remaining = (try? context.fetch(FetchDescriptor<DownloadedTrack>(predicate: #Predicate {
+                    $0.serverId == sid && $0.albumId == aid
+                }))) ?? []
+                let albums = (try? context.fetch(FetchDescriptor<DownloadedAlbum>(predicate: #Predicate {
+                    $0.serverId == sid && $0.albumId == aid
+                }))) ?? []
+                if remaining.isEmpty {
+                    albums.forEach { context.delete($0) }
+                } else {
+                    albums.forEach { $0.tracksCount = remaining.count }
+                }
+                try? context.save()
+            }
+        }
         // Sync DownloadedPlaylist.songIds — remove this songId from any playlist that contains it.
         // Without this, the cold-start retry would re-download the song silently after removal.
         await MainActor.run {
@@ -594,6 +896,7 @@ actor DownloadService: DownloadServiceProtocol {
             var didMutate = false
             for playlist in playlists where playlist.songIds.contains(songId) {
                 playlist.songIds.removeAll { $0 == songId }
+                playlist.tracksCount = playlist.songIds.count
                 didMutate = true
             }
             if didMutate {
@@ -609,16 +912,23 @@ actor DownloadService: DownloadServiceProtocol {
     func remove(albumId: String, serverId: UUID) async throws {
         let songIds: [String] = await MainActor.run {
             let context = ModelContext(modelContainer)
-            let all = (try? context.fetch(FetchDescriptor<DownloadedTrack>())) ?? []
-            return all.filter { $0.serverId == serverId && $0.albumId == albumId }.map(\.songId)
+            let sid = serverId
+            let aid = albumId
+            return ((try? context.fetch(FetchDescriptor<DownloadedTrack>(predicate: #Predicate {
+                $0.serverId == sid && $0.albumId == aid
+            }))) ?? []).map(\.songId)
         }
         for songId in songIds {
             try? await remove(songId: songId, serverId: serverId)
         }
         await MainActor.run {
             let context = ModelContext(modelContainer)
-            let albums = (try? context.fetch(FetchDescriptor<DownloadedAlbum>())) ?? []
-            albums.filter { $0.albumId == albumId && $0.serverId == serverId }.forEach { context.delete($0) }
+            let sid = serverId
+            let aid = albumId
+            let albums = (try? context.fetch(FetchDescriptor<DownloadedAlbum>(predicate: #Predicate {
+                $0.albumId == aid && $0.serverId == sid
+            }))) ?? []
+            albums.forEach { context.delete($0) }
             do {
                 try context.save()
             } catch {
@@ -635,19 +945,25 @@ actor DownloadService: DownloadServiceProtocol {
         let songsToPurge: [String] = await MainActor.run {
             let context = ModelContext(modelContainer)
             let sid = serverId
-            let allPlaylists = (try? context.fetch(FetchDescriptor<DownloadedPlaylist>())) ?? []
-            let mine = allPlaylists.filter { $0.playlistId == playlistId && $0.serverId == sid }
+            let allPlaylists = (try? context.fetch(FetchDescriptor<DownloadedPlaylist>(
+                predicate: #Predicate { $0.serverId == sid }
+            ))) ?? []
+            let mine = allPlaylists.filter { $0.playlistId == playlistId }
             let owned = Set(mine.flatMap { $0.songIds })
             // Songs still referenced by ANOTHER downloaded playlist on this server → keep their files.
             let sharedByOtherPlaylist = Set(
-                allPlaylists.filter { $0.serverId == sid && $0.playlistId != playlistId }.flatMap { $0.songIds }
+                allPlaylists.filter { $0.playlistId != playlistId }.flatMap { $0.songIds }
             )
             // Albums downloaded on this server → keep any of their tracks (don't break a co-downloaded album).
-            let albums = (try? context.fetch(FetchDescriptor<DownloadedAlbum>())) ?? []
-            let downloadedAlbumIds = Set(albums.filter { $0.serverId == sid }.map(\.albumId))
-            let allTracks = (try? context.fetch(FetchDescriptor<DownloadedTrack>())) ?? []
+            let albums = (try? context.fetch(FetchDescriptor<DownloadedAlbum>(
+                predicate: #Predicate { $0.serverId == sid }
+            ))) ?? []
+            let downloadedAlbumIds = Set(albums.map(\.albumId))
+            let allTracks = (try? context.fetch(FetchDescriptor<DownloadedTrack>(
+                predicate: #Predicate { $0.serverId == sid }
+            ))) ?? []
             let albumIdBySong = Dictionary(
-                allTracks.filter { $0.serverId == sid && owned.contains($0.songId) }
+                allTracks.filter { owned.contains($0.songId) }
                     .compactMap { track -> (String, String)? in
                         guard let albumId = track.albumId else { return nil }
                         return (track.songId, albumId)
@@ -682,12 +998,17 @@ actor DownloadService: DownloadServiceProtocol {
 
     private func emit(progress: DownloadProgress) {
         progressContinuation?.yield([progress])
+        if progress.progress >= 1 {
+            Task { @MainActor in
+                NotificationCenter.default.post(name: .cassetteDownloadCompleted, object: nil)
+            }
+        }
     }
 
-    /// Downloads a cover art image to `coverArtsDirectory/<id>`. No-op if the file already exists.
+    /// Downloads original bytes to `coverArtsDirectory/<id>@original-v1`, independently of streaming caches.
     /// Throws on network or write error — callers must catch and treat as best-effort.
     private func _downloadCoverArt(id: String) async throws {
-        let fileURL = coverArtsDirectory.appendingPathComponent(id)
+        let fileURL = coverArtsDirectory.appendingPathComponent(OriginalArtwork.storageID(id))
         guard !FileManager.default.fileExists(atPath: fileURL.path) else {
             Logger.download.debug("Cover art '\(id, privacy: .public)' already on disk — skipping.")
             return
@@ -695,22 +1016,29 @@ actor DownloadService: DownloadServiceProtocol {
 
         let creds = try await serverService.activeCredentials()
         let client = try await serverService.makeSwiftSonicClient()
-        guard let artURL = client.coverArtURL(id: id, size: 600) else {
+        // Request the ORIGINAL (full-resolution) cover — no server-side `size` downscale —
+        // so offline album art is stored at its highest quality.
+        guard let artURL = client.coverArtURL(id: id, size: nil) else {
             throw CassetteError.mediaNotFound(songId: id)
         }
 
         var request = URLRequest(url: artURL)
         for (k, v) in creds.customHeaders { request.setValue(v, forHTTPHeaderField: k) }
 
-        let (data, response) = try await downloadSession.data(for: request)
+        let (data, response) = try await coverSession.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
             struct HTTPError: Error & Sendable { let statusCode: Int }
             throw CassetteError.downloadFailed(songId: id, underlying: HTTPError(statusCode: code))
         }
+        guard await Task.detached(priority: .utility, operation: {
+            ArtworkImageCache.thumbnailImage(from: data, maxDimension: 8) != nil
+        }).value else { throw URLError(.cannotDecodeContentData) }
 
+        // Persist the original bytes verbatim — no JPEG re-encode, no low-resolution decode.
         try FileManager.default.createDirectory(at: coverArtsDirectory, withIntermediateDirectories: true)
         try data.write(to: fileURL, options: .atomic)
-        Logger.download.info("Cover art '\(id, privacy: .public)' downloaded (\(data.count) bytes)")
+        await MainActor.run { NotificationCenter.default.post(name: OriginalArtwork.didInstall, object: id) }
+        Logger.download.info("Cover art '\(id, privacy: .public)' downloaded (\(data.count) bytes, original)")
     }
 }

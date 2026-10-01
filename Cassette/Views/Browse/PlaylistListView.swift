@@ -7,12 +7,22 @@ import SwiftUI
 import SwiftData
 import SwiftSonic
 import OSLog
+import AppIntents
 
 struct PlaylistListView: View {
-    var zoomNamespace: Namespace.ID? = nil
+    let zoomNamespace: Namespace.ID?
     @Environment(\.appContainer) private var container
     @State private var viewModel: PlaylistListViewModel?
     @State private var showCreateSheet = false
+    @State private var searchText = ""
+    @State private var playlistFilter: PlaylistLibraryFilter
+    @AppStorage("cassette.playlistSort") private var playlistSort: PlaylistSort = .title
+    @Query private var downloadedPlaylists: [DownloadedPlaylist]
+
+    init(zoomNamespace: Namespace.ID? = nil, initialFilter: PlaylistLibraryFilter = .all) {
+        self.zoomNamespace = zoomNamespace
+        _playlistFilter = State(initialValue: initialFilter)
+    }
 
     var body: some View {
         Group {
@@ -23,7 +33,12 @@ struct PlaylistListView: View {
             }
         }
         .cassetteContentWidth()
-        .navigationTitle("Playlists")
+        .navigationTitle(String(localized: "Playlists", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        .navigationBarTitleDisplayModeLarge()
+        .cassetteLibrarySearch(
+            text: $searchText,
+            prompt: String(localized: "Search Playlists", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        )
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -33,6 +48,30 @@ struct PlaylistListView: View {
                         .foregroundStyle(Color.cassetteAccent)
                 }
                 .disabled(container?.serverState.isOnline != true)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Picker("Sort By", selection: $playlistSort) {
+                        ForEach(PlaylistSort.allCases, id: \.self) { sort in
+                            Label(sort.label, systemImage: sort.systemImage).tag(sort)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease")
+                }
+                .accessibilityLabel("Sort playlists")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Picker("Playlists", selection: $playlistFilter) {
+                        ForEach(PlaylistLibraryFilter.allCases, id: \.self) { filter in
+                            Label(filter.label, systemImage: filter.systemImage).tag(filter)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .accessibilityLabel("Filter playlists")
             }
         }
         .sheet(isPresented: $showCreateSheet) {
@@ -81,17 +120,104 @@ struct PlaylistListView: View {
                 subtitle: "Create playlists on your server to see them here."
             )
         } else {
-            List(vm.playlists) { playlist in
-                NavigationLink(value: HomeDestination.playlist(playlist)) {
-                    OnlinePlaylistRow(
-                        playlist: playlist,
-                        namespace: zoomNamespace,
-                        onActionCompleted: { Task { await vm.load() } }
-                    )
+            let playlists = displayedPlaylists(vm.playlists)
+            List {
+                if playlists.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                        .listRowSeparator(.hidden)
+                }
+
+                ForEach(playlists) { playlist in
+                    NavigationLink(value: HomeDestination.playlist(playlist)) {
+                        OnlinePlaylistRow(
+                            playlist: playlist,
+                            namespace: zoomNamespace,
+                            onActionCompleted: { Task { await vm.load() } }
+                        )
+                        .appEntityIdentifier(playlistEntityIdentifier(playlist))
+                    }
                 }
             }
             .listStyle(.plain)
             .refreshable { await vm.load() }
+            .miniPlayerBottomMargin()
+        }
+    }
+
+    private func displayedPlaylists(_ playlists: [Playlist]) -> [Playlist] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scoped: [Playlist] = {
+            guard playlistFilter == .downloads,
+                  let serverId = container?.serverState.activeServer?.id else { return playlists }
+            let ids = Set(downloadedPlaylists.lazy.filter { $0.serverId == serverId }.map(\.playlistId))
+            return playlists.filter { ids.contains($0.id) }
+        }()
+        let filtered = query.isEmpty ? scoped : scoped.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+                || ($0.owner?.localizedCaseInsensitiveContains(query) == true)
+        }
+        return playlistSort.sorted(filtered)
+    }
+
+    private func playlistEntityIdentifier(_ playlist: Playlist) -> EntityIdentifier? {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return nil }
+        return OnscreenEntityAnnotation.playlistIdentifier(
+            id: playlist.id,
+            title: playlist.name,
+            trackCount: playlist.songCount,
+            serverId: container?.serverState.activeServer?.id
+        )
+    }
+}
+
+enum PlaylistLibraryFilter: String, CaseIterable {
+    case all
+    case downloads
+
+    var label: String {
+        switch self {
+        case .all: return "All Playlists"
+        case .downloads: return "Downloaded"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .all: return "music.note.list"
+        case .downloads: return "arrow.down.circle"
+        }
+    }
+}
+
+private enum PlaylistSort: String, CaseIterable {
+    case title
+    case recentlyUpdated
+    case recentlyCreated
+
+    var label: String {
+        switch self {
+        case .title: return "Title"
+        case .recentlyUpdated: return "Recently Updated"
+        case .recentlyCreated: return "Date Added"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .title: return "textformat"
+        case .recentlyUpdated: return "clock.arrow.circlepath"
+        case .recentlyCreated: return "calendar"
+        }
+    }
+
+    func sorted(_ playlists: [Playlist]) -> [Playlist] {
+        switch self {
+        case .title:
+            return playlists.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        case .recentlyUpdated:
+            return playlists.sorted { ($0.changed ?? .distantPast) > ($1.changed ?? .distantPast) }
+        case .recentlyCreated:
+            return playlists.sorted { ($0.created ?? .distantPast) > ($1.created ?? .distantPast) }
         }
     }
 }
@@ -127,7 +253,7 @@ private struct OnlinePlaylistRow: View {
                 Text(playlist.name)
                     .font(.cassetteCellTitle)
                     .lineLimit(1)
-                Text("\(playlist.songCount) track\(playlist.songCount == 1 ? "" : "s")")
+                Text(CassetteCountLabel.tracks(playlist.songCount))
                     .font(.cassetteCaption)
                     .foregroundStyle(.secondary)
             }
@@ -220,7 +346,7 @@ private struct OfflinePlaylistRow: View {
                 Text(playlist.name)
                     .font(.cassetteCellTitle)
                     .lineLimit(1)
-                Text("\(playlist.tracksCount) track\(playlist.tracksCount == 1 ? "" : "s")")
+                Text(CassetteCountLabel.tracks(playlist.tracksCount))
                     .font(.cassetteCaption)
                     .foregroundStyle(.secondary)
             }

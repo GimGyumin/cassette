@@ -12,6 +12,9 @@ import OSLog
 final class CreatePlaylistViewModel {
     var name: String = ""
     var description: String = ""
+    var isPublic: Bool = false
+    /// Songs resolved by AI draft — added after create when non-empty.
+    var pendingSongs: [Song] = []
     private(set) var isCreating: Bool = false
 
     private let playlistService: any PlaylistServiceProtocol
@@ -35,10 +38,18 @@ final class CreatePlaylistViewModel {
         defer { isCreating = false }
 
         do {
-            let playlist = try await playlistService.createPlaylist(
+            var playlist = try await playlistService.createPlaylist(
                 name: trimmedName,
                 description: trimmedDesc.isEmpty ? nil : trimmedDesc
             )
+            if isPublic {
+                try await playlistService.updateVisibility(id: playlist.id, isPublic: true)
+                playlist = try await playlistService.getPlaylist(id: playlist.id)
+            }
+            if !pendingSongs.isEmpty {
+                try await playlistService.addTracks(playlistId: playlist.id, songs: pendingSongs)
+                playlist = try await playlistService.getPlaylist(id: playlist.id)
+            }
             toastService.showSuccess("Playlist created")
             return playlist
         } catch {

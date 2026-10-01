@@ -7,6 +7,9 @@ import Foundation
 
 nonisolated enum CassetteError: Error, Sendable {
     case serverNotConfigured
+    /// Server row exists in SwiftData but the Keychain password is gone
+    /// (common after Bundle ID / team changes). User must re-enter credentials.
+    case credentialsMissing
     case connectionFailed(underlying: any Error & Sendable)
     case mediaNotFound(songId: String)
     case cacheStorageFailed(underlying: any Error & Sendable)
@@ -36,6 +39,8 @@ extension CassetteError: LocalizedError {
         switch self {
         case .serverNotConfigured:
             return "No server configured. Please add a server in Settings."
+        case .credentialsMissing:
+            return "Server password is missing from Keychain. Open Settings → Server Configuration and enter your password again."
         case .connectionFailed(let error):
             return "Connection failed: \(error.localizedDescription)"
         case .mediaNotFound(let id):

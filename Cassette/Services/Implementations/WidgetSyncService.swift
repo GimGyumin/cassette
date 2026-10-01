@@ -6,13 +6,11 @@
 import Foundation
 import SwiftData
 import OSLog
+import WidgetKit
 #if canImport(UIKit)
 import UIKit
 #elseif canImport(AppKit)
 import AppKit
-#endif
-#if os(iOS)
-import WidgetKit
 #endif
 
 nonisolated enum WidgetSyncError: Error {
@@ -36,6 +34,27 @@ actor WidgetSyncService {
 
     private var lastReloadDate: Date?
     private var lastPlayStateChangeDate: Date = .distantPast
+    /// Avoid re-bridging / color work for the same cover during rapid play-state flips.
+    private var lastBridgedCoverArtId: String?
+    private var bridgedOriginals = Set<String>()
+    private var accountGeneration: UInt64 = 0
+
+    func clearForLogout() throws {
+        accountGeneration &+= 1
+        lastBridgedCoverArtId = nil
+        bridgedOriginals.removeAll()
+        lastReloadDate = nil
+        SharedStorage.write { defaults in
+            for key in [SharedStorageKey.recentlyPlayedItems, .pinnedItems, .dominantColors, .nowPlayingState] {
+                defaults.removeObject(forKey: key.rawValue)
+            }
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+        if let directory = SharedStorage.coverArtCacheDirectory,
+           FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+        }
+    }
 
     init(
         dominantColorExtractor: DominantColorExtractor,
@@ -51,9 +70,10 @@ actor WidgetSyncService {
         self.serverState = serverState
     }
 
-    // MARK: - Recently played
+    // MARK: - Recently played + now playing
 
     func onTrackStarted(_ song: DisplayableSong) async {
+        guard await MainActor.run(body: { serverState.activeServer != nil && !serverState.isSigningOut }) else { return }
         let coverArtId = song.coverArtId ?? song.id
         let info = SharedTrackInfo(
             id: song.id,
@@ -63,10 +83,18 @@ actor WidgetSyncService {
             coverArtFilename: "\(coverArtId).jpg"
         )
 
-        var items: [SharedTrackInfo] = []
-        if let data = SharedStorage.defaults.data(forKey: SharedStorageKey.recentlyPlayedItems.rawValue),
-           let decoded = try? JSONDecoder().decode([SharedTrackInfo].self, from: data) {
-            items = decoded
+        // Widget timeline reads `nowPlayingState` — must update here (not only on pause/resume).
+        let nowPlaying = SharedNowPlayingState(track: info, isPlaying: true, lastUpdated: Date())
+        if let encoded = try? JSONEncoder().encode(nowPlaying) {
+            SharedStorage.write { $0.set(encoded, forKey: SharedStorageKey.nowPlayingState.rawValue) }
+        }
+
+        var items: [SharedTrackInfo] = SharedStorage.read { defaults in
+            guard let data = defaults.data(forKey: SharedStorageKey.recentlyPlayedItems.rawValue),
+                  let decoded = try? JSONDecoder().decode([SharedTrackInfo].self, from: data) else {
+                return []
+            }
+            return decoded
         }
         items.insert(info, at: 0)
         var seen = Set<String>()
@@ -74,18 +102,24 @@ actor WidgetSyncService {
         if items.count > 10 { items = Array(items.prefix(10)) }
 
         if let encoded = try? JSONEncoder().encode(items) {
-            SharedStorage.defaults.set(encoded, forKey: SharedStorageKey.recentlyPlayedItems.rawValue)
+            SharedStorage.write { $0.set(encoded, forKey: SharedStorageKey.recentlyPlayedItems.rawValue) }
         }
 
-        try? await bridgeCoverArt(coverArtId: coverArtId)
+        WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.nowPlaying)
+        lastReloadDate = Date()
+
+        try? await bridgeCoverArt(coverArtId: coverArtId, allowNetwork: false)
         await syncDominantColors(forCoverArtIds: [coverArtId])
-        reloadTimelinesIfNeeded()
-        Logger.widget.debug("onTrackStarted: updated recently played (\(items.count) items)")
+        // Always refresh Now Playing after a track change (bypass the 2s all-timelines throttle).
+        WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.nowPlaying)
+        lastReloadDate = Date()
+        Logger.widget.debug("onTrackStarted: updated now playing + recently played (\(items.count) items)")
     }
 
     // MARK: - Now playing state
 
     func onPlayStateChanged(isPlaying: Bool, currentSong: DisplayableSong?) async {
+        guard await MainActor.run(body: { serverState.activeServer != nil && !serverState.isSigningOut }) else { return }
         let now = Date()
         guard now.timeIntervalSince(lastPlayStateChangeDate) > 0.3 else { return }
         lastPlayStateChangeDate = now
@@ -102,22 +136,20 @@ actor WidgetSyncService {
         }
         let nowPlaying = SharedNowPlayingState(track: track, isPlaying: isPlaying, lastUpdated: Date())
         if let encoded = try? JSONEncoder().encode(nowPlaying) {
-            SharedStorage.defaults.set(encoded, forKey: SharedStorageKey.nowPlayingState.rawValue)
+            SharedStorage.write { $0.set(encoded, forKey: SharedStorageKey.nowPlayingState.rawValue) }
         }
-        if let song = currentSong {
-            let coverArtId = song.coverArtId ?? song.id
-            try? await bridgeCoverArt(coverArtId: coverArtId)
-            await syncDominantColors(forCoverArtIds: [coverArtId])
+        let nowReload = Date()
+        if lastReloadDate == nil || nowReload.timeIntervalSince(lastReloadDate!) >= 0.8 {
+            lastReloadDate = nowReload
+            WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.nowPlaying)
         }
-        #if os(iOS)
-        WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.nowPlaying)
-        #endif
-        Logger.widget.debug("onPlayStateChanged: isPlaying=\(isPlaying), reload NowPlayingWidget (bypass throttle)")
+        Logger.widget.debug("onPlayStateChanged: isPlaying=\(isPlaying)")
     }
 
     // MARK: - Pinned items
 
     func syncPinned() async {
+        guard await MainActor.run(body: { serverState.activeServer != nil && !serverState.isSigningOut }) else { return }
         let context = ModelContext(modelContainer)
         let descriptor = FetchDescriptor<PinnedItem>(sortBy: [SortDescriptor(\PinnedItem.sortOrder)])
         let dbItems = (try? context.fetch(descriptor)) ?? []
@@ -127,6 +159,8 @@ actor WidgetSyncService {
             switch item.itemType {
             case PinnedItemType.album.rawValue: kind = .album
             case PinnedItemType.playlist.rawValue: kind = .playlist
+            case PinnedItemType.song.rawValue: kind = .song
+            case PinnedItemType.artist.rawValue: kind = .artist
             default: return nil
             }
             return SharedPinnedItem(
@@ -139,7 +173,7 @@ actor WidgetSyncService {
         }
 
         if let encoded = try? JSONEncoder().encode(shared) {
-            SharedStorage.defaults.set(encoded, forKey: SharedStorageKey.pinnedItems.rawValue)
+            SharedStorage.write { $0.set(encoded, forKey: SharedStorageKey.pinnedItems.rawValue) }
         }
 
         let coverArtIds = dbItems.compactMap(\.coverArtId)
@@ -147,7 +181,8 @@ actor WidgetSyncService {
             try? await bridgeCoverArt(coverArtId: id)
         }
         await syncDominantColors(forCoverArtIds: coverArtIds)
-        reloadTimelinesIfNeeded()
+        WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.pinned)
+        lastReloadDate = Date()
         Logger.widget.debug("syncPinned: wrote \(shared.count) pinned items to shared defaults")
     }
 
@@ -156,8 +191,10 @@ actor WidgetSyncService {
     func fullSync() async {
         await syncPinned()
 
-        if let data = SharedStorage.defaults.data(forKey: SharedStorageKey.recentlyPlayedItems.rawValue),
-           let items = try? JSONDecoder().decode([SharedTrackInfo].self, from: data) {
+        if let items: [SharedTrackInfo] = SharedStorage.read({ defaults in
+            guard let data = defaults.data(forKey: SharedStorageKey.recentlyPlayedItems.rawValue) else { return nil }
+            return try? JSONDecoder().decode([SharedTrackInfo].self, from: data)
+        }) {
             let ids = items.compactMap { $0.coverArtFilename.map { String($0.dropLast(4)) } }
             await syncDominantColors(forCoverArtIds: ids)
         }
@@ -168,10 +205,19 @@ actor WidgetSyncService {
     // MARK: - Dominant color sync
 
     func syncDominantColors(forCoverArtIds ids: [String]) async {
+        let generation = accountGeneration
         let allCached = await dominantColorExtractor.cachedColors()
+        guard generation == accountGeneration else { return }
         let filtered = allCached.filter { ids.contains($0.key) }
         guard !filtered.isEmpty else { return }
-        SharedStorage.defaults.set(filtered, forKey: SharedStorageKey.dominantColors.rawValue)
+        // Merge into existing App Group dictionary — replacing wiped other covers' colors.
+        SharedStorage.write { defaults in
+            var merged = defaults.dictionary(forKey: SharedStorageKey.dominantColors.rawValue) as? [String: Int] ?? [:]
+            for (key, value) in filtered {
+                merged[key] = value
+            }
+            defaults.set(merged, forKey: SharedStorageKey.dominantColors.rawValue)
+        }
         Logger.widget.debug("syncDominantColors: wrote \(filtered.count) colors to shared defaults")
     }
 
@@ -179,41 +225,53 @@ actor WidgetSyncService {
 
     /// Copies a cover from the app's local cache into the App Group shared container
     /// as a 600×600 JPG at 80% quality. Idempotent — no-op if the file already exists.
-    func bridgeCoverArt(coverArtId: String) async throws {
+    func bridgeCoverArt(coverArtId: String, allowNetwork: Bool = true) async throws {
+        let generation = accountGeneration
+        guard await MainActor.run(body: { serverState.activeServer != nil && !serverState.isSigningOut }) else { return }
         guard let sharedDir = SharedStorage.coverArtCacheDirectory else {
             throw WidgetSyncError.sharedContainerUnavailable
         }
         try SharedStorage.ensureDirectoriesExist()
 
         let sharedURL = sharedDir.appendingPathComponent("\(coverArtId).jpg")
-        guard !FileManager.default.fileExists(atPath: sharedURL.path) else { return }
+        let originalPath = coversDirectory.appendingPathComponent(OriginalArtwork.storageID(coverArtId)).path
+        let hasOriginal = FileManager.default.fileExists(atPath: originalPath)
+        let needsOriginalUpgrade = hasOriginal && !bridgedOriginals.contains(coverArtId)
+        let needsBridge = !FileManager.default.fileExists(atPath: sharedURL.path) || needsOriginalUpgrade
+        let sameAsLast = lastBridgedCoverArtId == coverArtId
 
-        var sourceImage: PlatformImage?
+        // Same cover already bridged this session and file exists — skip heavy work.
+        if sameAsLast, !needsBridge { return }
 
-        // Prefer the already-persisted local cover (no network needed).
-        let localURL = coversDirectory.appendingPathComponent(coverArtId)
-        if FileManager.default.fileExists(atPath: localURL.path),
-           let data = try? Data(contentsOf: localURL),
-           let img = PlatformImage(data: data) {
-            sourceImage = img
-        } else {
-            // Fallback: ask ArtworkImageCache (fetches from server if absent locally).
-            sourceImage = await artworkCache.load(coverArtId: coverArtId)
-        }
+        // The shared cache resolves permanent originals before RAM/tiered derivatives.
+        let sourceImage = await artworkCache.load(coverArtId: coverArtId, tier: .hero, allowNetwork: allowNetwork)
 
         guard let image = sourceImage else {
             Logger.widget.debug("bridgeCoverArt: no image available for \(coverArtId, privacy: .public)")
             return
         }
 
-        guard let jpgData = image.resized(maxDimension: 600).jpgData(quality: 0.8) else { return }
-        try jpgData.write(to: sharedURL, options: .atomic)
-        Logger.widget.debug("bridgeCoverArt: bridged \(coverArtId, privacy: .public) (\(jpgData.count) bytes)")
+        if needsBridge {
+            let jpgData = await Task.detached(priority: .utility) {
+                image.resized(maxDimension: 600).jpgData(quality: 0.8)
+            }.value
+            if let jpgData {
+                guard generation == accountGeneration else { return }
+                try jpgData.write(to: sharedURL, options: .atomic)
+                if hasOriginal { bridgedOriginals.insert(coverArtId) }
+                Logger.widget.debug("bridgeCoverArt: bridged \(coverArtId, privacy: .public) (\(jpgData.count) bytes)")
+            }
+        }
 
-        // Trigger extraction while the image is in hand so syncDominantColors
-        // finds a cached color even on the very first play of a track.
-        await MainActor.run { _ = dominantColorExtractor.dominantColor(for: coverArtId, image: image) }
-        Logger.widget.debug("bridgeCoverArt: dominant color extracted for \(coverArtId, privacy: .public)")
+        // Color extract off the main actor — MainActor only stores the packed result.
+        let packed = await Task.detached(priority: .utility) {
+            DominantColorExtractor.packedAverageColor(from: image)
+        }.value
+        guard generation == accountGeneration else { return }
+        _ = await MainActor.run {
+            dominantColorExtractor.storeColor(packed: packed, for: coverArtId)
+        }
+        lastBridgedCoverArtId = coverArtId
     }
 
     // MARK: - Throttled timeline reload
@@ -223,9 +281,7 @@ actor WidgetSyncService {
         let now = Date()
         if let last = lastReloadDate, now.timeIntervalSince(last) < 2.0 { return }
         lastReloadDate = now
-        #if os(iOS)
         WidgetCenter.shared.reloadAllTimelines()
-        #endif
         Logger.widget.debug("reloadAllTimelines triggered")
     }
 }

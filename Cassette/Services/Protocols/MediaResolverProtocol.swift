@@ -10,6 +10,6 @@ import SwiftSonic
 /// Resolution order: downloaded → cached → stream.
 /// PlayerService always calls this — never SwiftSonic directly.
 protocol MediaResolverProtocol: AnyObject, Sendable {
-    func resolve(songId: String, serverId: UUID) async throws -> MediaSource
+    func resolve(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource
     func resolveRadio(_ station: InternetRadioStation) async throws -> MediaSource
 }

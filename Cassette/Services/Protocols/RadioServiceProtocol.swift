@@ -9,4 +9,11 @@ protocol RadioServiceProtocol: AnyObject, Sendable {
     func listStations(forceRefresh: Bool) async throws -> [InternetRadioStation]
     func cachedStations() async -> [InternetRadioStation]?
     func clearCache() async
+
+    /// Drops the cached SwiftSonic client so the next call picks up new credentials.
+    func invalidateClientCache() async
+}
+
+extension RadioServiceProtocol {
+    func invalidateClientCache() async {}
 }

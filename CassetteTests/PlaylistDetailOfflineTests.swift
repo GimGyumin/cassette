@@ -16,6 +16,7 @@ import SwiftSonic
 private final class PDLibraryStub: LibraryServiceProtocol {
     /// When set, `playlist(id:)` returns this instead of throwing — used to drive the
     /// empty-but-successful (200, no entries) path that the catch block can't catch.
+    func song(id: String) async throws -> Song { throw URLError(.unknown) }
     var playlistResult: PlaylistWithSongs?
     func playlist(id: String) async throws -> PlaylistWithSongs {
         if let playlistResult { return playlistResult }

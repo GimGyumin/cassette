@@ -14,17 +14,18 @@ import AppKit
 
 // MARK: - Fetcher protocol (testability seam)
 
-protocol ExternalArtworkFetcher: Sendable {
+nonisolated protocol ExternalArtworkFetcher: Sendable {
     func fetchData(from url: URL) async throws -> Data
 }
 
-struct URLSessionExternalFetcher: ExternalArtworkFetcher {
+nonisolated struct URLSessionExternalFetcher: ExternalArtworkFetcher {
     private let session: URLSession
 
     nonisolated init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 30
+        config.httpMaximumConnectionsPerHost = 2
         session = URLSession(configuration: config)
     }
 
@@ -49,17 +50,19 @@ actor ExternalArtworkCache {
 
     private let ttl: TimeInterval
     private let maxSizeBytes: Int64
-    private let maxMemoryEntries: Int
 
     // MARK: - Storage
 
     private let cacheDirectory: URL
     private let fetcher: any ExternalArtworkFetcher
+    private let decodeGate = CoverDecodeGate(limit: 2)
 
     // MARK: - Memory cache (LRU, keyed by URL)
 
-    private var memoryCache: [URL: PlatformImage] = [:]
-    private var accessOrder: [URL] = []
+    private var memoryCache: CostBoundedCache<URL, PlatformImage>
+    private var inFlight: [URL: Task<PlatformImage?, Never>] = [:]
+    private var cacheGeneration = 0
+    private var isClearingCache = false
 
     // MARK: - Init
 
@@ -68,7 +71,8 @@ actor ExternalArtworkCache {
         fetcher: (any ExternalArtworkFetcher)? = nil,
         ttl: TimeInterval = 90 * 24 * 3600,
         maxSizeBytes: Int64 = 100 * 1024 * 1024,
-        maxMemoryEntries: Int = 30
+        maxMemoryEntries: Int = 30,
+        maxMemoryBytes: Int = 24 * 1024 * 1024
     ) {
         let dir: URL
         if let cacheDirectory {
@@ -82,47 +86,78 @@ actor ExternalArtworkCache {
         self.fetcher = fetcher ?? URLSessionExternalFetcher()
         self.ttl = ttl
         self.maxSizeBytes = maxSizeBytes
-        self.maxMemoryEntries = maxMemoryEntries
+        self.memoryCache = CostBoundedCache(countLimit: maxMemoryEntries, costLimit: maxMemoryBytes)
     }
 
     // MARK: - Public API
 
     func image(for url: URL) async -> PlatformImage? {
+        guard !isClearingCache else { return nil }
         // 1. Memory hit
-        if let hit = memoryCache[url] {
-            touchMemory(url)
+        if let hit = memoryCache.value(forKey: url) {
             Logger.externalArtwork.debug("ExternalArtworkCache: memory hit \(url.lastPathComponent, privacy: .public)")
             return hit
         }
 
-        // 2. Disk hit (within TTL)
+        if let task = inFlight[url] { return await task.value }
+        let generation = cacheGeneration
         let fileURL = diskURL(for: url)
-        if let image = diskImage(at: fileURL) {
-            storeMemory(image, for: url)
-            Logger.externalArtwork.debug("ExternalArtworkCache: disk hit \(url.lastPathComponent, privacy: .public)")
-            return image
-        }
-
-        // 3. Network fetch — never write on failure
-        do {
-            let data = try await fetcher.fetchData(from: url)
-            guard let image = PlatformImage(data: data) else {
-                Logger.externalArtwork.warning("ExternalArtworkCache: corrupt data from \(url, privacy: .public)")
+        let task = Task.detached(priority: .utility) { [fetcher, ttl, decodeGate] () -> PlatformImage? in
+            // Keep disk reads, image decoding and writes off the UI and cache actors.
+            await decodeGate.acquire()
+            let diskImage = Task.isCancelled ? nil : Self.diskImage(at: fileURL, ttl: ttl)
+            await decodeGate.release()
+            guard !Task.isCancelled else { return nil }
+            if let diskImage { return diskImage }
+            do {
+                let data = try await fetcher.fetchData(from: url)
+                await decodeGate.acquire()
+                let image = Task.isCancelled ? nil : ArtworkImageCache.thumbnailImage(
+                        from: data, maxDimension: ArtworkTier.hero.decodePixels
+                )
+                await decodeGate.release()
+                guard !Task.isCancelled, let image else { return nil }
+                try? data.write(to: fileURL, options: .atomic)
+                return image
+            } catch {
+                Logger.externalArtwork.debug("ExternalArtworkCache: fetch failed for \(url, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 return nil
             }
-            try? data.write(to: fileURL, options: .atomic)
-            storeMemory(image, for: url)
-            Logger.externalArtwork.debug("ExternalArtworkCache: fetched + cached \(url.lastPathComponent, privacy: .public)")
-            return image
-        } catch {
-            Logger.externalArtwork.warning("ExternalArtworkCache: fetch failed for \(url, privacy: .public) — \(error, privacy: .public)")
-            return nil
         }
+        inFlight[url] = task
+        let image = await task.value
+        inFlight[url] = nil
+        if let image, generation == cacheGeneration {
+            memoryCache.insert(image, forKey: url, cost: image.decodedMemoryCost)
+        }
+        return image
     }
 
     func clearMemoryCache() {
+        cacheGeneration &+= 1
         memoryCache.removeAll()
-        accessOrder.removeAll()
+    }
+
+    /// Wipes memory + on-disk external artwork (developer / Settings reset).
+    func clearAll() async {
+        guard !isClearingCache else { return }
+        isClearingCache = true
+        defer { isClearingCache = false }
+        clearMemoryCache()
+        // Drain pending writes before deleting files, so a reset cannot repopulate the disk cache.
+        let pending = Array(inFlight.values)
+        for task in pending { task.cancel() }
+        for task in pending { _ = await task.value }
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(
+            at: cacheDirectory,
+            includingPropertiesForKeys: nil,
+            options: .skipsHiddenFiles
+        ) else { return }
+        for url in contents {
+            try? fm.removeItem(at: url)
+        }
+        Logger.externalArtwork.info("ExternalArtworkCache: cleared all entries")
     }
 
     // MARK: - Garbage collection
@@ -179,29 +214,17 @@ actor ExternalArtworkCache {
         cacheDirectory.appendingPathComponent(sha256(url.absoluteString) + ".jpg")
     }
 
-    private func diskImage(at fileURL: URL) -> PlatformImage? {
+    nonisolated private static func diskImage(at fileURL: URL, ttl: TimeInterval) -> PlatformImage? {
         let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
         guard let modDate = attrs?[.modificationDate] as? Date,
               Date().timeIntervalSince(modDate) < ttl,
               let data = try? Data(contentsOf: fileURL),
-              let image = PlatformImage(data: data) else {
+              let image = ArtworkImageCache.thumbnailImage(
+                from: data, maxDimension: ArtworkTier.hero.decodePixels
+              ) else {
             return nil
         }
         return image
-    }
-
-    private func storeMemory(_ image: PlatformImage, for url: URL) {
-        memoryCache[url] = image
-        touchMemory(url)
-        while memoryCache.count > maxMemoryEntries, let oldest = accessOrder.first {
-            memoryCache.removeValue(forKey: oldest)
-            accessOrder.removeFirst()
-        }
-    }
-
-    private func touchMemory(_ url: URL) {
-        accessOrder.removeAll { $0 == url }
-        accessOrder.append(url)
     }
 
     private func sha256(_ string: String) -> String {

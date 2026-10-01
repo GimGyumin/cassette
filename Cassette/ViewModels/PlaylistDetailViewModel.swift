@@ -107,10 +107,14 @@ final class PlaylistDetailViewModel {
     func downloadPlaylist() async {
         guard let playlist = playlistDetail, let serverId = serverState.activeServer?.id else { return }
         isDownloadingPlaylist = true
-        try? await downloadService.download(playlist: playlist, serverId: serverId)
+        defer { isDownloadingPlaylist = false }
+        do {
+            try await downloadService.download(playlist: playlist, serverId: serverId)
+        } catch {
+            toastService.showError(UserFacingError.from(error).displayMessage)
+        }
         let downloadedIds = await downloadService.downloadedSongIds(serverId: serverId)
         songs = songs.map { $0.withDownloaded(downloadedIds.contains($0.id)) }
-        isDownloadingPlaylist = false
     }
 
     func cancelPlaylistDownload() async {
@@ -126,7 +130,11 @@ final class PlaylistDetailViewModel {
               let serverId = serverState.activeServer?.id else { return }
         downloadingIds.insert(id)
         defer { downloadingIds.remove(id) }
-        try? await downloadService.download(song: song, serverId: serverId)
+        do {
+            try await downloadService.download(song: song, serverId: serverId)
+        } catch {
+            toastService.showError(UserFacingError.from(error).displayMessage)
+        }
         let allDownloaded = await downloadService.downloadedSongIds(serverId: serverId)
         if let idx = songs.firstIndex(where: { $0.id == id }) {
             songs[idx] = songs[idx].withDownloaded(allDownloaded.contains(id))
@@ -141,12 +149,20 @@ final class PlaylistDetailViewModel {
         let missing = allSongs.filter { !downloadedIds.contains($0.id) }
         guard !missing.isEmpty else { return }
         isDownloadingPlaylist = true
+        defer { isDownloadingPlaylist = false }
+        var anyFailed = false
         for song in missing {
-            try? await downloadService.download(song: song, serverId: serverId)
+            do {
+                try await downloadService.download(song: song, serverId: serverId)
+            } catch {
+                anyFailed = true
+            }
         }
         let allDownloaded = await downloadService.downloadedSongIds(serverId: serverId)
         songs = songs.map { $0.withDownloaded(allDownloaded.contains($0.id)) }
-        isDownloadingPlaylist = false
+        if anyFailed, !songs.contains(where: { $0.isDownloaded }) {
+            toastService.showError(UserFacingError.downloadFailed.displayMessage)
+        }
     }
 
     func deleteDownload() async {

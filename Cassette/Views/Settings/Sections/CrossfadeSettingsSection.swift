@@ -12,23 +12,13 @@ struct CrossfadeSettingsSection: View {
         let cf = container?.crossfadeSettings
         let duration = cf?.duration ?? 0
 
-        Section("Crossfade") {
-            Stepper(
-                value: Binding(
-                    get: { cf?.duration ?? 0 },
-                    set: { newVal in
-                        cf?.duration = newVal
-                        Task { await container?.playerService.crossfadeSettingsDidChange() }
-                    }
-                ),
-                in: 0...5,
-                step: 0.5
-            ) {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label {
-                        Text("Duration")
+                        Text(String(localized: "Crossfade Duration", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                     } icon: {
-                        SettingsIcon(systemImage: "waveform.and.magnifyingglass", color: .teal)
+                        SettingsIcon(systemImage: "arrow.left.and.right", color: .teal)
                     }
                     Spacer()
                     Text(crossfadeDurationLabel(duration))
@@ -36,6 +26,17 @@ struct CrossfadeSettingsSection: View {
                         .monospacedDigit()
                         .font(.body.weight(.medium))
                 }
+                Slider(
+                    value: Binding(
+                        get: { cf?.duration ?? 0 },
+                        set: { newVal in
+                            cf?.duration = newVal
+                            Task { await container?.playerService.crossfadeSettingsDidChange() }
+                        }
+                    ),
+                    in: 0...5,
+                    step: 0.5
+                )
             }
 
             if duration > 0 {
@@ -47,16 +48,21 @@ struct CrossfadeSettingsSection: View {
                     }
                 )) {
                     Label {
-                        Text("Disable for gapless albums")
+                        Text(String(localized: "Disable for gapless albums", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                     } icon: {
-                        SettingsIcon(systemImage: "music.note.list", color: .teal)
+                        SettingsIcon(systemImage: "music.note.list", color: .green)
                     }
                 }
             }
+        } header: {
+            SettingsSectionHeader(verbatim: String(localized: "Crossfade", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        } footer: {
+            Text(String(localized: "Smoothly blends the end of one track into the start of the next. Set to Off to disable.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
 
     private func crossfadeDurationLabel(_ seconds: Double) -> String {
-        seconds == 0 ? "Off" : "\(String(format: "%.1f", seconds)) s"
+        if seconds == 0 { return String(localized: "Off", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) }
+        return String(format: String(localized: "%.1f s", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), seconds)
     }
 }

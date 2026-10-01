@@ -28,8 +28,9 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: CassetteSpacing.l) {
             Image(systemName: systemImage)
-                .font(.system(size: 48, weight: .light))
+                .font(.system(.largeTitle, design: .default).weight(.light))
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
 
             VStack(spacing: CassetteSpacing.s) {
                 Text(title)
@@ -45,9 +46,15 @@ struct EmptyStateView: View {
             }
 
             if let action {
-                Button(action.label, action: action.handler)
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.cassetteAccent)
+                Button(action: action.handler) {
+                    Text(action.label)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, CassetteSpacing.xl)
+                        .padding(.vertical, CassetteSpacing.m)
+                        .cassetteAccentGlassCapsule()
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(CassetteSpacing.xxxl)

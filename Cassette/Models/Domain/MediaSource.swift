@@ -5,12 +5,19 @@
 
 import Foundation
 
+nonisolated struct JellyfinPlaybackContext: Sendable {
+    let itemID: String
+    let mediaSourceID: String?
+    let playSessionID: String?
+    let playMethod: JellyfinPlayMethod
+}
+
 nonisolated enum MediaSource: Sendable {
     case downloaded(URL)
     case cached(URL)
     /// Remote stream of a finite-duration song. Custom headers must be injected
     /// into every request to reach Cloudflare-protected (or other reverse-proxy) hosts.
-    case stream(URL, customHeaders: [String: String])
+    case stream(URL, customHeaders: [String: String], jellyfin: JellyfinPlaybackContext? = nil)
     /// Live audio stream (Internet Radio Station). Infinite-duration, not scrubbable,
     /// not cacheable. Custom headers may be required when the radio host is reached
     /// via the user's Navidrome reverse proxy.
@@ -20,7 +27,7 @@ nonisolated enum MediaSource: Sendable {
         switch self {
         case .downloaded(let url), .cached(let url):
             return url
-        case .stream(let url, _), .liveStream(let url, _, _):
+        case .stream(let url, _, _), .liveStream(let url, _, _):
             return url
         }
     }
@@ -29,14 +36,29 @@ nonisolated enum MediaSource: Sendable {
         switch self {
         case .downloaded, .cached:
             return [:]
-        case .stream(_, let headers), .liveStream(_, let headers, _):
+        case .stream(_, let headers, _), .liveStream(_, let headers, _):
             return headers
         }
+    }
+
+    var jellyfinPlaybackContext: JellyfinPlaybackContext? {
+        guard case .stream(_, _, let context) = self else { return nil }
+        return context
     }
 
     /// Whether this source represents a live stream (radio) — non-scrubbable, infinite duration.
     var isLiveStream: Bool {
         if case .liveStream = self { return true }
         return false
+    }
+
+    /// True when the audio is already on this device, so reading it costs no network.
+    var isLocal: Bool {
+        switch self {
+        case .downloaded, .cached:
+            return true
+        case .stream, .liveStream:
+            return false
+        }
     }
 }

@@ -56,7 +56,7 @@ struct CassetteTapeIcon: Shape {
             .fill(.white, style: FillStyle(eoFill: true))
             .frame(width: 48, height: 32)
             .padding(8)
-            .background(Color.indigo, in: RoundedRectangle(cornerRadius: 8))
+            .background(CassetteColors.accent, in: RoundedRectangle(cornerRadius: 8))
     }
     .padding()
 }

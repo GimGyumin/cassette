@@ -33,7 +33,7 @@ final class ToastService {
             switch self {
             case .info:    .blue
             case .success: .green
-            case .error:   .red
+            case .error:   CassetteColors.SemanticLabel.destructive
             }
         }
     }

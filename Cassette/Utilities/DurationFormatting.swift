@@ -5,6 +5,21 @@
 
 import Foundation
 
+extension Int {
+    /// Localized album/playlist total length using hours and minutes
+    /// (e.g. "7 hours, 20 minutes" / "7시간 20분"), not clock-style "7:20".
+    var cassetteAlbumDurationLabel: String {
+        let seconds = Swift.max(0, self)
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = seconds >= 3600 ? [.hour, .minute] : [.minute]
+        formatter.unitsStyle = .full
+        formatter.maximumUnitCount = 2
+        formatter.zeroFormattingBehavior = .dropAll
+        return formatter.string(from: TimeInterval(seconds))
+            ?? "\(seconds / 60) minutes"
+    }
+}
+
 extension TimeInterval {
     /// Returns (number, unit) for Wrapped stat hero display.
     func wrappedHeroFormat() -> (number: String, unit: String) {

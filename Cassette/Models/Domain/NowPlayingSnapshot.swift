@@ -19,10 +19,65 @@ nonisolated struct NowPlayingSnapshot: Sendable {
     /// coverArtId from the source song — used by NowPlayingService to check
     /// ArtworkImageCache before falling back to a URL fetch.
     let coverArtId: String?
+    /// Album id, so the lock screen can prefer the cover a downloaded album stored on disk
+    /// (recorded during library preparation) over the song's own media-file cover id.
+    let albumId: String?
     /// True when the current playback is a live stream (radio). When true, duration and
     /// position are not meaningful — NowPlayingService omits them from the info dict so
     /// Control Center hides the scrubber automatically.
     let isLiveStream: Bool
     /// The radio station's display name when isLiveStream is true; nil otherwise.
     let radioStationName: String?
+    /// ISRC for system Music Haptics (Settings → Accessibility → Music Haptics).
+    let isrc: String?
+    /// Stable server identifier for distinguishing tracks with otherwise identical metadata.
+    let trackId: String?
+    /// Zero-based position and total count exposed to the system Now Playing queue.
+    let queueIndex: Int?
+    let queueCount: Int?
+
+    /// Some OpenSubsonic recommendation endpoints omit `coverArt` even though the song ID
+    /// is accepted by the cover-art endpoint. Keep that fallback consistent with the player UI.
+    var effectiveCoverArtId: String? {
+        let explicit = coverArtId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let explicit, !explicit.isEmpty { return explicit }
+        let fallback = trackId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return fallback?.isEmpty == false ? fallback : nil
+    }
+
+    init(
+        title: String,
+        artist: String?,
+        album: String?,
+        duration: TimeInterval,
+        position: TimeInterval,
+        playbackRate: Float,
+        artworkURL: URL?,
+        artworkHeaders: [String: String],
+        coverArtId: String?,
+        albumId: String? = nil,
+        isLiveStream: Bool,
+        radioStationName: String?,
+        isrc: String?,
+        trackId: String? = nil,
+        queueIndex: Int? = nil,
+        queueCount: Int? = nil
+    ) {
+        self.title = title
+        self.artist = artist
+        self.album = album
+        self.duration = duration
+        self.position = position
+        self.playbackRate = playbackRate
+        self.artworkURL = artworkURL
+        self.artworkHeaders = artworkHeaders
+        self.coverArtId = coverArtId
+        self.albumId = albumId
+        self.isLiveStream = isLiveStream
+        self.radioStationName = radioStationName
+        self.isrc = isrc
+        self.trackId = trackId
+        self.queueIndex = queueIndex
+        self.queueCount = queueCount
+    }
 }

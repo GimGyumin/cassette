@@ -7,13 +7,26 @@ import SwiftUI
 import SwiftSonic
 
 struct AddToPlaylistSheet: View {
-    let song: DisplayableSong
+    let songs: [DisplayableSong]
 
     @Environment(\.appContainer) private var container
     @Environment(\.dismiss) private var dismiss
     @State private var vm: AddToPlaylistViewModel?
     @State private var showCreateSheet = false
     @State private var pendingDuplicate: DuplicateConfirmation?
+
+    init(song: DisplayableSong) {
+        self.songs = [song]
+    }
+
+    init(songs: [DisplayableSong]) {
+        self.songs = songs
+    }
+
+    private var selectionName: String {
+        if let song = songs.first, songs.count == 1 { return song.title }
+        return CassetteCountLabel.songs(songs.count)
+    }
 
     var body: some View {
         Group {
@@ -43,7 +56,7 @@ struct AddToPlaylistSheet: View {
                   let svc = container?.playlistService,
                   let toast = container?.toastService else { return }
             let newVM = AddToPlaylistViewModel(
-                song: song,
+                songs: songs,
                 playlistService: svc,
                 toastService: toast
             )
@@ -144,7 +157,7 @@ struct AddToPlaylistSheet: View {
                                     case .duplicate:
                                         pendingDuplicate = DuplicateConfirmation(
                                             playlist: playlist,
-                                            songName: song.title
+                                            songName: selectionName
                                         )
                                     case .failed:
                                         break
@@ -191,7 +204,7 @@ private struct AddToPlaylistRow: View {
                     .font(.cassetteCellTitle)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text("\(playlist.songCount) track\(playlist.songCount == 1 ? "" : "s")")
+                Text(CassetteCountLabel.tracks(playlist.songCount))
                     .font(.cassetteCaption)
                     .foregroundStyle(.secondary)
             }

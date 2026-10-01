@@ -18,11 +18,15 @@ final class MockServerService: ServerServiceProtocol {
     var testConnectionError: (any Error)? = nil
     var addServerError: (any Error)? = nil
     var addServerCalled = false
+    var activatesAddedServer = true
+    var lastTestedURL: String?
+    var lastAddedBaseURL: String?
 
     func testConnection(
         url: String, username: String, password: String,
         customHeaders: [String: String]
     ) async throws {
+        lastTestedURL = url
         if let error = testConnectionError { throw error }
     }
 
@@ -31,7 +35,31 @@ final class MockServerService: ServerServiceProtocol {
         password: String, customHeaders: [String: String]
     ) async throws {
         addServerCalled = true
+        lastAddedBaseURL = baseURL
         if let error = addServerError { throw error }
+        if activatesAddedServer {
+            let config = ServerConfig(displayName: displayName, baseURL: baseURL,
+                                      username: username, isActive: true)
+            let snapshot = ServerSnapshot(from: config)
+            state.servers.append(snapshot)
+            state.activeServer = snapshot
+        }
+    }
+
+    func addServerWithJellyfinToken(
+        displayName: String,
+        baseURL: String,
+        username: String,
+        jellyfinAccessToken: String,
+        customHeaders: [String: String]
+    ) async throws {
+        try await addServer(
+            displayName: displayName,
+            baseURL: baseURL,
+            username: username,
+            password: "",
+            customHeaders: customHeaders
+        )
     }
 
     // Unused stubs
@@ -41,6 +69,7 @@ final class MockServerService: ServerServiceProtocol {
     func updateServer(id: UUID, displayName: String, baseURL: String, username: String, password: String, customHeaders: [String: String]) async throws {}
     func testConnection() async throws {}
     func loadPersistedState() async {}
+    func preWarmClient() async {}
     func makeSwiftSonicClient() async throws -> SwiftSonicClient { throw CassetteError.notImplemented }
     func activeCredentials() async throws -> ServerCredentials { throw CassetteError.notImplemented }
 }
@@ -61,6 +90,31 @@ struct OnboardingViewModelTests {
         vm.username = "admin"
         vm.password = "secret"
         return vm
+    }
+
+    @Test func bareAddressUsesHTTPSForProbeAndSavedAccount() async {
+        let service = MockServerService()
+        let vm = makeViewModel(service: service)
+        vm.serverURL = "music.example.com:8443/jellyfin"
+        #expect(vm.hasEnteredServerURL)
+        #expect(!vm.isHTTP)
+        await vm.testConnection()
+        #expect(service.lastTestedURL == "https://music.example.com:8443")
+        #expect(await vm.addServer())
+        #expect(service.lastAddedBaseURL == "https://music.example.com:8443")
+        vm.serverURL = " HTTP://music.local:8096 "
+        #expect(vm.isHTTP)
+    }
+
+    @Test func quickConnectOnlyAppearsWhenServerEnablesIt() {
+        let vm = makeViewModel()
+        for status: JellyfinLoginStatus in [.idle, .checking, .unavailable,
+                                            .available(serverName: nil, version: nil, quickConnectEnabled: false)] {
+            vm.jellyfinStatus = status
+            #expect(!vm.supportsQuickConnect)
+        }
+        vm.jellyfinStatus = .available(serverName: "Music", version: "1", quickConnectEnabled: true)
+        #expect(vm.supportsQuickConnect)
     }
 
     // MARK: testConnection
@@ -140,10 +194,52 @@ struct OnboardingViewModelTests {
         let service = MockServerService()
         let vm = makeViewModel(service: service)
 
-        await vm.addServer()
+        let succeeded = await vm.addServer()
 
+        #expect(succeeded)
         #expect(vm.connectionError == nil)
         #expect(service.addServerCalled)
+    }
+
+    @Test func jellyfinAddressIsNormalizedForConnectionAndStorage() async {
+        let service = MockServerService()
+        let vm = makeViewModel(service: service)
+        vm.serverURL = "https://music.example.com/jellyfin/"
+
+        let succeeded = await vm.addServer()
+
+        #expect(succeeded)
+        #expect(service.lastTestedURL == "https://music.example.com")
+        #expect(service.lastAddedBaseURL == "https://music.example.com")
+    }
+
+    @Test func duplicateSubmitCannotAdvanceOnboarding() async {
+        let service = MockServerService()
+        let vm = makeViewModel(service: service)
+        vm.isLoading = true
+        let succeeded = await vm.addServer()
+        #expect(!succeeded)
+        #expect(!service.addServerCalled)
+        #expect(vm.isLoading)
+    }
+
+    @Test func persistedButInactiveServerCannotAdvanceOnboarding() async {
+        let service = MockServerService()
+        service.activatesAddedServer = false
+        let vm = makeViewModel(service: service)
+        let succeeded = await vm.addServer()
+        #expect(!succeeded)
+        #expect(vm.connectionError != nil)
+        #expect(!vm.isLoading)
+    }
+
+    @Test func invalidFormCannotAdvanceOnboarding() async {
+        let service = MockServerService()
+        let vm = makeViewModel(service: service)
+        vm.password = ""
+        let succeeded = await vm.addServer()
+        #expect(!succeeded)
+        #expect(!service.addServerCalled)
     }
 
     @Test func addServer_connectionFails_doesNotCallAddServer() async {

@@ -27,6 +27,10 @@ protocol PlayerServiceProtocol: AnyObject, Sendable {
     func addToQueue(_ song: DisplayableSong) async
     func addToQueue(_ songs: [DisplayableSong]) async
     func removeFromQueue(at index: Int) async
+    /// Drops every track before the current one (queue History section).
+    func clearQueueHistory() async
+    /// Drops every track after the current one (Up Next + Autoplay).
+    func clearUpNext() async
     func moveInQueue(fromIndex: Int, toIndex: Int) async
     func restoreSession() async
     func handleNetworkRestored() async
@@ -42,14 +46,23 @@ protocol PlayerServiceProtocol: AnyObject, Sendable {
     /// Applies the given volume (0.0–1.0) to AVPlayer and persists it to UserDefaults.
     func setVolume(_ volume: Float) async
     func togglePlayPause() async
-    /// Lightweight position-only flush — called from scenePhase .inactive on iOS.
+    /// Lightweight position-only flush — used on background / kill-guard checkpoints.
     func saveCurrentPosition() async
+    /// Re-assert audio session / engine after returning from background or app switcher.
+    func handleAppBecameActive() async
+    /// Brief inactive (Control Center) — no engine rebuild scheduling.
+    func handleAppWillResignActive() async
+    /// True background — may health-check AudioStreaming on return (stuck/crackle buffer).
+    func handleAppDidEnterBackground() async
     /// Re-reads ReplayGainSettings and reapplies gain to the current track.
     /// Call this whenever the user changes any ReplayGain setting.
     func replayGainSettingsDidChange() async
     /// Updates the stored CrossfadeConfig snapshot from CrossfadeSettings.
     /// Call whenever the user changes any crossfade setting.
     func crossfadeSettingsDidChange() async
+    /// Updates the stored gapless snapshot from GaplessSettings, arming or flushing the
+    /// engine's pre-buffered next entry. Call whenever the user toggles gapless playback.
+    func gaplessSettingsDidChange() async
     /// Stops the audio engine synchronously without going through the actor.
     /// Only safe to call during app termination (single-threaded, no concurrent access).
     nonisolated func stopAudioEngineSync()

@@ -247,18 +247,26 @@ private struct QueueRow: View {
 
     var body: some View {
         HStack(spacing: CassetteSpacing.m) {
-            CoverArtView(id: song.coverArtId ?? song.id, size: 88, loadingEnabled: loadArtwork)
-                .frame(width: 44, height: 44)
+            CoverArtView(id: song.effectiveCoverArtId, size: 104, loadingEnabled: loadArtwork)
+                .frame(width: 52, height: 52)
                 .cassetteCoverStyle(cornerRadius: CassetteCornerRadius.xs)
 
             VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
                 Text(song.title)
+                    #if os(iOS)
+                    .font(.system(size: 18, weight: .regular))
+                    #else
                     .font(.cassetteCellTitle)
+                    #endif
                     .foregroundStyle(isCurrent ? playingAccent : contentColor)
                     .lineLimit(1)
                 if let artist = song.artist {
                     Text(artist)
+                        #if os(iOS)
+                        .font(.system(size: 15, weight: .regular))
+                        #else
                         .font(.cassetteCaption)
+                        #endif
                         .foregroundStyle(secondaryContentColor)
                         .lineLimit(1)
                 }
@@ -344,10 +352,8 @@ private struct QueueRow: View {
     }
 }
 
-/// The iOS Up Next reorder list, re-housed from the (removed) QueueView sheet into FullPlayerView's
-/// inline queue surface. Native `List` + `.onMove` (always-on edit mode) — offset-based, so
-/// duplicate-safe — rendered transparently over the player's blurred background. Removal is via the row
-/// context menu (no edit-mode delete circles); tap-to-play stays in the queue surface.
+/// The iOS queue list: History (scroll up) · Continue Playing · Autoplay.
+/// Native `List` + `.onMove` — offset-based / duplicate-safe. Removal via row context menu.
 struct InlineQueueList: View {
     let playerState: PlayerState
     var contentColor: Color = .primary
@@ -357,54 +363,212 @@ struct InlineQueueList: View {
     var loadArtwork: Bool = true
     @Environment(\.appContainer) private var container
 
-    var body: some View {
-        let queue = playerState.queue
-        let currentIndex = playerState.currentIndex
-        let upNext = Array(queue.dropFirst(currentIndex + 1))
+    private var queue: [DisplayableSong] { playerState.queue }
+    private var currentIndex: Int { playerState.currentIndex }
 
-        if upNext.isEmpty {
+    /// End of the user-intentional segment (album / playlist). Autoplay starts here when set.
+    private var intentionalEnd: Int {
+        min(playerState.originalQueueEndIndex ?? queue.count, queue.count)
+    }
+
+    private var historyIndices: Range<Int> { 0..<max(currentIndex, 0) }
+    private var continueIndices: Range<Int> {
+        let start = min(currentIndex + 1, intentionalEnd)
+        return start..<intentionalEnd
+    }
+    private var autoplayIndices: Range<Int> { intentionalEnd..<queue.count }
+
+    var body: some View {
+        let historyEmpty = historyIndices.isEmpty
+        let continueEmpty = continueIndices.isEmpty
+        let autoplayEmpty = autoplayIndices.isEmpty
+        let showAutoplaySection = playerState.isAutoExtendEnabled && playerState.repeatMode == .off
+
+        if historyEmpty, continueEmpty, autoplayEmpty, !showAutoplaySection {
             EmptyStateView(
                 systemImage: "list.bullet",
-                title: "Nothing up next",
-                subtitle: "Tracks you add to the queue appear here."
+                title: String(localized: "Nothing up next", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                subtitle: String(localized: "Tracks you add to the queue appear here.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            List {
-                ForEach(Array(upNext.enumerated()), id: \.offset) { offset, song in
-                    let absoluteIndex = currentIndex + 1 + offset
-                    QueueRow(song: song, isCurrent: false, onRemove: { removeFromQueue(at: absoluteIndex) },
-                             contentColor: contentColor, secondaryContentColor: secondaryContentColor,
-                             loadArtwork: loadArtwork)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            HapticFeedback.medium.trigger()
-                            Task {
-                                do {
-                                    try await container?.playerService.play(tracks: queue, startIndex: absoluteIndex)
-                                } catch {
-                                    Logger.player.error("[PLAYBACK] play failed: \(error, privacy: .public)")
+            ScrollViewReader { proxy in
+                List {
+                    if !historyEmpty {
+                        Section {
+                            ForEach(Array(historyIndices), id: \.self) { absoluteIndex in
+                                queueTapRow(absoluteIndex: absoluteIndex, reorderable: false)
+                            }
+                        } header: {
+                            HStack {
+                                Text(String(localized: "History", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                                    .font(.cassetteSectionTitle)
+                                    .foregroundStyle(contentColor)
+                                    .textCase(nil)
+                                Spacer(minLength: 0)
+                                Button(String(localized: "Clear", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+                                    HapticFeedback.light.trigger()
+                                    Task { await container?.playerService.clearQueueHistory() }
+                                }
+                                .font(.cassetteCaption.weight(.semibold))
+                                .foregroundStyle(secondaryContentColor)
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    Section {
+                        if continueEmpty {
+                            if playerState.repeatMode == .one {
+                                Text(String(localized: "Repeating this song", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                                    .font(.cassetteCaption)
+                                    .foregroundStyle(secondaryContentColor)
+                                    .listRowBackground(Color.clear)
+                            } else if !showAutoplaySection || autoplayEmpty {
+                                Text(String(localized: "Nothing up next", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                                    .font(.cassetteCaption)
+                                    .foregroundStyle(secondaryContentColor)
+                                    .listRowBackground(Color.clear)
+                            }
+                        } else {
+                            ForEach(Array(continueIndices), id: \.self) { absoluteIndex in
+                                queueTapRow(absoluteIndex: absoluteIndex, reorderable: true)
+                            }
+                            .onMove { source, destination in
+                                guard let relativeSource = source.first else { return }
+                                let absoluteSource = continueIndices.lowerBound + relativeSource
+                                let absoluteDestination = continueIndices.lowerBound + destination
+                                HapticFeedback.light.trigger()
+                                Task {
+                                    await container?.playerService.moveInQueue(
+                                        fromIndex: absoluteSource,
+                                        toIndex: absoluteDestination
+                                    )
                                 }
                             }
                         }
+                    } header: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(String(localized: "Continue Playing", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                                .font(.cassetteSectionTitle)
+                                .foregroundStyle(contentColor)
+                                .textCase(nil)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id("continuePlayingHeader")
+                    } footer: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            repeatFooter
+                        }
+                    }
+
+                    if showAutoplaySection {
+                        Section {
+                            if autoplayEmpty {
+                                Text(String(localized: "Finding similar music…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                                    .font(.cassetteCaption)
+                                    .foregroundStyle(secondaryContentColor)
+                                    .listRowBackground(Color.clear)
+                            } else {
+                                ForEach(Array(autoplayIndices), id: \.self) { absoluteIndex in
+                                    queueTapRow(absoluteIndex: absoluteIndex, reorderable: true)
+                                }
+                                .onMove { source, destination in
+                                    guard let relativeSource = source.first else { return }
+                                    let absoluteSource = autoplayIndices.lowerBound + relativeSource
+                                    let absoluteDestination = autoplayIndices.lowerBound + destination
+                                    HapticFeedback.light.trigger()
+                                    Task {
+                                        await container?.playerService.moveInQueue(
+                                            fromIndex: absoluteSource,
+                                            toIndex: absoluteDestination
+                                        )
+                                    }
+                                }
+                            }
+                        } header: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label(String(localized: "Autoplay", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "infinity")
+                                    .font(.cassetteSectionTitle)
+                                    .foregroundStyle(contentColor)
+                                    .labelStyle(.titleAndIcon)
+                                    .textCase(nil)
+                                Text(String(localized: "Similar music keeps playing.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                                    .font(.cassetteCaption)
+                                    .foregroundStyle(secondaryContentColor)
+                                    .textCase(nil)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
                 }
-                .onMove { source, destination in
-                    // Native offset-based reorder — duplicate-safe; destination is the moveInQueue toOffset.
-                    guard let relativeSource = source.first else { return }
-                    let absoluteSource = currentIndex + 1 + relativeSource
-                    let absoluteDestination = currentIndex + 1 + destination
-                    HapticFeedback.light.trigger()
-                    Task { await container?.playerService.moveInQueue(fromIndex: absoluteSource, toIndex: absoluteDestination) }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                #if !os(macOS)
+                .environment(\.editMode, .constant(.active))
+                #endif
+                .onAppear {
+                    // Land on Continue Playing so History sits above (scroll up to reveal).
+                    DispatchQueue.main.async {
+                        proxy.scrollTo("continuePlayingHeader", anchor: .top)
+                    }
+                }
+                .onChange(of: currentIndex) { _, _ in
+                    withAnimation(CassetteAnimation.surface) {
+                        proxy.scrollTo("continuePlayingHeader", anchor: .top)
+                    }
                 }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            #if !os(macOS)
-            .environment(\.editMode, .constant(.active))
-            #endif
         }
+    }
+
+    @ViewBuilder
+    private var repeatFooter: some View {
+        switch playerState.repeatMode {
+        case .all:
+            Label(
+                String(localized: "Repeating \(queue.count) songs", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                systemImage: "repeat"
+            )
+            .font(.cassetteCaption)
+            .foregroundStyle(secondaryContentColor)
+        case .one:
+            Label(
+                String(localized: "Repeating one", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                systemImage: "repeat.1"
+            )
+            .font(.cassetteCaption)
+            .foregroundStyle(secondaryContentColor)
+        case .off:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func queueTapRow(absoluteIndex: Int, reorderable: Bool) -> some View {
+        let song = queue[absoluteIndex]
+        QueueRow(
+            song: song,
+            isCurrent: false,
+            onRemove: { removeFromQueue(at: absoluteIndex) },
+            contentColor: contentColor,
+            secondaryContentColor: secondaryContentColor,
+            loadArtwork: loadArtwork
+        )
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            HapticFeedback.medium.trigger()
+            Task {
+                do {
+                    try await container?.playerService.play(tracks: queue, startIndex: absoluteIndex)
+                } catch {
+                    Logger.player.error("[PLAYBACK] play failed: \(error, privacy: .public)")
+                }
+            }
+        }
+        .moveDisabled(!reorderable)
     }
 
     private func removeFromQueue(at index: Int) {

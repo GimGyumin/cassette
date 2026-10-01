@@ -122,7 +122,10 @@ struct PlaylistCoverCarousel: View {
                         }
                 }
             case .gradient(let shape):
-                PlaylistGradientView(spec: .neutral(shape: shape))
+                // Lightweight previews in the carousel — Mesh/Angular during sheet presentation
+                // stalled the main thread for seconds on device.
+                PlaylistGradientView(spec: .neutral(shape: shape), lightweight: true)
+                    .drawingGroup(opaque: true)
                 titleOverlay
             }
         }

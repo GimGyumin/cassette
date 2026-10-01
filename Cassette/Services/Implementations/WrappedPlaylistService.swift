@@ -213,6 +213,9 @@ actor WrappedPlaylistService {
 
         do {
             let creds = try await serverService.activeCredentials()
+            if try await JellyfinPlaylistArtwork.uploadIfPasswordless(
+                credentials: creds, baseURL: baseURL, playlistID: playlistId, data: jpegData
+            ) { return }
             let api = NavidromeNativeAPI(transport: CustomHeadersTransport(headers: creds.customHeaders))
             let token = try await api.authenticate(
                 baseURL: baseURL,

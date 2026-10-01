@@ -9,9 +9,10 @@ import SwiftUI
 @main
 struct CassetteWidgetsBundle: WidgetBundle {
     var body: some Widget {
-        #if os(iOS)
         NowPlayingWidget()
         PinnedWidget()
+        #if os(iOS)
+        LibraryPreparationLiveActivity()
         #endif
     }
 }

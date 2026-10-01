@@ -56,18 +56,28 @@ func postPlaylistDeleted() {
 }
 
 extension Notification.Name {
-    static let cassetteTogglePlayPause = Notification.Name("cassette.togglePlayPause")
-    static let cassetteSkipNext = Notification.Name("cassette.skipNext")
-    static let cassetteSkipPrevious = Notification.Name("cassette.skipPrevious")
-    static let cassetteFocusSearch = Notification.Name("cassette.focusSearch")
-    static let cassetteToggleShuffle = Notification.Name("cassette.toggleShuffle")
-    static let cassetteToggleRepeat = Notification.Name("cassette.toggleRepeat")
-    static let cassetteToggleQueue = Notification.Name("cassette.toggleQueue")
-    static let cassetteOpenFullPlayer = Notification.Name("cassette.openFullPlayer")
-    static let cassetteOpenFullPlayerLyrics = Notification.Name("cassette.openFullPlayerLyrics")
-    static let cassetteSelectAlbums = Notification.Name("cassette.selectAlbums")
-    static let cassetteNavigateToAlbum    = Notification.Name("cassetteNavigateToAlbum")
-    static let cassetteNavigateToArtist   = Notification.Name("cassetteNavigateToArtist")
-    static let cassetteNavigateToPlaylist = Notification.Name("cassetteNavigateToPlaylist")
-    static let cassettePlaylistDeleted    = Notification.Name("cassette.playlistDeleted")
+    nonisolated static let cassetteDownloadCompleted = Notification.Name("cassette.downloadCompleted")
+    nonisolated static let cassetteTogglePlayPause = Notification.Name("cassette.togglePlayPause")
+    nonisolated static let cassetteSkipNext = Notification.Name("cassette.skipNext")
+    nonisolated static let cassetteSkipPrevious = Notification.Name("cassette.skipPrevious")
+    nonisolated static let cassetteFocusSearch = Notification.Name("cassette.focusSearch")
+    nonisolated static let cassetteSearchInApp = Notification.Name("cassette.searchInApp")
+    nonisolated static let cassetteToggleShuffle = Notification.Name("cassette.toggleShuffle")
+    nonisolated static let cassetteToggleRepeat = Notification.Name("cassette.toggleRepeat")
+    nonisolated static let cassetteToggleQueue = Notification.Name("cassette.toggleQueue")
+    nonisolated static let cassetteOpenFullPlayer = Notification.Name("cassette.openFullPlayer")
+    nonisolated static let cassetteOpenFullPlayerLyrics = Notification.Name("cassette.openFullPlayerLyrics")
+    nonisolated static let cassetteSelectAlbums = Notification.Name("cassette.selectAlbums")
+    nonisolated static let cassetteNavigateToAlbum    = Notification.Name("cassetteNavigateToAlbum")
+    nonisolated static let cassetteNavigateToArtist   = Notification.Name("cassetteNavigateToArtist")
+    nonisolated static let cassetteNavigateToPlaylist = Notification.Name("cassetteNavigateToPlaylist")
+    nonisolated static let cassettePlaylistDeleted    = Notification.Name("cassette.playlistDeleted")
+    /// Posted after server credentials are saved or the active server changes — clients should drop cached API sessions and Home should reload.
+    nonisolated static let cassetteServerCredentialsChanged = Notification.Name("cassette.serverCredentialsChanged")
+    /// Posted after a star/unstar or favorites sync so Library can refresh the top Favorites shelf.
+    nonisolated static let cassetteFavoritesChanged = Notification.Name("cassette.favoritesChanged")
+    /// AirPlay / route picker sheet is about to appear — pause Apple Translation so it can’t fight the picker or underrun audio.
+    nonisolated static let cassetteRoutePickerWillPresent = Notification.Name("cassette.routePickerWillPresent")
+    /// Route picker sheet dismissed — safe to resume a deferred translation.
+    nonisolated static let cassetteRoutePickerDidDismiss = Notification.Name("cassette.routePickerDidDismiss")
 }

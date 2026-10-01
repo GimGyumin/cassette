@@ -22,8 +22,16 @@ extension PlatformImage {
             height: (size.height * scale).rounded()
         )
         #if canImport(UIKit)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        return renderer.image { _ in draw(in: CGRect(origin: .zero, size: newSize)) }
+        // Opaque format avoids AlphaPremulLast on cover art that has no transparency.
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = true
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+        return renderer.image { ctx in
+            UIColor.black.setFill()
+            ctx.fill(CGRect(origin: .zero, size: newSize))
+            draw(in: CGRect(origin: .zero, size: newSize))
+        }
         #elseif canImport(AppKit)
         let result = NSImage(size: newSize)
         result.lockFocus()
@@ -36,7 +44,17 @@ extension PlatformImage {
     /// JPEG-encodes the receiver at the given quality (0.0–1.0).
     nonisolated func jpgData(quality: CGFloat) -> Data? {
         #if canImport(UIKit)
-        return jpegData(compressionQuality: quality)
+        // Flatten through an opaque bitmap so ImageIO never writes AlphaPremulLast for covers.
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = true
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        let opaque = renderer.image { ctx in
+            UIColor.black.setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            draw(in: CGRect(origin: .zero, size: size))
+        }
+        return opaque.jpegData(compressionQuality: quality)
         #elseif canImport(AppKit)
         guard let tiff = tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff) else { return nil }

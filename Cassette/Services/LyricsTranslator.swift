@@ -6,20 +6,26 @@ protocol LyricsTranslator {
 
 enum TranslationError: LocalizedError {
     case invalidAPIKey
+    case billingInactive
+    case rateLimited
     case networkError(String)
     case parsingError
     case lineCountMismatch(expected: Int, actual: Int)
-    
+
     var errorDescription: String? {
         switch self {
         case .invalidAPIKey:
-            return "OpenAI API Key가 올바르지 않거나 비어있습니다."
+            return String(localized: "OpenAI API key is invalid or empty.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .billingInactive:
+            return String(localized: "OpenAI billing is inactive. Add a payment method at platform.openai.com.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .rateLimited:
+            return String(localized: "OpenAI rate limit reached. Try again in a moment.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         case .networkError(let msg):
-            return "네트워크 오류: \(msg)"
+            return String(localized: "Network error: \(msg)", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         case .parsingError:
-            return "번역 결과를 파싱하는 데 실패했습니다."
+            return String(localized: "Failed to parse translation results.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         case .lineCountMismatch(let exp, let act):
-            return "원문 가사(\(exp)줄)와 번역 가사(\(act)줄)의 줄 수가 일치하지 않습니다."
+            return String(localized: "Line count mismatch: original lyrics (\(exp) lines) vs translation (\(act) lines).", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         }
     }
 }

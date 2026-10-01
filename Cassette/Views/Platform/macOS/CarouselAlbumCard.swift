@@ -20,6 +20,7 @@ struct CarouselAlbumCard: View {
                     CoverArtCard(id: album.coverArt ?? album.id, size: 180)
                         .frame(width: 180, height: 180)
                     Text(album.name)
+                        .foregroundStyle(.primary)
                         .font(.cassetteCellTitle)
                         .lineLimit(1)
                     if let artist = album.artist {

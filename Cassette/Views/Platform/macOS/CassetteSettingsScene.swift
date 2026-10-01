@@ -33,59 +33,112 @@ struct CassetteSettingsScene: Scene {
 
 // MARK: - Tab container
 
-private enum SettingsTab: Int {
-    case general, playback, server, cache, integrations, about
+let cassetteSettingsSelectedTabKey = "cassette.settings.selectedTab"
+
+enum SettingsTab: Int {
+    case general, account, playback, library, integrations, about
 }
 
 struct MacOSSettingsView: View {
-    @State private var selectedTab: SettingsTab = .general
+    @AppStorage(cassetteSettingsSelectedTabKey) private var selectedTab = SettingsTab.general.rawValue
 
     var body: some View {
         TabView(selection: $selectedTab) {
             GeneralSettingsTab()
                 .tabItem { Label("General", systemImage: "gearshape") }
-                .tag(SettingsTab.general)
+                .tag(SettingsTab.general.rawValue)
+
+            ServerSettingsTab()
+                .tabItem { Label("Account", systemImage: "person.crop.circle") }
+                .tag(SettingsTab.account.rawValue)
 
             PlaybackSettingsTab()
                 .tabItem { Label("Playback", systemImage: "play.circle") }
-                .tag(SettingsTab.playback)
-
-            ServerSettingsTab()
-                .tabItem { Label("Server", systemImage: "server.rack") }
-                .tag(SettingsTab.server)
+                .tag(SettingsTab.playback.rawValue)
 
             CacheSettingsTab()
-                .tabItem { Label("Cache", systemImage: "externaldrive") }
-                .tag(SettingsTab.cache)
+                .tabItem { Label("Library", systemImage: "externaldrive") }
+                .tag(SettingsTab.library.rawValue)
 
             IntegrationsSettingsTab()
                 .tabItem { Label("Integrations", systemImage: "link.circle") }
-                .tag(SettingsTab.integrations)
+                .tag(SettingsTab.integrations.rawValue)
 
             AboutSettingsTab()
                 .tabItem { Label("About", systemImage: "info.circle") }
-                .tag(SettingsTab.about)
+                .tag(SettingsTab.about.rawValue)
         }
-        .frame(minWidth: 480, minHeight: 320)
+        .frame(minWidth: 640, idealWidth: 720, minHeight: 460, idealHeight: 560)
     }
 }
 
 // MARK: - Playback tab
 
 private struct PlaybackSettingsTab: View {
+    @Environment(\.appContainer) private var container
+
     var body: some View {
         Form {
+            if let streamingSettings = container?.streamingSettings {
+                MacAudioQualitySettingsSection(settings: streamingSettings)
+            }
             ReplayGainSettingsSection()
+            GaplessSettingsSection()
             CrossfadeSettingsSection()
         }
         .formStyle(.grouped)
-        .frame(maxWidth: 480)
+        .frame(maxWidth: 540)
+    }
+}
+
+private struct MacAudioQualitySettingsSection: View {
+    @Bindable var settings: StreamingSettings
+
+    var body: some View {
+        Section {
+            qualityPicker(
+                "Cellular Streaming",
+                systemImage: "antenna.radiowaves.left.and.right",
+                selection: $settings.cellularFormat
+            )
+            qualityPicker(
+                "Wi-Fi Streaming",
+                systemImage: "wifi",
+                selection: $settings.wifiFormat
+            )
+            qualityPicker(
+                "Downloads",
+                systemImage: "arrow.down.circle.fill",
+                selection: $settings.downloadFormat
+            )
+        } header: {
+            Text("Audio Quality")
+        } footer: {
+            Text("Dolby Atmos and multichannel tracks always play in their original format.")
+        }
+    }
+
+    private func qualityPicker(
+        _ title: LocalizedStringKey,
+        systemImage: String,
+        selection: Binding<CacheFormat>
+    ) -> some View {
+        Picker(selection: selection) {
+            ForEach(CacheFormat.allCases) { format in
+                Text(format.displayName).tag(format)
+            }
+        } label: {
+            Label(title, systemImage: systemImage)
+        }
+        .pickerStyle(.menu)
     }
 }
 
 // MARK: - General tab
 
 private struct GeneralSettingsTab: View {
+    @ObservedObject private var appleMusic = AppleMusicSettings.shared
+
     var body: some View {
         Form {
             Section {
@@ -96,11 +149,25 @@ private struct GeneralSettingsTab: View {
             } header: {
                 Text("Appearance")
             } footer: {
-                Text("Cassette uses your system appearance setting. Per-app theme override is planned for a future release.")
+                Text("Cassette uses your system appearance setting.")
             }
+
+            Section {
+                Toggle("Enrich album & artist descriptions", isOn: $appleMusic.enrichMetadata)
+                TextField("Spotify Client ID", text: $appleMusic.spotifyClientId)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("Spotify Client Secret", text: $appleMusic.spotifyClientSecret)
+                    .textFieldStyle(.roundedBorder)
+            } header: {
+                Text("Catalog Enrichment")
+            } footer: {
+                Text("Descriptions come from Wikipedia. Spotify Client ID/Secret (Client Credentials) are used for ISRC lookup.")
+            }
+
+            LyricsSettingsSections()
         }
         .formStyle(.grouped)
-        .frame(maxWidth: 480)
+        .frame(maxWidth: 520)
     }
 }
 
@@ -109,6 +176,7 @@ private struct GeneralSettingsTab: View {
 private struct ServerSettingsTab: View {
     @Environment(\.appContainer) private var container
     @State private var showEditServer = false
+    @State private var showAccount = false
 
     var body: some View {
         Form {
@@ -139,9 +207,39 @@ private struct ServerSettingsTab: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Section {
+                Button {
+                    showAccount = true
+                } label: {
+                    HStack {
+                        Label("Account", systemImage: "person.crop.circle")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if let username = container?.serverState.activeServer?.username {
+                            Text(username)
+                                .foregroundStyle(.secondary)
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } header: {
+                Text("Account")
+            } footer: {
+                Text("Log out, change password, sync library data, media scans, and Spotify credentials.")
+            }
         }
         .formStyle(.grouped)
-        .frame(maxWidth: 480)
+        .frame(maxWidth: 520)
+        .sheet(isPresented: $showAccount) {
+            NavigationStack {
+                AccountSettingsView()
+            }
+            .frame(minWidth: 480, minHeight: 520)
+        }
     }
 }
 
@@ -150,16 +248,31 @@ private struct ServerSettingsTab: View {
 private struct CacheSettingsTab: View {
     @Environment(\.appContainer) private var container
     @State private var downloadsVM: DownloadsViewModel?
+    @State private var showStorageManagement = false
 
     var body: some View {
         Form {
+            Button {
+                showStorageManagement = true
+            } label: {
+                HStack {
+                    Label(String(localized: "Storage Management", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "internaldrive.fill")
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Image(systemName: "arrow.up.right.square")
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
             if let downloadsVM {
                 DownloadsSectionView(vm: downloadsVM)
             }
             CacheSectionView()
         }
         .formStyle(.grouped)
-        .frame(maxWidth: 480)
+        .frame(maxWidth: 540)
         .task {
             guard let container else { return }
             if downloadsVM == nil {
@@ -170,6 +283,17 @@ private struct CacheSettingsTab: View {
                 )
             }
             await downloadsVM?.loadData()
+        }
+        .sheet(isPresented: $showStorageManagement) {
+            NavigationStack {
+                StorageManagementView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showStorageManagement = false }
+                        }
+                    }
+            }
+            .frame(minWidth: 560, minHeight: 560)
         }
     }
 }
@@ -231,15 +355,18 @@ private struct AboutSettingsTab: View {
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
     }
-    private var buildNumber: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
+    private var buildIdentifier: String {
+        Bundle.main.infoDictionary?["CassetteBuildIdentifier"] as? String ?? "26A1001e"
+    }
+    private var copyrightNotice: String {
+        Bundle.main.infoDictionary?["NSHumanReadableCopyright"] as? String ?? "© 2026 Kyumin"
     }
 
     var body: some View {
         Form {
             Section("Cassette") {
                 LabeledContent("Version") {
-                    Text("\(appVersion) (\(buildNumber))")
+                    Text(verbatim: "\(appVersion) (\(buildIdentifier))")
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
@@ -248,11 +375,12 @@ private struct AboutSettingsTab: View {
                         .foregroundStyle(.secondary)
                 }
                 LabeledContent("Copyright") {
-                    Text("© 2026 Mathieu Dubart")
+                    Text(verbatim: copyrightNotice)
                         .foregroundStyle(.secondary)
                 }
             }
             Section("Links") {
+                OnboardingReplayButton()
                 Link(destination: CassetteURLs.cassette) {
                     Label("GitHub Repository", systemImage: "chevron.left.forwardslash.chevron.right")
                 }

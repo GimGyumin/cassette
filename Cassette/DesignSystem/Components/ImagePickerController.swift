@@ -4,11 +4,10 @@
 // See LICENSE file in the project root for full license information.
 
 #if os(iOS)
+import PhotosUI
 import SwiftUI
 import UIKit
 
-// TODO(v2): migrate to PHPickerViewController + custom crop when a replacement for
-// UIImagePickerController's built-in square crop UI is available.
 struct ImagePickerController: UIViewControllerRepresentable {
     let sourceType: UIImagePickerController.SourceType
     /// UIImagePickerController's built-in square crop is clunky — callers that crop themselves pass `false`.
@@ -32,7 +31,29 @@ struct ImagePickerController: UIViewControllerRepresentable {
         Coordinator(onPick: onPick, onCancel: onCancel)
     }
 
-    func makeUIViewController(context: Context) -> UIImagePickerController {
+    func makeUIViewController(context: Context) -> UIViewController {
+        switch sourceType {
+        case .photoLibrary, .savedPhotosAlbum:
+            makePhotoLibraryPicker(context: context)
+        default:
+            makeCameraPicker(context: context)
+        }
+    }
+
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+
+    private func makePhotoLibraryPicker(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration()
+        configuration.filter = .images
+        configuration.selectionLimit = 1
+        configuration.preferredAssetRepresentationMode = .current
+
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    private func makeCameraPicker(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
         picker.sourceType = sourceType
         picker.allowsEditing = allowsEditing
@@ -40,9 +61,7 @@ struct ImagePickerController: UIViewControllerRepresentable {
         return picker
     }
 
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
-
-    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate, PHPickerViewControllerDelegate {
         let onPick: (UIImage) -> Void
         let onCancel: () -> Void
 
@@ -66,6 +85,31 @@ struct ImagePickerController: UIViewControllerRepresentable {
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
             onCancel()
             picker.dismiss(animated: true)
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard let provider = results.first?.itemProvider else {
+                onCancel()
+                picker.dismiss(animated: true)
+                return
+            }
+
+            guard provider.canLoadObject(ofClass: UIImage.self) else {
+                onCancel()
+                picker.dismiss(animated: true)
+                return
+            }
+
+            provider.loadObject(ofClass: UIImage.self) { [onPick, onCancel, weak picker] object, _ in
+                DispatchQueue.main.async {
+                    if let image = object as? UIImage {
+                        onPick(image)
+                    } else {
+                        onCancel()
+                    }
+                    picker?.dismiss(animated: true)
+                }
+            }
         }
     }
 }

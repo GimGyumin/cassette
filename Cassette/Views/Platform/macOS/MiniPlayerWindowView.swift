@@ -20,6 +20,15 @@ struct MiniPlayerWindowView: View {
     private var isLoading: Bool { playerState?.playbackState == .loading }
     private var noTrack: Bool { currentTrack == nil }
 
+    private var playbackQuality: AudioQualityKind? {
+        guard let playerState, let track = currentTrack else { return nil }
+        return AudioQualityClassifier.displayablePlaybackQuality(
+            for: track,
+            isExpensive: container?.serverState.isExpensive == true,
+            isTranscoding: playerState.isDeliveringTranscodedAudio
+        )
+    }
+
     var body: some View {
         ZStack {
             MiniPlayerWindowConfigurator()
@@ -30,10 +39,15 @@ struct MiniPlayerWindowView: View {
                 artwork
                 VStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(currentTrack?.title ?? "No track playing")
-                            .font(.system(size: 12, weight: .semibold))
-                            .lineLimit(1)
-                            .foregroundStyle(noTrack ? .secondary : .primary)
+                        HStack(spacing: 6) {
+                            Text(currentTrack?.title ?? "No track playing")
+                                .font(.system(size: 12, weight: .semibold))
+                                .lineLimit(1)
+                                .foregroundStyle(noTrack ? .secondary : .primary)
+                            if let quality = playbackQuality {
+                                MacMiniPlayerQualityBadge(quality: quality)
+                            }
+                        }
                         Text(artistLine)
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
@@ -57,7 +71,7 @@ struct MiniPlayerWindowView: View {
         }
         .frame(width: 320, height: 78)
         .background {
-            if #available(macOS 26.0, *) {
+            if #available(macOS 26.0, *), !CassettePerformance.preferCheapChrome {
                 RoundedRectangle(cornerRadius: 28)
                     .fill(.clear)
                     .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28))
@@ -123,6 +137,7 @@ struct MiniPlayerWindowView: View {
             }
             .buttonStyle(.plain)
             .disabled(noTrack)
+            .accessibilityLabel(String(localized: "Skip to previous", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
             playPauseButton
 
@@ -135,14 +150,17 @@ struct MiniPlayerWindowView: View {
             }
             .buttonStyle(.plain)
             .disabled(noTrack)
+            .accessibilityLabel(String(localized: "Skip to next", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
 
     @ViewBuilder
     private var playPauseButton: some View {
         if isLoading {
-            ProgressView()
-                .controlSize(.small)
+            // Same glyph as the live control, inert while the stream is still being acquired.
+            Image(systemName: "play.fill")
+                .font(.system(size: 16))
+                .foregroundStyle(noTrack ? .secondary : .primary)
                 .frame(width: 24, height: 24)
         } else {
             Button {
@@ -162,6 +180,7 @@ struct MiniPlayerWindowView: View {
             }
             .buttonStyle(.plain)
             .disabled(noTrack)
+            .accessibilityLabel(isPlaying ? String(localized: "Pause", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
 
@@ -186,7 +205,6 @@ struct MiniPlayerWindowView: View {
             trackHeight: 2
         )
         .disabled(noTrack)
-        .accessibilityHidden(true)
     }
 
     // MARK: - Helpers

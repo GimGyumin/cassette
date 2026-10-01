@@ -3,15 +3,13 @@
 // Licensed under the Mozilla Public License 2.0.
 // See LICENSE file in the project root for full license information.
 
-#if os(iOS)
 import AppIntents
 
 nonisolated struct PlayPauseIntent: AudioPlaybackIntent {
-    static let title: LocalizedStringResource = "Lecture / Pause"
+    static let title: LocalizedStringResource = "Play / Pause"
 
     func perform() async throws -> some IntentResult {
         await NowPlayingBridge.performTogglePlayPause?()
         return .result()
     }
 }
-#endif

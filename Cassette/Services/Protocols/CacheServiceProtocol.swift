@@ -16,14 +16,23 @@ protocol CacheServiceProtocol: AnyObject, Sendable {
 
     func store(data: Data, forSongId songId: String, serverId: UUID, mimeType: String) async throws -> URL
 
-    /// Updates the maximum number of cached tracks. Triggers FIFO eviction if current count exceeds the new limit.
-    func setMaxTracks(_ value: Int) async
+    /// Updates the maximum cache size. Triggers FIFO eviction when total bytes exceed it.
+    func setMaxBytes(_ value: Int64) async
 
     /// Removes a single record and its file immediately (e.g. on stale-file detection).
     func invalidate(songId: String, serverId: UUID) async
 
     /// Deletes every cached track and file — called by "Clear cache now".
     func clearAll() async
+
+    /// Deletes streaming audio cache only (keeps lyrics cache).
+    func clearAudioTracksOnly() async
+
+    /// Deletes cached lyrics payloads only.
+    func clearLyricsCache() async
+
+    var lyricsUsedBytes: Int64 { get async }
+    var lyricsCount: Int { get async }
 
     /// Deletes all cached tracks for a specific server — called at server switch (phase 6).
     func clearAllForServer(_ serverId: UUID) async

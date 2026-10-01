@@ -5,47 +5,132 @@
 
 import SwiftUI
 
+private enum CassetteGlassStyle {
+    /// Adaptive frosted tint that stays visible in dark mode (near-black chrome) and light mode.
+    /// Uses `.primary` so it inverts with the color scheme — white frost on dark, dark frost on light.
+    static var defaultTint: Color { Color.primary.opacity(0.20) }
+    /// Brand red glass for primary CTAs (OK / Play / prominent actions).
+    static var accentTint: Color { CassetteColors.accent.opacity(0.72) }
+}
+
 extension View {
-    /// Applies a circular Liquid Glass effect to a button label.
-    /// Apply this to the *label* of a Button (not the Button itself)
-    /// so that the parent .buttonStyle(.borderless) gesture fix is preserved.
+    /// Circular control (HIG-sized tap target). Uses Liquid Glass only when
+    /// `CassettePerformance.preferCheapChrome` is false — otherwise a flat fill so
+    /// compositor work cannot starve AudioStreaming.
     @ViewBuilder
     func cassetteGlassButton(size: CGFloat = 44, tint: Color? = nil) -> some View {
-        if #available(macOS 26.0, iOS 26.0, *) {
-            // .interactive() removed — causes infinite StyleModifier recursion during
-            // NavigationStack transitions on macOS 26.5 (54k-frame stack overflow).
-            // Re-evaluate when Apple fixes Glass StyleModifier composition (rdar://TODO).
-            let glass: Glass = tint.map { Glass.regular.tint($0) } ?? Glass.regular
+        let resolved = tint ?? CassetteGlassStyle.defaultTint
+        let usesExplicitTint = tint != nil
+        if !CassettePerformance.preferCheapChrome,
+           #available(macOS 26.0, iOS 26.0, *) {
             self
                 .frame(width: size, height: size)
-                .glassEffect(glass, in: .circle)
+                .contentShape(Circle())
+                .glassEffect(
+                    usesExplicitTint ? Glass.clear.tint(resolved) : Glass.regular,
+                    in: .circle
+                )
         } else {
             self
                 .frame(width: size, height: size)
-                .background(Circle().fill(.ultraThinMaterial))
+                .contentShape(Circle())
+                .background {
+                    Circle()
+                        .fill(resolved)
+                        .overlay(Circle().strokeBorder(.primary.opacity(0.18), lineWidth: 0.5))
+                }
         }
     }
 
-    /// Applies a capsule Liquid Glass effect (for wider controls).
+    /// Capsule control. Same cheap-chrome gate as `cassetteGlassButton`.
     @ViewBuilder
     func cassetteGlassCapsule(tint: Color? = nil) -> some View {
-        if #available(macOS 26.0, iOS 26.0, *) {
-            // .interactive() removed — same crash risk as cassetteGlassButton.
-            let glass: Glass = tint.map { Glass.regular.tint($0) } ?? Glass.regular
-            self.glassEffect(glass, in: .capsule)
+        let resolved = tint ?? CassetteGlassStyle.defaultTint
+        let usesExplicitTint = tint != nil
+        if !CassettePerformance.preferCheapChrome,
+           #available(macOS 26.0, iOS 26.0, *) {
+            self
+                .contentShape(Capsule())
+                .glassEffect(
+                    usesExplicitTint ? Glass.clear.tint(resolved) : Glass.regular,
+                    in: .capsule
+                )
         } else {
-            self.background(Capsule().fill(.ultraThinMaterial))
+            self.background {
+                Capsule()
+                    .fill(resolved)
+                    .overlay(Capsule().strokeBorder(.primary.opacity(0.18), lineWidth: 0.5))
+            }
         }
     }
 
-    /// Over-cover HERO round button: TRANSPARENT — no surface/fill. Just the tap area + a soft shadow so the
-    /// glyph stays legible on a busy cover without a backing (the Apple-Music trick). The caller colors the
-    /// glyph for direct contrast on the cover (the over-cover title color). Pair with `.buttonStyle(.plain)`
-    /// to drop the native iOS 26 toolbar glass.
+    /// Primary CTA capsule with Cassette Red tint.
+    func cassetteAccentGlassCapsule(disabled: Bool = false) -> some View {
+        cassetteGlassCapsule(tint: CassetteColors.accent.opacity(disabled ? 0.35 : 0.72))
+    }
+}
+
+/// Drop-in replacement for `.borderedProminent` brand CTAs — Cassette Red tinted chrome.
+struct CassetteAccentGlassButtonStyle: ButtonStyle {
+    var isDisabled: Bool = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white)
+            .cassetteAccentGlassCapsule(disabled: isDisabled || configuration.isPressed)
+            .opacity(configuration.isPressed ? 0.92 : 1)
+    }
+}
+
+extension View {
+    func cassetteAccentGlassButton(disabled: Bool = false) -> some View {
+        buttonStyle(CassetteAccentGlassButtonStyle(isDisabled: disabled))
+    }
+
+    /// Soft panel for cards / accessory chrome. Cheap path uses material, not Liquid Glass.
+    @ViewBuilder
+    func cassetteGlassPanel(cornerRadius: CGFloat = 16) -> some View {
+        if !CassettePerformance.preferCheapChrome,
+           #available(macOS 26.0, iOS 26.0, *) {
+            self.glassEffect(Glass.regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            self.background {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(.primary.opacity(0.12), lineWidth: 0.5)
+                    )
+            }
+        }
+    }
+
+    /// Over-cover HERO round button: transparent tap area + soft shadow for glyph legibility.
     func cassetteHeroButton(size: CGFloat = 44) -> some View {
         self
             .shadow(color: .black.opacity(0.28), radius: 3, y: 1)
             .frame(width: size, height: size)
             .contentShape(Circle())
+    }
+
+    /// Circular control without Liquid Glass — soft fill for over-cover chrome (player star / more).
+    func cassettePlainCircleButton(size: CGFloat = 44, fill: Color) -> some View {
+        self
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+            .background {
+                Circle()
+                    .fill(fill)
+            }
+    }
+
+    /// Capsule control without Liquid Glass (queue shuffle / repeat / auto-extend pills).
+    func cassettePlainCapsule(fill: Color) -> some View {
+        self
+            .contentShape(Capsule())
+            .background {
+                Capsule()
+                    .fill(fill)
+            }
     }
 }

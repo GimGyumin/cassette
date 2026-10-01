@@ -17,9 +17,14 @@ final class NetworkMonitor: Sendable {
         monitor.pathUpdateHandler = { path in
             let online = path.status == .satisfied
             let expensive = path.isExpensive
+            // `isConstrained` is iOS Low Data Mode (and a Wi-Fi link the user marked as
+            // metered). It is not covered by `isExpensive`, so a throttled Wi-Fi link would
+            // otherwise inherit every unmetered path and compete with the live stream.
+            let constrained = path.isConstrained
             Task { @MainActor in
                 serverState.isOnline = online
                 serverState.isExpensive = expensive
+                serverState.isNetworkConstrained = constrained
             }
         }
         monitor.start(queue: queue)

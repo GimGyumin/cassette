@@ -9,10 +9,8 @@ import SwiftSonic
 struct WrappedTopArtistsSection: View {
     let artists: [TopArtistEntry]
 
-    @Environment(\.appContainer) private var container
     @Environment(ArtworkImageCache.self) private var artworkImageCache
     @Environment(DominantColorExtractor.self) private var dominantColorExtractor
-    @State private var artistToNavigate: ArtistID3?
     @State private var dominantColors: [String: Color] = [:]
     @State private var coverImages: [String: PlatformImage] = [:]
 
@@ -26,7 +24,6 @@ struct WrappedTopArtistsSection: View {
                 carouselView
             }
         }
-        .navigationDestination(item: $artistToNavigate) { ArtistDetailView(artist: $0) }
         .task(id: artists.map(\.artistId)) { await preloadColors() }
     }
 
@@ -48,11 +45,15 @@ struct WrappedTopArtistsSection: View {
 
     private func artistCard(_ artist: TopArtistEntry, isFirst: Bool) -> some View {
         let cardWidth: CGFloat = isFirst ? 240 : 200
-        return Button {
-            Task {
-                artistToNavigate = try? await container?.libraryService.artist(id: artist.artistId)
-            }
-        } label: {
+        // Use HomeDestination on the Discover NavigationPath — not .navigationDestination(item:),
+        // which re-creates ArtistDetailView during nested album pushes (SearchView Regression 5).
+        return NavigationLink(
+            value: HomeDestination.artistById(
+                id: artist.artistId,
+                name: artist.name,
+                coverArtId: artist.artistId
+            )
+        ) {
             VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
                 ZStack(alignment: .topLeading) {
                     CoverArtCard(

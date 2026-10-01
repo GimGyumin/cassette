@@ -5,109 +5,18 @@
 
 import SwiftUI
 
+/// Compatibility wrapper — server credentials now live in `OnboardingServerSignInView`
+/// as an integrated Apple Account–style onboarding step.
 struct ServerFormView: View {
     @Bindable var viewModel: OnboardingViewModel
+    var onConnected: (() -> Void)? = nil
 
     var body: some View {
-        Form {
-            Section("Server") {
-                TextField("https://music.example.com", text: $viewModel.serverURL)
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                    #endif
-                invalidURLHint
-                httpWarning
-            }
-
-            Section("Credentials") {
-                TextField("Username", text: $viewModel.username)
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
-                SecureField("Password", text: $viewModel.password)
-            }
-
-            errorSection
-
-            customHeadersSection
-
-            Section {
-                Button {
-                    Task { await viewModel.addServer() }
-                } label: {
-                    if viewModel.isLoading {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                            Text("Connecting…")
-                        }
-                        .frame(maxWidth: .infinity)
-                    } else {
-                        Text("Connect & Save")
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .disabled(viewModel.isLoading || !viewModel.canSubmit)
-            }
-        }
-        .navigationTitle("Add Server")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
+        OnboardingServerSignInView(
+            viewModel: viewModel,
+            onConnected: { onConnected?() }
+        )
     }
-
-    // MARK: - Error / warning helpers
-
-    @ViewBuilder
-    private var httpWarning: some View {
-        if viewModel.isHTTP {
-            Label("Unencrypted connection — make sure you are on a trusted network.", systemImage: "exclamationmark.triangle")
-                .font(.footnote)
-                .foregroundStyle(.orange)
-        }
-    }
-
-    @ViewBuilder
-    private var invalidURLHint: some View {
-        if case .invalidURL = viewModel.connectionError {
-            Text("Enter a valid URL, including http:// or https://")
-                .font(.footnote)
-                .foregroundStyle(.red)
-        }
-    }
-
-    @ViewBuilder
-    private var errorSection: some View {
-        if let error = viewModel.connectionError, error != .invalidURL {
-            Section {
-                ConnectionErrorView(error: error)
-                    .padding(.vertical, CassetteSpacing.xs)
-            }
-        }
-    }
-
-    private var customHeadersSection: some View {
-        Section {
-            DisclosureGroup("Custom Headers") {
-                ForEach($viewModel.customHeaders) { $header in
-                    CustomHeaderRowView(
-                        key: $header.key,
-                        value: $header.value,
-                        onRemove: { viewModel.removeCustomHeader(id: header.id) }
-                    )
-                }
-                Button(action: viewModel.addCustomHeader) {
-                    Label("Add Header", systemImage: "plus")
-                }
-            }
-        } footer: {
-            Text("Optional headers sent with every request — useful for Cloudflare Access or other reverse-proxy authentication.")
-                .font(.footnote)
-        }
-    }
-
 }
 
 // MARK: - CustomHeaderRowView
@@ -123,7 +32,7 @@ struct CustomHeaderRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Header name")
+            Text(String(localized: "Header name", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             TextField("e.g. CF-Access-Client-Id", text: $key)
@@ -133,7 +42,7 @@ struct CustomHeaderRowView: View {
                 .textInputAutocapitalization(.never)
                 #endif
 
-            Text("Value")
+            Text(String(localized: "Value", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, CassetteSpacing.xs)
@@ -148,7 +57,7 @@ struct CustomHeaderRowView: View {
                     isRevealed.toggle()
                 } label: {
                     Image(systemName: isRevealed ? "eye.slash" : "eye")
-                        .foregroundStyle(isRevealed ? CassetteColors.accent : CassetteColors.textTertiary)
+                        .foregroundStyle(isRevealed ? CassetteColors.accent : CassetteColors.SemanticLabel.tertiary)
                         .contentTransition(.symbolEffect(.replace))
                         .frame(width: 44, height: 44)
                 }
@@ -159,7 +68,7 @@ struct CustomHeaderRowView: View {
                     copyValueToClipboard()
                 } label: {
                     Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
-                        .foregroundStyle(value.isEmpty ? CassetteColors.textTertiary : CassetteColors.accent)
+                        .foregroundStyle(value.isEmpty ? CassetteColors.SemanticLabel.tertiary : CassetteColors.accent)
                         .contentTransition(.symbolEffect(.replace))
                         .frame(width: 44, height: 44)
                 }
@@ -199,12 +108,12 @@ struct CustomHeaderRowView: View {
     @ViewBuilder
     private var valueField: some View {
         if isRevealed {
-            TextField("Value", text: $value)
+            TextField(String(localized: "Value", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), text: $value)
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 #endif
         } else {
-            SecureField("Value", text: $value)
+            SecureField(String(localized: "Value", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), text: $value)
         }
     }
 

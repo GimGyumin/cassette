@@ -71,6 +71,8 @@ struct PlaylistGradientSpec: Codable, Equatable, Sendable {
 /// color via `Color.adjusted`. Cross-platform; the mesh form falls back to a linear gradient pre-iOS 18.
 struct PlaylistGradientView: View {
     let spec: PlaylistGradientSpec
+    /// Carousel / list previews: skip MeshGradient & AngularGradient (very expensive during sheet open).
+    var lightweight: Bool = false
 
     var body: some View {
         let base = spec.baseColor
@@ -83,16 +85,28 @@ struct PlaylistGradientView: View {
         case .diagonalSheen:
             LinearGradient(colors: [light, base, dark], startPoint: .topLeading, endPoint: .bottomTrailing)
         case .radialGlow:
-            RadialGradient(colors: [light, base, dark], center: .center, startRadius: 0, endRadius: 360)
+            if lightweight {
+                LinearGradient(colors: [light, base, dark], startPoint: .center, endPoint: .bottom)
+            } else {
+                RadialGradient(colors: [light, base, dark], center: .center, startRadius: 0, endRadius: 360)
+            }
         case .angularSweep:
-            AngularGradient(colors: [base, light, base.adjusted(hue: 0.08), dark, base], center: .center)
+            if lightweight {
+                LinearGradient(colors: [base, light, dark], startPoint: .topLeading, endPoint: .bottomTrailing)
+            } else {
+                AngularGradient(colors: [base, light, base.adjusted(hue: 0.08), dark, base], center: .center)
+            }
         case .duotone:
             LinearGradient(
                 colors: [base, base.adjusted(hue: 0.10, brightness: -0.10)],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
         case .mesh:
-            meshOrFallback(base: base, light: light, dark: dark)
+            if lightweight {
+                LinearGradient(colors: [light, base, dark], startPoint: .topLeading, endPoint: .bottomTrailing)
+            } else {
+                meshOrFallback(base: base, light: light, dark: dark)
+            }
         }
     }
 
@@ -128,8 +142,16 @@ struct PlaylistGradientView: View {
 struct AnimatedGradientHeroView: View {
     let spec: PlaylistGradientSpec
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    /// Observed so a budget change (thermal pressure / Low Power Mode / background) stops the
+    /// TimelineView instead of leaving a continuous mesh animation running.
+    @State private var governor = PerformanceGovernor.shared
     @State private var isVisible = false
+    @State private var isOnScreen = true
+
+    private var shouldAnimate: Bool {
+        isVisible && isOnScreen && scenePhase == .active && governor.budget.allowsDecorativeMotion
+    }
 
     var body: some View {
         let base = spec.baseColor
@@ -138,8 +160,9 @@ struct AnimatedGradientHeroView: View {
         let colors = Self.meshColors(spec.shape, base: base, light: light, dark: dark)
 
         Group {
-            if isVisible && !reduceMotion {
-                TimelineView(.animation) { context in
+            if shouldAnimate {
+                // Cap frame rate — full `.animation` TimelineView was a continuous GPU tax.
+                TimelineView(.animation(minimumInterval: CassettePerformance.meshHeroFrameInterval)) { context in
                     MeshGradient(width: 3, height: 3,
                                  points: Self.points(at: context.date.timeIntervalSinceReferenceDate),
                                  colors: colors)
@@ -155,6 +178,13 @@ struct AnimatedGradientHeroView: View {
         .clipped()
         .onAppear { isVisible = true }
         .onDisappear { isVisible = false }
+        .onGeometryChange(for: Bool.self) { proxy in
+            let frame = proxy.frame(in: .global)
+            // ScrollView keeps heroes mounted when scrolled away — pause TimelineView off-screen.
+            return frame.height > 8 && frame.maxY > 0 && frame.minY < 3500
+        } action: { onScreen in
+            isOnScreen = onScreen
+        }
     }
 
     /// Per node: a base biased OUTWARD for the outer points (pushed into the overfill margin so their inward

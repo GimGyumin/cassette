@@ -13,6 +13,7 @@ protocol PlaylistServiceProtocol: AnyObject, Sendable {
     func createPlaylist(name: String, description: String?) async throws -> PlaylistWithSongs
     func renamePlaylist(id: String, newName: String) async throws
     func updateDescription(id: String, description: String) async throws
+    func updateVisibility(id: String, isPublic: Bool) async throws
     func addTracks(playlistId: String, songs: [Song]) async throws
     func removeTracks(playlistId: String, indices: [Int]) async throws
     func reorderTracks(playlistId: String, orderedSongIds: [String]) async throws
@@ -20,4 +21,14 @@ protocol PlaylistServiceProtocol: AnyObject, Sendable {
     /// client-side cover choice for this playlist; when false, the server delete keeps any local downloads (an
     /// intentional offline orphan). Local state is only touched after a confirmed server delete.
     func deletePlaylist(id: String, purgeDownloads: Bool) async throws
+
+    /// Drops the cached SwiftSonic client so the next call picks up new credentials.
+    func invalidateClientCache() async
+}
+
+extension PlaylistServiceProtocol {
+    func invalidateClientCache() async {}
+    func updateVisibility(id: String, isPublic: Bool) async throws {
+        throw CassetteError.notImplemented
+    }
 }

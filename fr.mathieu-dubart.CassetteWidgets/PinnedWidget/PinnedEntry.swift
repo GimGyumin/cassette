@@ -3,16 +3,14 @@
 // Licensed under the Mozilla Public License 2.0.
 // See LICENSE file in the project root for full license information.
 
-#if os(iOS)
 import SwiftUI
-import UIKit
 import WidgetKit
 
 nonisolated struct PinnedEntry: TimelineEntry {
     let date: Date
     let items: [SharedPinnedItem]
     /// Keyed by coverArtFilename (e.g. "abc123.jpg").
-    let coverImages: [String: UIImage]
+    let coverImages: [String: PlatformImage]
 
     static var placeholder: PinnedEntry {
         let items = [
@@ -45,13 +43,13 @@ struct PinnedProvider: TimelineProvider {
     }
 
     private func makeEntry() -> PinnedEntry {
-        guard let data = SharedStorage.defaults.data(forKey: SharedStorageKey.pinnedItems.rawValue),
+        guard let data = SharedStorage.read({ $0.data(forKey: SharedStorageKey.pinnedItems.rawValue) }),
               let items = try? JSONDecoder().decode([SharedPinnedItem].self, from: data),
               !items.isEmpty else {
             return .empty
         }
 
-        var coverImages: [String: UIImage] = [:]
+        var coverImages: [String: PlatformImage] = [:]
         for item in items {
             guard let filename = item.coverArtFilename else { continue }
             let id = filename.replacingOccurrences(of: ".jpg", with: "")
@@ -63,4 +61,3 @@ struct PinnedProvider: TimelineProvider {
         return PinnedEntry(date: Date(), items: items, coverImages: coverImages)
     }
 }
-#endif

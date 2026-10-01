@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SwiftData
+import SwiftSonic
 import OSLog
 
 struct WrappedView: View {
@@ -15,6 +16,7 @@ struct WrappedView: View {
     @State private var wrappedPlaylistId: String?
     @State private var appeared = false
     @State private var loadFailed = false
+    @State private var refreshDebounceTask: Task<Void, Never>?
     #if DEBUG
     @AppStorage("debug.wrappedFakeDataActive") private var overrideWithFakeData = false
     @AppStorage("debug.wrappedFakeDataJSON") private var persistedFakeDataJSON = ""
@@ -86,16 +88,23 @@ struct WrappedView: View {
             .padding(.bottom, CassetteSpacing.xl)
         }
         .refreshable { await loadData() }
-        .navigationTitle("")
+        .miniPlayerBottomMargin()
+        .navigationTitle(String(localized: "Replay", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         .task(id: selectedPeriod) {
             await loadData()
         }
         .background {
-            if let serverId = container?.serverState.activeServer?.id.uuidString {
+            if let container,
+               let serverId = container.serverState.activeServer?.id.uuidString {
                 PlaybackEventWatcher(serverId: serverId) {
-                    Task { await refreshData() }
+                    scheduleQuietRefresh()
                 }
+                .modelContainer(container.listeningModelContainer)
             }
+        }
+        .onDisappear {
+            refreshDebounceTask?.cancel()
+            refreshDebounceTask = nil
         }
     }
 
@@ -106,9 +115,9 @@ struct WrappedView: View {
             Image(systemName: "waveform")
                 .font(.largeTitle)
                 .foregroundStyle(Color.cassetteAccent.opacity(0.5))
-            Text("No listens for this period.")
+            Text(String(localized: "No listens for this period.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 .font(.cassetteCellTitle)
-            Text("Listen up — we'll keep track of your activity.")
+            Text(String(localized: "Listen up — Replay will keep track of your activity.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 .font(.cassetteCaption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -118,6 +127,16 @@ struct WrappedView: View {
     }
 
     // MARK: - Data loading
+
+    /// Debounce live playback inserts so each scrobble doesn't rebuild the whole Recap UI.
+    private func scheduleQuietRefresh() {
+        refreshDebounceTask?.cancel()
+        refreshDebounceTask = Task {
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            await refreshData()
+        }
+    }
 
     private func refreshData() async {
         #if DEBUG
@@ -152,9 +171,9 @@ struct WrappedView: View {
             return
         }
         Logger.wrapped.debug("[WRAPPED-VIEW] fetch start period=\(selectedPeriod.displayName, privacy: .public)")
+        let isFirstPaint = data == nil
         appeared = false
-        isLoading = true
-        data = nil
+        if isFirstPaint { isLoading = true }
         wrappedPlaylistId = nil
         let result = await container.statsService.wrappedData(
             for: selectedPeriod, serverId: serverId, calendar: .current
@@ -174,11 +193,23 @@ struct WrappedView: View {
 
 private extension View {
     func cascadeAppear(order: Int, trigger: Bool) -> some View {
-        self
+        modifier(CascadeAppearModifier(order: order, trigger: trigger))
+    }
+}
+
+private struct CascadeAppearModifier: ViewModifier {
+    let order: Int
+    let trigger: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
             .opacity(trigger ? 1 : 0)
-            .offset(y: trigger ? 0 : 16)
+            .offset(y: (reduceMotion || trigger) ? 0 : 16)
             .animation(
-                .spring(response: 0.45, dampingFraction: 0.82).delay(Double(order) * 0.07),
+                reduceMotion
+                    ? nil
+                    : .spring(response: 0.45, dampingFraction: 0.82).delay(Double(order) * 0.07),
                 value: trigger
             )
     }

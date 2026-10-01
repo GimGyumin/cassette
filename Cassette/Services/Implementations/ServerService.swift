@@ -11,11 +11,19 @@ import OSLog
 actor ServerService: ServerServiceProtocol {
     nonisolated let state: ServerState
 
+    private let jellyfinSession: URLSession
     private let keychain: any KeychainServiceProtocol
     private let modelContainer: ModelContainer
     private let cacheService: any CacheServiceProtocol
+    /// Joins concurrent Keychain+URLSession client builds — cold start used to stampede this.
+    private var clientInFlight: Task<SwiftSonicClient, Error>?
+    /// Reused client for the current active server, so playback state transitions and
+    /// periodic reports do not rebuild Keychain + URLSession every time.
+    private var cachedClient: SwiftSonicClient?
+    private var cachedClientServerID: UUID?
 
-    init(state: ServerState, keychain: any KeychainServiceProtocol, modelContainer: ModelContainer, cacheService: any CacheServiceProtocol) {
+    init(state: ServerState, keychain: any KeychainServiceProtocol, modelContainer: ModelContainer, cacheService: any CacheServiceProtocol, jellyfinSession: URLSession = .shared) {
+        self.jellyfinSession = jellyfinSession
         self.state = state
         self.keychain = keychain
         self.modelContainer = modelContainer
@@ -30,33 +38,81 @@ actor ServerService: ServerServiceProtocol {
         customHeaders: [String: String]
     ) async throws {
         try validateHeaders(customHeaders)
-
-        let configId = UUID()
         let creds = ServerCredentials(password: password, customHeaders: customHeaders)
+        try await persistServer(
+            displayName: displayName,
+            baseURL: baseURL,
+            username: username,
+            credentials: creds
+        )
+    }
+
+    func addServerWithJellyfinToken(
+        displayName: String,
+        baseURL: String,
+        username: String,
+        jellyfinAccessToken: String,
+        customHeaders: [String: String]
+    ) async throws {
+        try validateHeaders(customHeaders)
+        guard let serverURL = URL(string: baseURL) else {
+            throw ConnectionTestError.invalidURL
+        }
+        let client = try await jellyfinClient(url: serverURL, token: jellyfinAccessToken, headers: customHeaders)
+        let user = try await client.currentUser()
+        guard user.name == username, !user.id.isEmpty else {
+            throw JellyfinClientError.missingAuthenticatedUser
+        }
+        try Task.checkCancellation()
+
+        let creds = ServerCredentials(
+            password: "",
+            customHeaders: customHeaders,
+            jellyfinAccessToken: jellyfinAccessToken
+        )
+        try await persistServer(
+            displayName: displayName,
+            baseURL: baseURL,
+            username: username,
+            credentials: creds
+        )
+    }
+
+    private func persistServer(
+        displayName: String,
+        baseURL: String,
+        username: String,
+        credentials: ServerCredentials
+    ) async throws {
+        let configId = UUID()
         let credKey = ServerCredentials.keychainKey(for: configId)
 
         // Keychain first: if SwiftData save fails below, we can roll back with a single delete.
-        try await keychain.store(creds, forKey: credKey)
+        try await keychain.store(credentials, forKey: credKey)
 
         do {
+            try Task.checkCancellation()
             try await MainActor.run {
+                try Task.checkCancellation()
                 let context = ModelContext(modelContainer)
-                let existingCount = (try? context.fetchCount(FetchDescriptor<ServerConfig>())) ?? 0
-                let isFirst = existingCount == 0
+                let existing = try context.fetch(FetchDescriptor<ServerConfig>())
+                // Deleting the active server can leave other, inactive records.
+                // A successful new sign-in must restore an active server in that case.
+                let shouldActivate = !existing.contains(where: \.isActive)
                 let config = ServerConfig(
                     id: configId,
                     displayName: displayName,
                     baseURL: baseURL,
                     username: username,
-                    isActive: isFirst
+                    isActive: shouldActivate
                 )
                 context.insert(config)
                 try context.save()
                 let snapshot = ServerSnapshot(from: config)
-                state.servers.append(snapshot)
-                if isFirst {
-                    state.activeServer = snapshot
-                }
+                state.servers = existing.map { ServerSnapshot(from: $0) } + [snapshot]
+                state.activeServer = shouldActivate
+                    ? snapshot
+                    : existing.first(where: \.isActive).map { ServerSnapshot(from: $0) }
             }
         } catch {
             try? await keychain.delete(forKey: credKey)
@@ -116,12 +172,18 @@ actor ServerService: ServerServiceProtocol {
     }
 
     func updateCustomHeaders(_ headers: [String: String], forServer id: UUID) async throws {
+        cachedClient = nil
+        cachedClientServerID = nil
         try validateHeaders(headers)
         let credKey = ServerCredentials.keychainKey(for: id)
         guard let existing = try await keychain.retrieve(ServerCredentials.self, forKey: credKey) else {
             throw CassetteError.serverNotFound(id: id)
         }
-        let updated = ServerCredentials(password: existing.password, customHeaders: headers)
+        let updated = ServerCredentials(
+            password: existing.password,
+            customHeaders: headers,
+            jellyfinAccessToken: existing.jellyfinAccessToken
+        )
         try await keychain.store(updated, forKey: credKey)
     }
 
@@ -133,10 +195,13 @@ actor ServerService: ServerServiceProtocol {
         password: String,
         customHeaders: [String: String]
     ) async throws {
+        cachedClient = nil
+        cachedClientServerID = nil
         try validateHeaders(customHeaders)
 
         let credKey = ServerCredentials.keychainKey(for: id)
         let creds = ServerCredentials(password: password, customHeaders: customHeaders)
+        let previousCredentials = try await keychain.retrieve(ServerCredentials.self, forKey: credKey)
 
         // Keychain first — mirrors addServer rollback strategy.
         try await keychain.store(creds, forKey: credKey)
@@ -159,8 +224,23 @@ actor ServerService: ServerServiceProtocol {
                 if state.activeServer?.id == id {
                     state.activeServer = snapshot
                 }
+                state.needsCredentialReentry = false
+            }
+            await MainActor.run {
+                NotificationCenter.default.post(name: .cassetteServerCredentialsChanged, object: nil)
             }
         } catch {
+            do {
+                if let previousCredentials {
+                    try await keychain.store(previousCredentials, forKey: credKey)
+                } else {
+                    try await keychain.delete(forKey: credKey)
+                }
+            } catch {
+                Logger.keychain.error(
+                    "Failed to restore credentials after server update failure for \(id, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            }
             throw error
         }
     }
@@ -176,8 +256,34 @@ actor ServerService: ServerServiceProtocol {
                 return configs.map(\.id)
             }
             await migrateCredentialsAccessibility(for: serverIDs)
+            await refreshCredentialAvailability()
         } catch {
             await MainActor.run { state.isLoadingPersistedState = false }
+        }
+    }
+
+    /// Checks Keychain for the active server password and updates `needsCredentialReentry`.
+    func refreshCredentialAvailability() async {
+        let activeID = await MainActor.run { state.activeServer?.id }
+        guard let activeID else {
+            await MainActor.run { state.needsCredentialReentry = false }
+            return
+        }
+        let key = ServerCredentials.keychainKey(for: activeID)
+        do {
+            let creds = try await keychain.retrieve(ServerCredentials.self, forKey: key)
+            let missing = creds == nil || (
+                creds?.password.isEmpty == true && creds?.jellyfinAccessToken?.isEmpty != false
+            )
+            await MainActor.run { state.needsCredentialReentry = missing }
+            if missing {
+                Logger.server.error(
+                    "Active server \(activeID, privacy: .public) has no Keychain password — needsCredentialReentry=true"
+                )
+            }
+        } catch {
+            await MainActor.run { state.needsCredentialReentry = true }
+            Logger.server.error("Credential availability check failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -235,6 +341,40 @@ actor ServerService: ServerServiceProtocol {
     }
 
     func makeSwiftSonicClient() async throws -> SwiftSonicClient {
+        if let cachedClient, let cachedClientServerID,
+           await MainActor.run(body: { state.activeServer?.id }) == cachedClientServerID {
+            return cachedClient
+        }
+        if let clientInFlight {
+            return try await clientInFlight.value
+        }
+        let task = Task {
+            try await self.buildSwiftSonicClient()
+        }
+        clientInFlight = task
+        do {
+            let client = try await task.value
+            clientInFlight = nil
+            cachedClient = client
+            cachedClientServerID = await MainActor.run(body: { state.activeServer?.id })
+            return client
+        } catch {
+            clientInFlight = nil
+            throw error
+        }
+    }
+
+    /// Warms Keychain + client construction so the first Home `getAlbumList2` isn't blocked on it.
+    func preWarmClient() async {
+        do {
+            _ = try await makeSwiftSonicClient()
+            Logger.server.debug("preWarmClient: ready")
+        } catch {
+            Logger.server.debug("preWarmClient: skipped — \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func buildSwiftSonicClient() async throws -> SwiftSonicClient {
         let snapshot = await MainActor.run { state.activeServer }
         Logger.server.debug("makeSwiftSonicClient — activeServer=\(String(describing: snapshot?.baseURL), privacy: .public)")
         guard let snapshot else {
@@ -246,18 +386,54 @@ actor ServerService: ServerServiceProtocol {
             ServerCredentials.self,
             forKey: ServerCredentials.keychainKey(for: snapshot.id)
         )
-        guard let creds else { throw CassetteError.serverNotConfigured }
+        guard let creds,
+              !creds.password.isEmpty || creds.jellyfinAccessToken?.isEmpty == false else {
+            await MainActor.run { state.needsCredentialReentry = true }
+            Logger.server.error(
+                "makeSwiftSonicClient: Keychain password missing for \(snapshot.id, privacy: .public) → credentialsMissing"
+            )
+            throw CassetteError.credentialsMissing
+        }
 
         guard let url = URL(string: snapshot.baseURL) else {
             throw CassetteError.invalidServerURL(snapshot.baseURL)
         }
 
+        if creds.password.isEmpty, let token = creds.jellyfinAccessToken, !token.isEmpty {
+            let client = try await jellyfinClient(url: url, token: token, headers: creds.customHeaders)
+            let user = try await client.currentUser()
+            return JellyfinMusicTransport(client: client, user: user).makeMusicClient(serverURL: url)
+        }
         let transport = CustomHeadersTransport(headers: creds.customHeaders)
+        // No retries: a hung Subsonic response already costs the full request timeout;
+        // retrying timeouts turns a ~15s cold-start stall into ~45s+.
+        let auth: AuthMethod
+        if !creds.password.isEmpty {
+            auth = .tokenAuth(username: snapshot.username, password: creds.password, reusesSalt: false)
+
+        } else {
+            throw CassetteError.credentialsMissing
+        }
         return SwiftSonicClient(
-            configuration: ServerConfiguration(serverURL: url, username: snapshot.username, password: creds.password),
+            configuration: ServerConfiguration(
+                serverURL: url,
+                auth: auth,
+                clientName: "Cassette",
+                requestTimeout: 15,
+                resourceTimeout: 20
+            ),
             transport: transport,
+            retryPolicy: .none,
             logSubsystem: "app.cassette.server"
         )
+    }
+
+    private func jellyfinClient(url: URL, token: String, headers: [String: String]) async throws -> JellyfinClient {
+        let identity = await MainActor.run { JellyfinDeviceIdentity.current() }
+        return try JellyfinClient(serverBaseURL: url, accessToken: token, customHeaders: headers,
+                              deviceID: identity.id, deviceName: identity.name,
+                              clientName: identity.clientName, clientVersion: identity.clientVersion,
+                              session: jellyfinSession)
     }
 
     func activeCredentials() async throws -> ServerCredentials {
@@ -267,7 +443,10 @@ actor ServerService: ServerServiceProtocol {
         guard let creds = try await keychain.retrieve(
             ServerCredentials.self,
             forKey: ServerCredentials.keychainKey(for: snapshot.id)
-        ) else { throw CassetteError.serverNotConfigured }
+        ), !creds.password.isEmpty || creds.jellyfinAccessToken?.isEmpty == false else {
+            await MainActor.run { state.needsCredentialReentry = true }
+            throw CassetteError.credentialsMissing
+        }
 
         return creds
     }

@@ -12,6 +12,7 @@ import SwiftSonic
 struct BottomPlayerBar: View {
     @Environment(\.appContainer) private var container
     @Environment(ArtworkImageCache.self) private var artworkImageCache
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var isScrubbing = false
     @State private var localScrubPosition: Double = 0
@@ -20,12 +21,16 @@ struct BottomPlayerBar: View {
     @State private var showAddToPlaylist = false
     @State private var isFavorite = false
     @State private var isDownloadedLocally = false
+    @State private var isDownloadingTrack = false
     @AppStorage("cassette.lastVolume") private var localVolume: Double = 0.7
     @State private var showVolumeSlider = false
     @State private var sliderDismissTask: Task<Void, Never>?
     @State private var barWidth: CGFloat = 800
 
     var onArtworkTap: (() -> Void)? = nil
+    var isLyricsPanelOpen: Bool = false
+    var isFullPlayerPresented: Bool = false
+    var onLyricsTap: (() -> Void)? = nil
 
     private var playerState: PlayerState? { container?.playerState }
     private var currentTrack: DisplayableSong? { playerState?.currentTrack }
@@ -44,7 +49,19 @@ struct BottomPlayerBar: View {
     }
     private var isCompact: Bool { barWidth < 560 }
     private var isNarrow: Bool { barWidth < 400 }
+    /// Hide only AirPlay / volume expansion when very tight — lyrics + queue stay available.
+    private var hidePeripheralControls: Bool { barWidth < 480 }
     private var serverId: UUID? { container?.serverState.activeServer?.id }
+
+    /// Lossless / Hi-Res / Dolby badge for the mini bar (hidden when stream is lossy-transcoded or on expensive network).
+    private var playbackQuality: AudioQualityKind? {
+        guard let playerState, !playerState.isLiveStream, let track = currentTrack else { return nil }
+        return AudioQualityClassifier.displayablePlaybackQuality(
+            for: track,
+            isExpensive: container?.serverState.isExpensive == true,
+            isTranscoding: playerState.isDeliveringTranscodedAudio
+        )
+    }
 
     private var artistAlbumLine: String {
         guard !isLiveStream else { return " " }
@@ -59,16 +76,14 @@ struct BottomPlayerBar: View {
 
             centerBlock
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, isNarrow ? 6 : 12)
 
-            if !isCompact {
-                secondaryActions
-                    .padding(.horizontal, 16)
-            }
+            secondaryActions
+                .padding(.horizontal, isNarrow ? 8 : 16)
         }
         .frame(height: 50)
         .background {
-            if #available(macOS 26.0, *) {
+            if #available(macOS 26.0, *), !CassettePerformance.preferCheapChrome {
                 Capsule()
                     .fill(.clear)
                     .glassEffect(.regular, in: Capsule())
@@ -85,7 +100,7 @@ struct BottomPlayerBar: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
         .onChange(of: isCompact) { _, compact in
             if compact && showVolumeSlider {
-                withAnimation(.easeInOut(duration: 0.2)) { showVolumeSlider = false }
+                animatePanel { showVolumeSlider = false }
                 sliderDismissTask?.cancel()
                 sliderDismissTask = nil
             }
@@ -95,6 +110,7 @@ struct BottomPlayerBar: View {
             await refreshDownloadState()
         }
         .onReceive(NotificationCenter.default.publisher(for: .cassetteToggleQueue)) { _ in
+            guard !isFullPlayerPresented else { return }
             showQueue.toggle()
         }
         .sheet(isPresented: $showAddToPlaylist) {
@@ -129,6 +145,10 @@ struct BottomPlayerBar: View {
                 }
 
                 Spacer(minLength: 0)
+
+                if let quality = playbackQuality {
+                    MacMiniPlayerQualityBadge(quality: quality)
+                }
 
                 if !noTrack {
                     ellipsisMenu
@@ -193,7 +213,6 @@ struct BottomPlayerBar: View {
             trackHeight: 2
         )
         .disabled(noTrack)
-        .accessibilityHidden(true)
     }
 
     private var liveIndicator: some View {
@@ -211,12 +230,24 @@ struct BottomPlayerBar: View {
 
     private var ellipsisMenu: some View {
         Menu {
-            Button("Go to Album") {
+            Button {
                 if let t = currentTrack { postNavigateToAlbum(track: t) }
+            } label: {
+                GoToDestinationMenuLabel(
+                    title: String(localized: "Go to Album", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                    subtitle: currentTrack?.albumName,
+                    systemImage: "square.stack"
+                )
             }
             .disabled(currentTrack?.albumId == nil)
-            Button("Go to Artist") {
+            Button {
                 if let t = currentTrack { postNavigateToArtist(track: t) }
+            } label: {
+                GoToDestinationMenuLabel(
+                    title: String(localized: "Go to Artist", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                    subtitle: currentTrack?.artist,
+                    systemImage: "music.mic"
+                )
             }
             .disabled(currentTrack?.artistId == nil)
             Divider()
@@ -230,11 +261,27 @@ struct BottomPlayerBar: View {
             }
             .disabled(noTrack || container?.serverState.isOnline != true)
             Divider()
-            // TODO(v1.9): Download requires Song type from library — only remove is available in mini bar
-            Button(isDownloadedLocally ? "Remove Download" : "Download") {
-                Task { await toggleDownload() }
+            if isDownloadingTrack {
+                Button {} label: {
+                    Label(
+                        String(localized: "Downloading…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                        systemImage: "arrow.down.circle"
+                    )
+                }
+                .disabled(true)
+            } else {
+                Button {
+                    Task { await toggleDownload() }
+                } label: {
+                    Label(
+                        isDownloadedLocally
+                            ? String(localized: "Remove Download", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                            : String(localized: "Download", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                        systemImage: isDownloadedLocally ? "arrow.down.circle.fill" : "arrow.down.circle"
+                    )
+                }
+                .disabled(noTrack || (!isDownloadedLocally && container?.serverState.isOnline != true))
             }
-            .disabled(noTrack || !isDownloadedLocally)
         } label: {
             Image(systemName: "ellipsis")
                 .foregroundStyle(.secondary)
@@ -244,23 +291,25 @@ struct BottomPlayerBar: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .disabled(noTrack)
+        .accessibilityLabel(String(localized: "More options", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
     }
 
     // MARK: - Playback Controls
 
     private var playbackControls: some View {
-        HStack(spacing: 8) {
-            if !isNarrow {
-                Button {
-                    Task { await container?.playerService.toggleShuffle() }
-                } label: {
-                    Image(systemName: "shuffle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(playerState?.isShuffled == true ? Color.cassetteAccent : .secondary)
-                }
-                .buttonStyle(.plain)
-                .disabled(noTrack)
+        HStack(spacing: 14) {
+            Button {
+                Task { await container?.playerService.toggleShuffle() }
+            } label: {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(playerState?.isShuffled == true ? Color.cassetteAccent : .secondary)
             }
+            .buttonStyle(.plain)
+            .disabled(noTrack || isNarrow)
+            .opacity(isNarrow ? 0 : 1)
+            .accessibilityLabel(String(localized: "Shuffle", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            .accessibilityValue(playerState?.isShuffled == true ? String(localized: "On", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Off", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
             Button {
                 Task { try? await container?.playerService.skipToPrevious() }
@@ -271,6 +320,7 @@ struct BottomPlayerBar: View {
             }
             .buttonStyle(.plain)
             .disabled(!hasContent)
+            .accessibilityLabel(String(localized: "Skip to previous", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
             playPauseButton
 
@@ -283,30 +333,42 @@ struct BottomPlayerBar: View {
             }
             .buttonStyle(.plain)
             .disabled(!hasContent)
+            .accessibilityLabel(String(localized: "Skip to next", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
-            if !isNarrow {
-                Button {
-                    Task {
-                        if let mode = playerState?.repeatMode {
-                            await container?.playerService.setRepeatMode(mode.next)
-                        }
+            Button {
+                Task {
+                    if let mode = playerState?.repeatMode {
+                        await container?.playerService.setRepeatMode(mode.next)
                     }
-                } label: {
-                    Image(systemName: playerState?.repeatMode.systemImage ?? "repeat")
-                        .font(.system(size: 12))
-                        .foregroundStyle(playerState?.repeatMode != .off ? Color.cassetteAccent : .secondary)
                 }
-                .buttonStyle(.plain)
-                .disabled(noTrack)
+            } label: {
+                Image(systemName: playerState?.repeatMode.systemImage ?? "repeat")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(playerState?.repeatMode != .off ? Color.cassetteAccent : .secondary)
             }
+            .buttonStyle(.plain)
+            .disabled(noTrack || isNarrow)
+            .opacity(isNarrow ? 0 : 1)
+            .accessibilityLabel(String(localized: "Repeat", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            .accessibilityValue(repeatModeAccessibilityValue)
+        }
+    }
+
+    private var repeatModeAccessibilityValue: String {
+        switch playerState?.repeatMode {
+        case .one: String(localized: "One", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .all: String(localized: "All", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        default: String(localized: "Off", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         }
     }
 
     @ViewBuilder
     private var playPauseButton: some View {
         if isLoading {
-            ProgressView()
-                .controlSize(.small)
+            // Same glyph as the live control, inert while the stream is still being acquired.
+            Image(systemName: "play.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(!hasContent ? .secondary : .primary)
                 .frame(width: 26, height: 26)
         } else {
             Button {
@@ -326,18 +388,14 @@ struct BottomPlayerBar: View {
             }
             .buttonStyle(.plain)
             .disabled(!hasContent)
+            .accessibilityLabel(isPlaying ? String(localized: "Pause", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
 
-    // MARK: - Volume Slider
+    // MARK: - Volume Slider (Apple Music–style expandable pill)
 
     private var volumeSliderPanel: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "speaker.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .frame(width: 14)
-
+        HStack(spacing: 8) {
             Slider(
                 value: Binding(
                     get: { localVolume },
@@ -349,14 +407,32 @@ struct BottomPlayerBar: View {
                 ),
                 in: 0...1
             )
-            .controlSize(.small)
-            .tint(.secondary)
-            .frame(minWidth: 80)
+            .controlSize(.mini)
+            .tint(.primary.opacity(0.85))
+            .frame(width: 88)
+            .accessibilityLabel(String(localized: "Volume", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            .accessibilityValue("\(Int(localVolume * 100))%")
 
-            Image(systemName: "speaker.wave.3.fill")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .frame(width: 14)
+            Image(systemName: volumeIcon)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary.opacity(0.85))
+                .frame(width: 16, height: 16)
+                .contentTransition(.symbolEffect(.replace))
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    sliderDismissTask?.cancel()
+                    animatePanel { showVolumeSlider = false }
+                }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background {
+            Capsule()
+                .fill(Color.primary.opacity(0.08))
+        }
+        .overlay {
+            Capsule()
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
         }
     }
 
@@ -370,51 +446,52 @@ struct BottomPlayerBar: View {
     // MARK: - Secondary Actions
 
     private var secondaryActions: some View {
-        HStack(spacing: 8) {
-            // Swap between icons and volume slider; volume button stays anchored on the right.
-            ZStack {
+        HStack(spacing: 10) {
+            // Icons collapse into an Apple Music–style volume capsule when the speaker is pressed.
+            ZStack(alignment: .trailing) {
                 secondaryIconsGroup
                     .opacity(showVolumeSlider ? 0 : 1)
                     .allowsHitTesting(!showVolumeSlider)
-                volumeSliderPanel
-                    .opacity(showVolumeSlider ? 1 : 0)
-                    .allowsHitTesting(showVolumeSlider)
-            }
-            .animation(.easeInOut(duration: 0.2), value: showVolumeSlider)
 
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showVolumeSlider.toggle()
-                }
                 if showVolumeSlider {
-                    scheduleSliderDismiss()
-                } else {
-                    sliderDismissTask?.cancel()
-                    sliderDismissTask = nil
+                    volumeSliderPanel
+                        .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .trailing)))
                 }
-            } label: {
-                Image(systemName: volumeIcon)
-                    .font(.system(size: 12))
-                    .foregroundStyle(showVolumeSlider ? Color.cassetteAccent : .primary.opacity(0.8))
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 16, height: 16)
             }
-            .buttonStyle(.plain)
+            .animation(reduceMotion ? .easeInOut(duration: 0.12) : .easeInOut(duration: 0.2), value: showVolumeSlider)
+
+            if !showVolumeSlider, !hidePeripheralControls {
+                Button {
+                    animatePanel { showVolumeSlider = true }
+                    scheduleSliderDismiss()
+                } label: {
+                    Image(systemName: volumeIcon)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.primary.opacity(0.85))
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Volume", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                .accessibilityValue("\(Int(localVolume * 100))%")
+                .transition(.opacity)
+            }
         }
     }
 
     private var secondaryIconsGroup: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: isNarrow ? 8 : 12) {
             Button {
-                UserDefaults.standard.set(true, forKey: "cassette.fullPlayerLastPanel")
-                NotificationCenter.default.post(name: .cassetteOpenFullPlayerLyrics, object: nil)
+                onLyricsTap?()
             } label: {
-                Image(systemName: "quote.bubble")
+                Image(systemName: "text.bubble")
                     .font(.system(size: 12))
-                    .foregroundStyle(.primary.opacity(0.8))
+                    .foregroundStyle(isLyricsPanelOpen ? Color.cassetteAccent : .primary.opacity(0.8))
             }
             .buttonStyle(.plain)
             .disabled(noTrack)
+            .accessibilityLabel(String(localized: "Lyrics", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            .accessibilityValue(isLyricsPanelOpen ? String(localized: "Open", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Closed", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
             Button {
                 showQueue.toggle()
@@ -424,13 +501,17 @@ struct BottomPlayerBar: View {
                     .foregroundStyle(showQueue ? Color.cassetteAccent : .primary.opacity(0.8))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(String(localized: "Queue", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             .popover(isPresented: $showQueue, arrowEdge: .top) {
                 QueueView()
                     .frame(width: 400, height: 600)
             }
 
-            AirPlayButton()
-                .frame(width: 20, height: 20)
+            if !hidePeripheralControls {
+                AirPlayButton()
+                    .frame(width: 20, height: 20)
+                    .accessibilityLabel(String(localized: "Audio output", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            }
         }
     }
 
@@ -447,9 +528,11 @@ struct BottomPlayerBar: View {
     private func refreshDownloadState() async {
         guard let track = currentTrack, let container, let sid = serverId else {
             isDownloadedLocally = false
+            isDownloadingTrack = false
             return
         }
         isDownloadedLocally = await container.downloadService.isDownloaded(songId: track.id, serverId: sid)
+        isDownloadingTrack = await container.downloadService.isDownloading(songId: track.id, serverId: sid)
     }
 
     private func toggleFavorite() async {
@@ -468,9 +551,20 @@ struct BottomPlayerBar: View {
 
     private func toggleDownload() async {
         guard let track = currentTrack, let container, let sid = serverId else { return }
-        if isDownloadedLocally {
-            try? await container.downloadService.remove(songId: track.id, serverId: sid)
-            isDownloadedLocally = false
+        do {
+            if isDownloadedLocally {
+                try await container.downloadService.remove(songId: track.id, serverId: sid)
+                isDownloadedLocally = false
+            } else {
+                isDownloadingTrack = true
+                defer { isDownloadingTrack = false }
+                try await container.downloadService.download(song: track.asSong(), serverId: sid)
+                isDownloadedLocally = true
+                container.toastService.showConfirmation("Downloaded \(track.title)", coverArtId: track.coverArtId)
+            }
+        } catch {
+            Logger.ui.error("BottomPlayerBar: toggleDownload failed — \(error)")
+            container.toastService.showError(error.localizedDescription)
         }
     }
 
@@ -479,9 +573,17 @@ struct BottomPlayerBar: View {
         sliderDismissTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
+            animatePanel {
                 showVolumeSlider = false
             }
+        }
+    }
+
+    private func animatePanel(_ changes: () -> Void) {
+        if reduceMotion {
+            changes()
+        } else {
+            withAnimation(.easeInOut(duration: 0.2), changes)
         }
     }
 }

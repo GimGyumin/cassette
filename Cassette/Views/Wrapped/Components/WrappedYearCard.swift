@@ -20,17 +20,10 @@ struct WrappedYearCard: View {
         Group {
             if let pid = playlistId {
                 NavigationLink {
-                    #if os(macOS)
-                    PlaylistDetailMacOS(
-                        playlistId: pid,
-                        name: "Cassette Wrapped \(yearString)"
-                    )
-                    #else
                     PlaylistDetailView(
                         playlistId: pid,
                         name: "Cassette Wrapped \(yearString)"
                     )
-                    #endif
                 } label: {
                     cardContent
                 }
@@ -96,7 +89,7 @@ struct WrappedYearCard: View {
     @ViewBuilder
     private var subtitleView: some View {
         if playlistId == nil {
-            Text("Aucune playlist générée pour le moment")
+            Text(String(localized: "No playlist generated yet", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         } else if let first = firstTrack, let last = lastTrack, first.trackId != last.trackId {
             Text("Started with \(first.title) · Ended with \(last.title)")
         } else if let first = firstTrack {

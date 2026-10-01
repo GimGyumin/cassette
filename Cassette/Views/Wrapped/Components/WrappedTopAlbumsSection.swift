@@ -30,13 +30,14 @@ struct WrappedTopAlbumsSection: View {
             } else {
                 LazyVGrid(columns: columns, spacing: CassetteSpacing.m) {
                     ForEach(albums.prefix(6)) { album in
-                        NavigationLink {
-                            #if os(macOS)
-                            AlbumDetailMacOS(albumId: album.albumId, albumName: album.title, coverArtId: album.albumId)
-                            #else
-                            AlbumDetailView(albumId: album.albumId, albumName: album.title, coverArtId: album.albumId)
-                            #endif
-                        } label: {
+                        NavigationLink(
+                            value: HomeDestination.albumById(
+                                id: album.albumId,
+                                name: album.title,
+                                subtitle: album.artistName,
+                                coverArtId: album.albumId
+                            )
+                        ) {
                             albumCard(album)
                         }
                         .buttonStyle(.plain)

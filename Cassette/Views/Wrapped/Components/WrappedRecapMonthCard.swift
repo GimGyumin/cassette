@@ -48,9 +48,7 @@ struct WrappedRecapMonthCard: View {
     var body: some View {
         let bodyStart = CFAbsoluteTimeGetCurrent()
         let _ = { let e = Int((CFAbsoluteTimeGetCurrent() - bodyStart) * 1000); if e > 5 { Logger.ui.warning("[BODY-SLOW] WrappedRecapMonthCard \(e)ms") } }()
-        NavigationLink {
-            WrappedView(initialPeriod: period)
-        } label: {
+        NavigationLink(value: HomeDestination.replayPeriod(period)) {
             MeshGradientBackground(palette: WrappedYearPalette.colors(for: year), animated: !reduceMotion)
                 .frame(width: 140, height: 160)
                 .overlay { cardOverlay }

@@ -58,7 +58,12 @@ struct PlaylistCoverManager {
         // `{id}@{tier}` (never the untagged `{id}`, which is swept on launch).
         await artworkImageCache.invalidate(for: playlistId)
         for tier in [ArtworkTier.thumb, .hero] {
-            await downloadService.persistCover(data, forId: "\(playlistId)@\(tier.rawValue)")
+            let jpeg = await Task.detached(priority: .utility) {
+                ArtworkImageCache.jpegDataForTier(from: data, tier: tier)
+            }.value
+            if let jpeg {
+                await downloadService.persistCover(jpeg, forId: "\(playlistId)@\(tier.rawValue)")
+            }
         }
         // The SINGLE cross-surface refresh signal — a UserDefaults-backed global counter every CoverArtView
         // observes via @AppStorage (reliable; the @Environment @Observable didn't re-fire). Bumping here (the
@@ -72,6 +77,9 @@ struct PlaylistCoverManager {
               let baseURL = URL(string: snapshot.baseURL) else { return }
         do {
             let creds = try await serverService.activeCredentials()
+            if try await JellyfinPlaylistArtwork.uploadIfPasswordless(
+                credentials: creds, baseURL: baseURL, playlistID: playlistId, data: jpegData
+            ) { return }
             let api = NavidromeNativeAPI(transport: CustomHeadersTransport(headers: creds.customHeaders))
             let token = try await api.authenticate(
                 baseURL: baseURL,

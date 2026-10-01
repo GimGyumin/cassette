@@ -3,55 +3,57 @@
 // Licensed under the Mozilla Public License 2.0.
 // See LICENSE file in the project root for full license information.
 
-#if os(iOS)
 import SwiftUI
 import WidgetKit
 
+/// Apple Music–style small Now Playing: edge-to-edge artwork, bottom fade, title + circular control.
 struct NowPlayingSmallView: View {
     let entry: NowPlayingEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                WidgetCoverArtView(image: entry.coverImage)
-                    .frame(width: 65, height: 65)
+        ZStack(alignment: .bottomLeading) {
+            WidgetCoverArtView(image: entry.coverImage, cornerRadius: 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
 
-                Spacer()
+            LinearGradient(
+                colors: [
+                    .clear,
+                    .black.opacity(0.15),
+                    .black.opacity(0.72)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
 
-                Image(systemName: "music.note")
-                    .font(.title3)
-                    .foregroundStyle(.white.opacity(0.9))
-            }
+            VStack(alignment: .leading, spacing: 8) {
+                Spacer(minLength: 0)
 
-            Spacer(minLength: 0)
-
-            VStack(alignment: .leading, spacing: 2) {
                 if let track = entry.track {
                     Text(track.title)
-                        .font(.system(.subheadline, design: .rounded, weight: .bold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
-                        .truncationMode(.tail)
-
                     Text(track.artist)
-                        .font(.system(.caption, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.8))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.78))
                         .lineLimit(1)
-                        .truncationMode(.tail)
                 } else {
-                    Text("Ouvre Cassette")
-                        .font(.system(.subheadline, design: .rounded, weight: .bold))
+                    Text("Not Playing")
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white)
-                        .lineLimit(1)
                 }
 
-                WidgetPlayButton(isPlaying: entry.isPlaying)
-                    .padding(.top, 6)
+                HStack {
+                    Spacer(minLength: 0)
+                    WidgetPlayButton(isPlaying: entry.isPlaying, compact: true)
+                        .environment(\.colorScheme, .dark)
+                }
             }
+            .padding(12)
         }
         .containerBackground(for: .widget) {
-            WidgetReadableBackground(dominantColor: entry.dominantColor)
+            Color.black
         }
     }
 }
-#endif

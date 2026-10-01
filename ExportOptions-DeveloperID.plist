@@ -5,16 +5,16 @@
     <key>method</key>
     <string>developer-id</string>
     <key>teamID</key>
-    <string>LK2358MPL8</string>
+    <string>ZKZ9SNL8LZ</string>
     <key>signingStyle</key>
     <string>manual</string>
     <key>signingCertificate</key>
     <string>Developer ID Application</string>
     <key>provisioningProfiles</key>
     <dict>
-        <key>fr.mathieu-dubart.Cassette</key>
+        <key>com.kyumin.Music.Cassette</key>
         <string>Cassette Developer ID</string>
-        <key>fr.mathieu-dubart.Cassette.widgets</key>
+        <key>com.kyumin.Music.Cassette.CassetteWidgetsExtension</key>
         <string>Cassette Widgets Developer ID</string>
     </dict>
 </dict>

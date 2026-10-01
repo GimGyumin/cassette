@@ -5,8 +5,8 @@
 
 import SwiftUI
 
-/// Single lyric line with Apple Music-style tiered blur, opacity, and scale.
-/// Distance from `currentIndex` drives how much each visual effect is applied.
+/// Lyric line emphasis via opacity/scale only — no `.blur`, which frosted the bottom of the
+/// lyrics viewport (right above the translate / scrubber chrome) into an unreadable band.
 struct LyricsLineView: View {
     let value: String
     let index: Int
@@ -20,23 +20,13 @@ struct LyricsLineView: View {
         return abs(index - currentIndex)
     }
 
-    private var blurRadius: CGFloat {
-        guard isSynced, currentIndex != nil else { return 0 }
-        switch distance {
-        case 0: return 0
-        case 1: return 1.5
-        case 2: return 3.5
-        default: return 6
-        }
-    }
-
     private var opacity: Double {
         guard isSynced, currentIndex != nil else { return 1.0 }
         switch distance {
         case 0: return 1.0
-        case 1: return 0.7
-        case 2: return 0.4
-        default: return 0.25
+        case 1: return 0.82
+        case 2: return 0.62
+        default: return 0.48
         }
     }
 
@@ -55,9 +45,10 @@ struct LyricsLineView: View {
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .foregroundStyle(.white.opacity(opacity))
-            .blur(radius: blurRadius)
+            // Soft shadow keeps white lyrics readable on bright / washed cover themes.
+            .shadow(color: .black.opacity(distance == 0 ? 0.55 : 0.35), radius: distance == 0 ? 3 : 2, y: 1)
             .scaleEffect(scale, anchor: .leading)
-            .animation(.easeInOut(duration: 0.25), value: currentIndex)
+            .animation(CassetteAnimation.lyricLine, value: currentIndex)
             .contentShape(Rectangle())
             .onTapGesture {
                 if isTappable { onTap() }

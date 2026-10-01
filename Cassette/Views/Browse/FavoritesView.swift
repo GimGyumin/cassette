@@ -21,7 +21,7 @@ struct FavoritesView: View {
             }
         }
         .cassetteContentWidth()
-        .navigationTitle("Favorites")
+        .navigationTitle(String(localized: "Favorites", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         .navigationBarTitleDisplayModeInline()
         .onAppear {
             guard let svc = container?.libraryService else { return }
@@ -44,7 +44,7 @@ struct FavoritesView: View {
             )
         } else if isEmpty {
             EmptyStateView(
-                systemImage: "heart",
+                systemImage: "star",
                 title: "No favorites yet",
                 subtitle: "Songs, albums, and artists you favorite will appear here."
             )
@@ -57,6 +57,7 @@ struct FavoritesView: View {
             }
             .listStyle(.plain)
             .refreshable { await vm.load() }
+            .miniPlayerBottomMargin()
             .sheet(item: $songToAddToPlaylist) { song in
                 AddToPlaylistSheet(song: song)
             }
@@ -75,9 +76,9 @@ struct FavoritesView: View {
                     } label: {
                         Label("Play", systemImage: "play.fill")
                             .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.cassetteAccent)
+                    .cassetteAccentGlassButton()
 
                     Button {
                         Task {
@@ -99,17 +100,20 @@ struct FavoritesView: View {
                 .padding(.vertical, 4)
 
                 ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
-                    SongRow(song: song, index: index + 1, showCoverArt: true, isFavorite: true, onAddToPlaylist: { s in songToAddToPlaylist = s })
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            Task {
-                                do {
-                                    try await container?.playerService.play(tracks: songs, startIndex: index)
-                                } catch {
-                                    Logger.player.error("[PLAYBACK] play failed: \(error, privacy: .public)")
-                                }
+                    Button {
+                        Task {
+                            do {
+                                try await container?.playerService.play(tracks: songs, startIndex: index)
+                            } catch {
+                                Logger.player.error("[PLAYBACK] play failed: \(error, privacy: .public)")
                             }
                         }
+                    } label: {
+                        SongRow(song: song, index: index + 1, showCoverArt: true, isFavorite: true, onAddToPlaylist: { s in songToAddToPlaylist = s })
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 }
             }
         }
@@ -142,6 +146,7 @@ struct FavoritesView: View {
                     NavigationLink(value: HomeDestination.artist(artist)) {
                         ArtistRow(artist: artist)
                     }
+                    .artistLongPressMenu(artist)
                 }
             }
         }

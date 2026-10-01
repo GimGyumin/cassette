@@ -11,26 +11,39 @@ import OSLog
 actor FavoritesService: FavoritesServiceProtocol {
     private let libraryService: any LibraryServiceProtocol
     private nonisolated let serverState: ServerState
+    private nonisolated let mediaIdentityService: MediaIdentityService
     nonisolated let modelContainer: ModelContainer
     private lazy var backgroundContext: ModelContext = ModelContext(modelContainer)
 
-    init(libraryService: any LibraryServiceProtocol, serverState: ServerState, modelContainer: ModelContainer) {
+    init(
+        libraryService: any LibraryServiceProtocol,
+        serverState: ServerState,
+        modelContainer: ModelContainer,
+        mediaIdentityService: MediaIdentityService
+    ) {
         self.libraryService = libraryService
         self.serverState = serverState
         self.modelContainer = modelContainer
+        self.mediaIdentityService = mediaIdentityService
     }
 
     // MARK: - Query
 
     // Safe: only called from @MainActor views; assumeIsolated matches all real call sites.
     nonisolated func isFavorite(itemType: FavoriteType, itemId: String) -> Bool {
-        let compositeId = "\(itemType.rawValue):\(itemId)"
-        var descriptor = FetchDescriptor<FavoriteRecord>(
-            predicate: #Predicate<FavoriteRecord> { $0.id == compositeId }
-        )
-        descriptor.fetchLimit = 1
         return MainActor.assumeIsolated {
-            (try? modelContainer.mainContext.fetchCount(descriptor)) ?? 0 > 0
+            guard let serverID = serverState.activeServer?.id else { return false }
+            let candidates = Set(mediaIdentityService.candidateRemoteIDs(
+                for: itemId,
+                serverId: serverID,
+                entityType: itemType.entityType
+            ))
+            let sid = serverID
+            let type = itemType.rawValue
+            let records = (try? modelContainer.mainContext.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
+                $0.serverId == sid && $0.itemType == type
+            }))) ?? []
+            return records.contains { candidates.contains($0.itemId) }
         }
     }
 
@@ -38,18 +51,31 @@ actor FavoritesService: FavoritesServiceProtocol {
 
     func star(itemType: FavoriteType, itemId: String) async throws {
         guard let serverId = await MainActor.run(body: { serverState.activeServer?.id }) else { return }
+        let currentID = await MainActor.run {
+            mediaIdentityService.resolveCurrentID(itemId, serverId: serverId, entityType: itemType.entityType)
+        }
 
-        let record = FavoriteRecord(itemType: itemType, itemId: itemId, starredDate: Date(), serverId: serverId)
+        let type = itemType.rawValue
+        let existing = (try? backgroundContext.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
+            $0.serverId == serverId && $0.itemType == type
+        }))) ?? []
+        let candidateIDs = await MainActor.run {
+            Set(mediaIdentityService.candidateRemoteIDs(for: currentID, serverId: serverId, entityType: itemType.entityType))
+        }
+        if existing.contains(where: { candidateIDs.contains($0.itemId) }) { return }
+
+        let record = FavoriteRecord(itemType: itemType, itemId: currentID, starredDate: Date(), serverId: serverId)
         backgroundContext.insert(record)
         try? backgroundContext.save()
 
         do {
             switch itemType {
-            case .song:   try await libraryService.star(songIds: [itemId], albumIds: [], artistIds: [])
-            case .album:  try await libraryService.star(songIds: [], albumIds: [itemId], artistIds: [])
-            case .artist: try await libraryService.star(songIds: [], albumIds: [], artistIds: [itemId])
+            case .song:   try await libraryService.star(songIds: [currentID], albumIds: [], artistIds: [])
+            case .album:  try await libraryService.star(songIds: [], albumIds: [currentID], artistIds: [])
+            case .artist: try await libraryService.star(songIds: [], albumIds: [], artistIds: [currentID])
             }
             Logger.favorites.info("Starred \(itemType.rawValue, privacy: .public) \(itemId, privacy: .public)")
+            NotificationCenter.default.post(name: .cassetteFavoritesChanged, object: nil)
         } catch {
             backgroundContext.delete(record)
             try? backgroundContext.save()
@@ -60,12 +86,19 @@ actor FavoritesService: FavoritesServiceProtocol {
     // MARK: - Unstar
 
     func unstar(itemType: FavoriteType, itemId: String) async throws {
-        let compositeId = "\(itemType.rawValue):\(itemId)"
-        var descriptor = FetchDescriptor<FavoriteRecord>(
-            predicate: #Predicate<FavoriteRecord> { $0.id == compositeId }
-        )
-        descriptor.fetchLimit = 1
-        guard let record = try? backgroundContext.fetch(descriptor).first else { return }
+        guard let serverID = await MainActor.run(body: { serverState.activeServer?.id }) else { return }
+        let currentID = await MainActor.run {
+            mediaIdentityService.resolveCurrentID(itemId, serverId: serverID, entityType: itemType.entityType)
+        }
+        let candidates = await MainActor.run {
+            Set(mediaIdentityService.candidateRemoteIDs(for: currentID, serverId: serverID, entityType: itemType.entityType))
+        }
+        let sid = serverID
+        let type = itemType.rawValue
+        let records = (try? backgroundContext.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
+            $0.serverId == sid && $0.itemType == type
+        }))) ?? []
+        guard let record = records.first(where: { candidates.contains($0.itemId) }) else { return }
 
         let capturedServerId = record.serverId
         let capturedDate = record.starredDate
@@ -74,11 +107,12 @@ actor FavoritesService: FavoritesServiceProtocol {
 
         do {
             switch itemType {
-            case .song:   try await libraryService.unstar(songIds: [itemId], albumIds: [], artistIds: [])
-            case .album:  try await libraryService.unstar(songIds: [], albumIds: [itemId], artistIds: [])
-            case .artist: try await libraryService.unstar(songIds: [], albumIds: [], artistIds: [itemId])
+            case .song:   try await libraryService.unstar(songIds: [currentID], albumIds: [], artistIds: [])
+            case .album:  try await libraryService.unstar(songIds: [], albumIds: [currentID], artistIds: [])
+            case .artist: try await libraryService.unstar(songIds: [], albumIds: [], artistIds: [currentID])
             }
             Logger.favorites.info("Unstarred \(itemType.rawValue, privacy: .public) \(itemId, privacy: .public)")
+            NotificationCenter.default.post(name: .cassetteFavoritesChanged, object: nil)
         } catch {
             let restored = FavoriteRecord(itemType: itemType, itemId: itemId, starredDate: capturedDate, serverId: capturedServerId)
             backgroundContext.insert(restored)
@@ -98,31 +132,55 @@ actor FavoritesService: FavoritesServiceProtocol {
             predicate: #Predicate<FavoriteRecord> { $0.serverId == serverId }
         )
         let existing = (try? backgroundContext.fetch(descriptor)) ?? []
-        let existingIds = Set(existing.map(\.id))
-
-        var newIds = Set<String>()
+        var retainedRecordIDs = Set<String>()
         var added = 0
         var unchanged = 0
+        let incoming: [(FavoriteType, String)] =
+            (starred.song ?? []).map { (.song, $0.id) }
+            + (starred.album ?? []).map { (.album, $0.id) }
+            + (starred.artist ?? []).map { (.artist, $0.id) }
 
-        func upsert(type: FavoriteType, itemId: String) {
-            let compositeId = "\(type.rawValue):\(itemId)"
-            newIds.insert(compositeId)
-            if existingIds.contains(compositeId) {
+        for (type, remoteID) in incoming {
+            let candidateIDs = await MainActor.run {
+                Set(mediaIdentityService.candidateRemoteIDs(
+                    for: remoteID,
+                    serverId: serverId,
+                    entityType: type.entityType
+                ))
+            }
+            if let record = existing.first(where: {
+                $0.itemType == type.rawValue && candidateIDs.contains($0.itemId)
+            }) {
+                retainedRecordIDs.insert(record.id)
                 unchanged += 1
             } else {
-                backgroundContext.insert(FavoriteRecord(itemType: type, itemId: itemId, starredDate: Date(), serverId: serverId))
+                let record = FavoriteRecord(
+                    itemType: type,
+                    itemId: remoteID,
+                    starredDate: Date(),
+                    serverId: serverId
+                )
+                backgroundContext.insert(record)
+                retainedRecordIDs.insert(record.id)
                 added += 1
             }
         }
 
-        for song in starred.song ?? []     { upsert(type: .song,   itemId: song.id) }
-        for album in starred.album ?? []   { upsert(type: .album,  itemId: album.id) }
-        for artist in starred.artist ?? [] { upsert(type: .artist, itemId: artist.id) }
-
-        let toRemove = existing.filter { !newIds.contains($0.id) }
+        let toRemove = existing.filter { !retainedRecordIDs.contains($0.id) }
         toRemove.forEach { backgroundContext.delete($0) }
 
         try? backgroundContext.save()
         Logger.favorites.info("Favorites synced: \(added, privacy: .public) added, \(toRemove.count, privacy: .public) removed, \(unchanged, privacy: .public) unchanged")
+        NotificationCenter.default.post(name: .cassetteFavoritesChanged, object: nil)
+    }
+}
+
+private extension FavoriteType {
+    var entityType: RemoteMediaEntityType {
+        switch self {
+        case .song: .song
+        case .album: .album
+        case .artist: .artist
+        }
     }
 }

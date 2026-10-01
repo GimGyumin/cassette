@@ -15,6 +15,10 @@ import UniformTypeIdentifiers
 /// list is read-only here (reorder + multi-select remove land in Phase B). Cross-platform-ready; only the
 /// photo-picker plumbing and the bottom-bar placement are iOS-gated.
 struct EditPlaylistSheet: View {
+    private enum Field: Hashable {
+        case name, comment
+    }
+
     let playlistId: String
     let serverId: UUID
     let currentName: String
@@ -45,6 +49,11 @@ struct EditPlaylistSheet: View {
     @State private var showDeleteConfirm = false
     @State private var showAddMusic = false
     @State private var loaded = false
+    @FocusState private var focusedField: Field?
+    /// True while typing / briefly after blur so keyboard dismiss and carousel remount don't overlap.
+    @State private var coverSuspendedForKeyboard = false
+    /// Delay first carousel paint (same as create sheet) so open + keyboard don't starve audio.
+    @State private var showCoverCarousel = false
 
     #if os(iOS)
     @State private var pendingImage: UIImage?
@@ -55,11 +64,13 @@ struct EditPlaylistSheet: View {
     @State private var imageToCrop: CroppableImage?
     #endif
 
+    private var showsLiveCoverCarousel: Bool { showCoverCarousel && !coverSuspendedForKeyboard }
+
     var body: some View {
         NavigationStack {
             List(selection: $selectedSongIds) {
                 Section {
-                    coverCarousel
+                    coverSection
                         .listRowInsets(EdgeInsets(top: CassetteSpacing.s, leading: 0, bottom: CassetteSpacing.s, trailing: 0))
                         .listRowSeparator(.hidden)
                 }
@@ -69,10 +80,12 @@ struct EditPlaylistSheet: View {
                     TextField("Playlist Title", text: $editName)
                         .font(.system(.title2, design: .rounded, weight: .semibold))
                         .multilineTextAlignment(.center)
+                        .focused($focusedField, equals: .name)
                         .padding(.vertical, CassetteSpacing.xs)
                     TextField("Description", text: $editComment, axis: .vertical)
                         .multilineTextAlignment(.center)
                         .lineLimit(1...4)
+                        .focused($focusedField, equals: .comment)
                 }
                 .listRowSeparator(.hidden)
 
@@ -158,6 +171,20 @@ struct EditPlaylistSheet: View {
                 editComment = currentComment
                 editSongs = songs
                 loadCurrentChoice()
+                try? await Task.sleep(for: .milliseconds(450))
+                guard !Task.isCancelled else { return }
+                showCoverCarousel = true
+            }
+            .onChange(of: focusedField) { _, field in
+                if field != nil {
+                    coverSuspendedForKeyboard = true
+                } else {
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(400))
+                        guard focusedField == nil else { return }
+                        coverSuspendedForKeyboard = false
+                    }
+                }
             }
         }
     }
@@ -225,10 +252,31 @@ struct EditPlaylistSheet: View {
         selectedSongIds.removeAll()
     }
 
-    /// Edit-flow cover carousel (Apple-Music direction): leading "Current" card + photo + gradients, live title.
+    /// Live carousel only when the keyboard is down — keyboard + cover scroll/gradients underrun audio.
+    @ViewBuilder
+    private var coverSection: some View {
+        if showsLiveCoverCarousel {
+            coverCarousel
+        } else {
+            RoundedRectangle(cornerRadius: CassetteCornerRadius.large, style: .continuous)
+                .fill(Color.secondary.opacity(0.10))
+                .frame(maxWidth: 280)
+                .aspectRatio(1, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                }
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// Edit-flow cover carousel. Title frozen to current/committed name while picking — never
+    /// rebound live to the title field (that rebuilt every card on each keystroke).
     private var coverCarousel: some View {
         PlaylistCoverCarousel(
-            title: editName,
+            title: currentName,
             selectedGradient: selectedGradient,
             isPhotoSelected: photoIsCover,
             photoPreview: photoPreviewImage,

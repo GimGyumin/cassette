@@ -30,11 +30,45 @@ final class ServerState {
     var servers: [ServerSnapshot] = []
     var activeServer: ServerSnapshot?
     var isConnected: Bool = false
+    /// False when the **active server** cannot be reached: a ping timed out, the host refused the
+    /// connection, or the device has no route at all. Driven by `ServerReachabilityMonitor`, which
+    /// also clears it again within seconds of the server answering.
+    ///
+    /// Deliberately separate from `isOnline`: a Wi-Fi link whose upstream is down still reports
+    /// "online" to `NWPathMonitor`, and a server that is restarting answers nothing while the device
+    /// is perfectly connected. Server-backed tabs read this one; Library, Downloads and Search keep
+    /// working from the local index and the download store regardless of its value.
+    var isServerReachable: Bool = true
     /// Updated by NetworkMonitor. False when NWPathMonitor reports no connectivity.
     var isOnline: Bool = true
     /// Updated by NetworkMonitor. True when the connection is metered (cellular, hotspot).
     /// Default false — optimistic until the first NWPath update corrects it on launch (~100ms).
     var isExpensive: Bool = false
+    /// Updated by NetworkMonitor. True when the path is constrained — iOS Low Data Mode, or a
+    /// link the user marked as metered even though it is Wi-Fi. Unlike `isExpensive` this also
+    /// covers throttled Wi-Fi, which is why background transfers key off it.
+    var isNetworkConstrained: Bool = false
+    /// Last measured throughput (bytes/s), published by `MediaResolver` after `NetworkSpeedProbe`
+    /// samples the link. Lets a *throttled* Wi-Fi link — which iOS reports as unlimited — stop
+    /// background transfers and adapt Automatic quality, the way cellular already does.
+    var measuredBytesPerSecond: Double?
+    /// Single source of truth for "may this app spend bandwidth in the background?".
+    ///
+    /// Metered, constrained **or measured-slow** counts as limited. Cache writes, gapless
+    /// pre-buffering, crossfade prefetch, automatic downloads, speculative artwork and cover
+    /// preloading all read this instead of `isExpensive` so a slow link cannot be mistaken for an
+    /// unmetered one and starve the live stream.
+    var isLimitedNetwork: Bool {
+        NetworkCostPolicy.isLimited(
+            isExpensive: isExpensive,
+            isConstrained: isNetworkConstrained,
+            measuredBytesPerSecond: measuredBytesPerSecond
+        )
+    }
     // Prevents OnboardingView flash before persisted state is restored on launch.
     var isLoadingPersistedState: Bool = true
+    /// Blocks sign-in while the previous account's local data is being removed.
+    var isSigningOut = false
+    /// True when an active server exists but its Keychain password is missing.
+    var needsCredentialReentry: Bool = false
 }

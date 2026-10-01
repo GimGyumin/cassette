@@ -20,12 +20,18 @@ final class AddToPlaylistViewModel {
     private(set) var isLoading = false
     private(set) var addingToPlaylistIds: Set<String> = []
 
-    private let song: DisplayableSong
+    private let songs: [DisplayableSong]
     private let playlistService: any PlaylistServiceProtocol
     private let toastService: ToastService
 
     init(song: DisplayableSong, playlistService: any PlaylistServiceProtocol, toastService: ToastService) {
-        self.song = song
+        self.songs = [song]
+        self.playlistService = playlistService
+        self.toastService = toastService
+    }
+
+    init(songs: [DisplayableSong], playlistService: any PlaylistServiceProtocol, toastService: ToastService) {
+        self.songs = songs
         self.playlistService = playlistService
         self.toastService = toastService
     }
@@ -51,14 +57,16 @@ final class AddToPlaylistViewModel {
 
         do {
             let detail = try await playlistService.getPlaylist(id: playlist.id)
-            let alreadyIn = detail.entry?.contains { $0.id == song.id } ?? false
-            if alreadyIn { return .duplicate }
+            let existingIDs = Set((detail.entry ?? []).map(\.id))
+            let missingSongs = songs.filter { !existingIDs.contains($0.id) }
+            if missingSongs.isEmpty { return .duplicate }
+            return await performAdd(to: playlist, songs: missingSongs)
         } catch {
             Logger.playlist.error("AddToPlaylistViewModel: duplicate check failed for playlist \(playlist.id): \(error)")
             // Fallback: proceed with add
         }
 
-        return await performAdd(to: playlist)
+        return await performAdd(to: playlist, songs: songs)
     }
 
     /// Adds without a duplicate check — used after the user confirms "Add Anyway",
@@ -68,7 +76,7 @@ final class AddToPlaylistViewModel {
         guard !addingToPlaylistIds.contains(playlist.id) else { return false }
         addingToPlaylistIds.insert(playlist.id)
         defer { addingToPlaylistIds.remove(playlist.id) }
-        return await performAdd(to: playlist) == .added
+        return await performAdd(to: playlist, songs: songs) == .added
     }
 
     func handleNewPlaylistCreated(_ created: PlaylistWithSongs) async -> Bool {
@@ -90,57 +98,27 @@ final class AddToPlaylistViewModel {
 
     // MARK: - Private
 
-    private func performAdd(to playlist: Playlist) async -> AddToPlaylistResult {
-        let songId = song.id
-        let songObj = song.asSong()
+    private func performAdd(
+        to playlist: Playlist,
+        songs songsToAdd: [DisplayableSong]
+    ) async -> AddToPlaylistResult {
+        guard !songsToAdd.isEmpty else { return .failed }
         do {
-            try await playlistService.addTracks(playlistId: playlist.id, songs: [songObj])
+            try await playlistService.addTracks(
+                playlistId: playlist.id,
+                songs: songsToAdd.map { $0.asSong() }
+            )
             toastService.showConfirmation(
-                "1 song added",
+                String(localized: "\(songsToAdd.count) songs added", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
                 subtitle: playlist.name,
                 coverArtId: playlist.coverArt,
                 action: .navigateToPlaylist(id: playlist.id, name: playlist.name, coverArtId: playlist.coverArt)
             )
             return .added
         } catch {
-            Logger.playlist.error("AddToPlaylistViewModel: failed to add song \(songId) to playlist \(playlist.id): \(error)")
+            Logger.playlist.error("AddToPlaylistViewModel: failed to add \(songsToAdd.count) song(s) to playlist \(playlist.id): \(error)")
             toastService.showError("Failed to add to \(playlist.name)")
             return .failed
         }
-    }
-}
-
-private extension DisplayableSong {
-    func asSong() -> Song {
-        Song(
-            id: id,
-            title: title,
-            parent: nil,
-            isDir: false,
-            album: albumName,
-            artist: artist,
-            track: trackNumber,
-            year: nil,
-            genre: nil,
-            coverArt: coverArtId,
-            size: nil,
-            contentType: nil,
-            suffix: audioFormat?.lowercased(),
-            transcodedContentType: nil,
-            transcodedSuffix: nil,
-            duration: duration > 0 ? Int(duration) : nil,
-            bitRate: nil,
-            path: nil,
-            isVideo: false,
-            userRating: nil,
-            averageRating: nil,
-            playCount: nil,
-            discNumber: nil,
-            created: nil,
-            starred: nil,
-            albumId: nil,
-            artistId: nil,
-            type: nil
-        )
     }
 }

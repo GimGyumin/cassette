@@ -1,0 +1,269 @@
+// Cassette — Music client for Subsonic/OpenSubsonic servers
+// Copyright (C) 2026 Mathieu Dubart
+// Licensed under the Mozilla Public License 2.0.
+
+import SwiftUI
+import SwiftSonic
+
+/// Apple Music–style word-by-word TTML karaoke with left-to-right mask fill.
+struct LyricWordKaraokeLine: View {
+    var words: [LyricDisplayWord] = []
+    var cueLine: CueLine? = nil
+    let adjustedMs: Int
+    var nextLineStartMs: Int? = nil
+    let fontSize: CGFloat
+    var isSecondary: Bool = false
+    var textAlignment: TextAlignment = .leading
+    var reduceMotion: Bool = false
+
+    private var resolved: [LyricDisplayWord] {
+        if !words.isEmpty { return words }
+        guard let cl = cueLine else { return [] }
+        return Self.displayWords(from: cl)
+    }
+    private var mw: [LyricDisplayWord] {
+        let m = resolved.filter { !$0.isBackground }
+        if m.isEmpty, isSecondary { return resolved }
+        return m
+    }
+    private var bw: [LyricDisplayWord] { isSecondary ? [] : resolved.filter(\.isBackground) }
+    private var mi: Int? { idx(in: mw) }
+    private var bi: Int? {
+        if let c = bClip, adjustedMs > c { return nil }
+        return idx(in: bw)
+    }
+    private var bClip: Int? {
+        let e = bw.map(\.endMs).max()
+        guard let n = nextLineStartMs else { return e }
+        return e.map { min($0, n) } ?? n
+    }
+    private var bVis: Bool {
+        guard let f = bw.first, adjustedMs >= f.startMs else { return false }
+        if let c = bClip, adjustedMs > c { return false }
+        return true
+    }
+    private var horizontalAlignment: HorizontalAlignment {
+        switch textAlignment {
+        case .center: return .center
+        case .trailing: return .trailing
+        default: return .leading
+        }
+    }
+    private var frameAlignment: Alignment {
+        switch textAlignment {
+        case .center: return .center
+        case .trailing: return .trailing
+        default: return .leading
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: horizontalAlignment, spacing: 6) {
+            if !mw.isEmpty { KaraokeRow(words: mw, activeIdx: mi, ms: adjustedMs, fs: fontSize, sec: isSecondary, align: textAlignment, rm: reduceMotion) }
+            // Background (x-bg) words are rendered as a Dynamic Lyric Insertion flow
+            // block below the translation line in LyricsView — never inline here.
+            // This prevents the chorus text from being drawn inside the main lyric row.
+        }
+        .frame(maxWidth: .infinity, alignment: frameAlignment)
+    }
+
+    // helpers
+    private func idx(in wds: [LyricDisplayWord]) -> Int? {
+        var found: Int?
+        for (i, w) in wds.enumerated() { if w.startMs <= adjustedMs { found = i } else { break } }
+        return found
+    }
+    private static func displayWords(from cl: CueLine) -> [LyricDisplayWord] {
+        var r: [LyricDisplayWord] = []; var ip = false
+        for c in cl.cue {
+            let t = c.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !ip, t.contains("(") { ip = true }
+            r.append(LyricDisplayWord(text: c.value, startMs: c.start, endMs: c.end ?? c.start, role: ip ? .background : .main))
+            if ip, t.contains(")") { ip = false }
+        }
+        return r
+    }
+}
+
+// ── per-word view ──
+
+private struct KaraokeWord: View {
+    let word: LyricDisplayWord
+    let idx: Int
+    let activeIdx: Int?
+    let all: [LyricDisplayWord]
+    let ms: Int
+    let fs: CGFloat
+    let sec: Bool
+    let rm: Bool
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            // dim base — always visible
+            Text(verbatim: displayStr)
+                .font(font)
+                .foregroundStyle(Color.white.opacity(dimOpacity))
+            // bright fill — masked left→right
+            if showMask {
+                Text(verbatim: displayStr)
+                    .font(font)
+                    .foregroundStyle(Color.white.opacity(brightOpacity))
+                    .mask(alignment: .leading) {
+                        GeometryReader { geo in
+                            Rectangle()
+                                .frame(width: geo.size.width * fillPct)
+                        }
+                    }
+            } else if showBright {
+                Text(verbatim: displayStr)
+                    .font(font)
+                    .foregroundStyle(Color.white.opacity(brightOpacity))
+            }
+        }
+        .scaleEffect(rm ? 1.0 : (isCurrent ? 1.06 : 1.0))
+        .animation(rm ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: isCurrent)
+        .fixedSize()
+    }
+
+    private var font: Font { .system(size: sec ? fs * 0.92 : fs, weight: sec ? .medium : .heavy) }
+    private var displayStr: String {
+        let raw = sec ? word.text.replacingOccurrences(of: "(", with: "").replacingOccurrences(of: ")", with: "") : word.text
+        if word.preservesSourceSpacing { return raw }
+        // Do not strip Korean word boundaries or insert spaces inside English syllables.
+        if all.contains(where: { Self.isCJK($0.text) || $0.text.contains(where: \.isWhitespace) }) { return raw }
+        guard idx != all.count - 1 else { return raw }
+        return raw.hasSuffix(" ") ? raw : raw + " "
+    }
+
+    private static func isCJK(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0xAC00...0xD7AF,   // Hangul Syllables
+                 0x1100...0x11FF,   // Hangul Jamo
+                 0x3130...0x318F,   // Hangul Compatibility Jamo
+                 0x4E00...0x9FFF,   // CJK Unified Ideographs
+                 0x3040...0x30FF,   // Hiragana + Katakana
+                 0x3400...0x4DBF,   // CJK Extension A
+                 0xF900...0xFAFF:   // CJK Compatibility Ideographs
+                return true
+            default:
+                return false
+            }
+        }
+    }
+    private var role: Int { // 0=upcoming, 1=current, 2=lit/sung
+        if sec {
+            if let a = activeIdx { return idx <= a ? (idx == a ? 1 : 2) : 0 }
+            return 0
+        }
+        guard let a = activeIdx else { return ms < (all.first?.startMs ?? 0) ? 0 : 2 }
+        if idx > a { return 0 }
+        return idx == a ? 1 : 2
+    }
+    private var isCurrent: Bool { role == 1 }
+    private var fillPct: Double {
+        guard role == 1 else { return role == 2 ? 1 : 0 }
+        let b = word.startMs
+        let e: Int
+        if word.endMs > b { e = word.endMs }
+        else if let nxt = all[safe: idx + 1], nxt.startMs > b { e = nxt.startMs }
+        else { e = b + 280 }
+        guard e > b else { return 1 }
+        return min(1, max(0, Double(ms - b) / Double(e - b)))
+    }
+    private var showMask: Bool { role == 1 && fillPct > 0 && fillPct < 1 && !rm }
+    private var showBright: Bool { (role == 1 && fillPct >= 1) || role == 2 }
+    private var dimOpacity: Double { role == 0 ? (sec ? 0.42 : 0.45) : (sec ? 0.55 : 0.45) }
+    private var brightOpacity: Double { sec ? 0.78 : 1.0 }
+}
+
+// ── word-wrapping row Layout ──
+
+private struct KaraokeRow: View {
+    let words: [LyricDisplayWord]
+    let activeIdx: Int?
+    let ms: Int
+    let fs: CGFloat
+    let sec: Bool
+    let align: TextAlignment
+    let rm: Bool
+
+    var body: some View {
+        WordWrapLayout(hAlign: align == .center ? .center : align == .trailing ? .trailing : .leading) {
+            ForEach(Array(words.enumerated()), id: \.0) { i, w in
+                KaraokeWord(word: w, idx: i, activeIdx: activeIdx, all: words, ms: ms, fs: fs, sec: sec, rm: rm)
+            }
+        }
+    }
+}
+
+// ── Bounded word-wrap Layout ──
+
+private struct WordWrapLayout: Layout {
+    let hAlign: HorizontalAlignment
+
+    private static let fallbackW: CGFloat = {
+        #if os(iOS)
+        // Last resort when the layout gets no width proposal. Capped at the macOS value: the raw
+        // screen width is the *device* width on iPad, so an unpainted lyrics pane in Split View could
+        // otherwise be laid out against a 1300 pt line.
+        min(UIScreen.main.bounds.width - 80, 600)
+        #else
+        600
+        #endif
+    }()
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let mw = maxW(proposal)
+        let rows = layOut(subviews, mw: mw)
+        return CGSize(width: min(rows.nw, mw), height: rows.th)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let mw = bounds.width > 0 ? bounds.width : maxW(proposal)
+        let rows = layOut(subviews, mw: mw)
+        var y = bounds.minY
+        for (ri, row) in rows.rows.enumerated() {
+            let rw = rows.rw[ri]
+            let x0: CGFloat = switch hAlign {
+            case .center: bounds.minX + (mw - rw) / 2
+            case .trailing: bounds.minX + (mw - rw)
+            default: bounds.minX
+            }
+            var x = x0
+            let h = rows.rh[ri]
+            for (sv, sz) in row {
+                sv.place(at: CGPoint(x: x, y: y + (h - sz.height) / 2), proposal: ProposedViewSize(sz))
+                x += sz.width
+            }
+            y += h
+        }
+    }
+
+    private func maxW(_ p: ProposedViewSize) -> CGFloat {
+        if let w = p.width, w.isFinite { return w }; return Self.fallbackW
+    }
+
+    private struct R { let rows: [[(LayoutSubview, CGSize)]]; let rw: [CGFloat]; let rh: [CGFloat]; let nw: CGFloat; let th: CGFloat }
+
+    private func layOut(_ svs: Subviews, mw: CGFloat) -> R {
+        var rows: [[(LayoutSubview, CGSize)]] = [[]]
+        var rw: [CGFloat] = [0]
+        var rh: [CGFloat] = [0]
+        for sv in svs {
+            let sz = sv.sizeThatFits(.unspecified)
+            let last = rows.count - 1
+            if rw[last] > 0, rw[last] + sz.width > mw { rows.append([]); rw.append(0); rh.append(0) }
+            rows[rows.count - 1].append((sv, sz))
+            rw[rw.count - 1] += sz.width
+            rh[rh.count - 1] = max(rh[rh.count - 1], sz.height)
+        }
+        var th: CGFloat = 0, nw: CGFloat = 0
+        for (i, h) in rh.enumerated() { nw = max(nw, rw[i]); th += h }
+        return R(rows: rows, rw: rw, rh: rh, nw: nw, th: th)
+    }
+}
+
+private extension Array {
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}

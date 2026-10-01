@@ -18,6 +18,16 @@ protocol ServerServiceProtocol: AnyObject, Sendable {
         customHeaders: [String: String]
     ) async throws
 
+    /// Adds a Navidrome server authenticated by the JWT returned from Jellyfin Quick Connect.
+    /// The token stays in Keychain and is sent through Navidrome's supported `jwt` parameter.
+    func addServerWithJellyfinToken(
+        displayName: String,
+        baseURL: String,
+        username: String,
+        jellyfinAccessToken: String,
+        customHeaders: [String: String]
+    ) async throws
+
     /// Atomically removes server from SwiftData and Keychain.
     /// Performs best-effort rollback if one step fails after the other succeeds.
     func removeServer(id: UUID) async throws
@@ -61,4 +71,7 @@ protocol ServerServiceProtocol: AnyObject, Sendable {
     /// Restores servers and activeServer from SwiftData + Keychain on app launch.
     /// Sets state.isLoadingPersistedState = false when complete (even on failure).
     func loadPersistedState() async
+
+    /// Warms Keychain + client construction so the first Home fetch isn't blocked on it.
+    func preWarmClient() async
 }

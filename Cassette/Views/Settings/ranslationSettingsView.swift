@@ -8,50 +8,69 @@ import SwiftUI
 struct TranslationSettingsView: View {
     @StateObject private var settings = LyricsTranslationSettings.shared
     
-    private let languages = [
-        ("ko", "한국어 (Korean)"),
-        ("en", "English (English)"),
-        ("ja", "日本語 (Japanese)"),
-        ("zh", "简体中文 (Simplified Chinese)"),
-        ("es", "Español (Spanish)"),
-        ("fr", "Français (French)")
-    ]
+    private let languageCodes = ["ko", "en", "ja", "zh", "es", "fr"]
+
+    private func languageLabel(_ code: String) -> String {
+        Locale.current.localizedString(forLanguageCode: code)?.capitalized ?? code
+    }
     
     var body: some View {
-        Section(header: Text("가사 번역 (Lyrics Translation)")) {
-            Toggle("실시간 번역 활성화", isOn: $settings.isTranslationEnabled)
-                .tint(.blue)
+        Section(header: Text(String(localized: "Lyrics", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))) {
+            Picker(selection: $settings.lyricsSource) {
+                ForEach(LyricsSourcePreference.allCases) { source in
+                    Text(source.title).tag(source)
+                }
+            } label: {
+                SettingsRowLabel(title: "Lyrics Source", systemImage: "text.quote", color: .pink)
+            }
+            .pickerStyle(.menu)
+
+            Text(settings.lyricsSource.detail)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            Toggle(isOn: $settings.isTranslationEnabled) {
+                SettingsRowLabel(title: "Enable live translation", systemImage: "character.bubble.fill", color: .teal)
+            }
             
             if settings.isTranslationEnabled {
-                Picker("번역 엔진 선택", selection: $settings.provider) {
+                Picker(selection: $settings.provider) {
                     ForEach(TranslationProvider.allCases) { provider in
                         Text(provider.rawValue).tag(provider)
                     }
+                } label: {
+                    SettingsRowLabel(title: "Translation Provider", systemImage: "cpu.fill", color: .gray)
                 }
                 .pickerStyle(.menu)
                 
-                Picker("번역 목표 언어", selection: $settings.targetLanguage) {
-                    ForEach(languages, id: \.0) { code, name in
-                        Text(name).tag(code)
+                Picker(selection: $settings.targetLanguage) {
+                    ForEach(languageCodes, id: \.self) { code in
+                        Text(languageLabel(code)).tag(code)
                     }
+                } label: {
+                    SettingsRowLabel(title: "Target Language", systemImage: "globe", color: .blue)
                 }
                 .pickerStyle(.menu)
                 
-                Toggle("곡 시작 시 자동 번역", isOn: $settings.isAutoTranslateEnabled)
-                    .tint(.blue)
+                Toggle(isOn: $settings.isAutoTranslateEnabled) {
+                    SettingsRowLabel(title: "Auto-Translate on Load", systemImage: "wand.and.stars", color: .orange)
+                }
                 
                 if settings.provider == .openAI {
-                    SecureField("OpenAI API Key 입력", text: $settings.openAIAPIKey)
-                        .disableAutocorrection(true)
+                    SettingsTextFieldRow(title: "OpenAI API Key", systemImage: "key.fill", color: .orange) {
+                        SecureField(String(localized: "OpenAI API Key", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), text: $settings.openAIAPIKey)
+                            .disableAutocorrection(true)
+                    }
+
+                    Text("When OpenAI Translation is selected, lyric text is sent to OpenAI. OpenAI may retain API inputs and outputs for up to 30 days for abuse monitoring. Your API key is stored in Keychain, and translated lyrics are cached on this device.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
                 
                 Button(role: .destructive, action: {
                     TranslationCache.shared.clear()
                 }) {
-                    HStack {
-                        Image(systemName: "trash")
-                        Text("번역 로컬 캐시 전체 삭제")
-                    }
+                    SettingsRowLabel(title: "Clear translation cache", systemImage: "trash.fill", color: .red)
                 }
             }
         }

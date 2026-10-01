@@ -11,14 +11,13 @@ import SwiftSonic
 struct AlbumCard: View {
     let album: AlbumID3
 
-    @Environment(\.appContainer) private var container
-
     private let cardSize: CGFloat = 140
 
     var body: some View {
         VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
             CoverArtCard(id: album.coverArt ?? album.id, size: cardSize)
             Text(album.name)
+                .foregroundStyle(.primary)
                 .font(.cassetteCaption)
                 .fontWeight(.semibold)
                 .lineLimit(1)
@@ -31,18 +30,6 @@ struct AlbumCard: View {
             }
         }
         .frame(width: cardSize)
-        .lazyCollectionContextMenu(
-            itemType: .album,
-            itemId: album.id,
-            displayName: album.name,
-            displaySubtitle: album.artist ?? "",
-            coverArtId: album.coverArt,
-            favoriteType: .album,
-            songLoader: {
-                guard let c = container else { return [] }
-                let loaded = try await c.libraryService.album(id: album.id)
-                return (loaded.song ?? []).map { DisplayableSong(from: $0, isDownloaded: false) }
-            }
-        )
+        .albumLongPressMenu(album)
     }
 }

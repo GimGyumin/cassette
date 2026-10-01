@@ -57,6 +57,12 @@ Testing parallelises tests, so each test must own its own in-memory store.
    `PlayerService` always asks `MediaResolver` — never SwiftSonic directly.
 4. All dependencies injected via `init`. No singletons except `AppContainer`.
 5. `NowPlayingService` is active from v1 (lockscreen / Control Center / AirPods).
+6. Nothing reads `ProcessInfo` / `UIAccessibility` to decide how expensive it may be —
+   CPU/GPU-heavy work is throttled through `PerformanceBudget` /
+   `PerformanceGovernor` (`CassettePerformance` is the non-isolated façade, including
+   for the audio render thread). See `docs/ARCHITECTURE.md` → *Battery, thermal and
+   performance budget*, and prefer degrading to a cached/cheap value over dropping a
+   feature (and never add a `TEMP` kill switch).
 
 ### nonisolated on static properties in system type extensions
 
@@ -135,35 +141,51 @@ xcodebuild -scheme Cassette \
   | grep -v "/SourcePackages/" \
   | grep -v "appintentsmetadataprocessor"
 
-# macOS — enabled in v1.1
-# xcodebuild -scheme Cassette \
-#   -destination 'generic/platform=macOS' \
-#   clean build 2>&1 \
-#   | grep -E "warning:|error:" \
-#   | grep -v "/SourcePackages/" \
-#   | grep -v "appintentsmetadataprocessor"
-
-# Test target (required) — the app-only gate let the test target rot unseen.
-# CLEAN on purpose: incremental builds only re-emit diagnostics for recompiled
-# files and have repeatedly hidden real warnings. Two quirks force this shape:
-# the CassetteTests scheme has no buildables for the `clean` action (any
-# invocation containing `clean` fails with "no destinations"), hence the Build
-# dir wipe; and build-for-testing rejects generic destinations, hence the
-# simctl-derived simulator id.
-rm -rf ~/Library/Developer/Xcode/DerivedData/Cassette-*/Build
-UDID=$(xcrun simctl list devices available \
-  | grep -m1 "iPhone" \
-  | grep -oE "[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}")
-xcodebuild -scheme CassetteTests \
-  -destination "platform=iOS Simulator,id=$UDID" \
-  build-for-testing 2>&1 \
+# macOS (required) — the target ships alongside iOS, so it is gated on every PR.
+# CODE_SIGNING_ALLOWED=NO keeps the gate runnable on machines without the
+# Developer ID certificate; signing is not part of the quality gate.
+xcodebuild -scheme Cassette \
+  -destination 'generic/platform=macOS' \
+  CODE_SIGNING_ALLOWED=NO \
+  clean build 2>&1 \
   | grep -E "warning:|error:" \
   | grep -v "/SourcePackages/" \
-  | grep -v "appintentsmetadataprocessor"
+  | grep -v "appintentsmetadataprocessor" \
+  | grep -v "AppIcon.appiconset" \
+  | grep -v "ConformanceIsolation"
+
+# Test target (required) — the app-only gate let the test target rot unseen.
+# A macOS destination needs no simulator runtime, and runs the suite instead of
+# only compiling it (same shape as CI and the release workflow).
+xcodebuild test -project Cassette.xcodeproj -scheme CassetteTests \
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 
 Any new warning must be fixed or explicitly added to the "Known acceptable
 warnings" section with full justification before merging.
+
+---
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and on every pull request:
+
+| Job | What it enforces |
+|-----|------------------|
+| **iOS build (warning gate)** | Clean iOS Simulator build; fails on any warning or error that is not a documented exception. |
+| **macOS build (warning gate)** | Clean unsigned macOS build; same gate, so the second target can no longer rot silently. |
+| **Unit tests** | `CassetteTests` on a macOS destination — simulator-runtime independent, matching the release workflow. |
+
+The gates apply the same filters as the commands above plus the patterns listed
+under "Known acceptable warnings". Adding a filter without an entry there is a
+silent regression: the entry is what makes the exception reviewable and dated.
+
+Run the same gates locally before pushing:
+
+```sh
+xcodebuild test -project Cassette.xcodeproj -scheme CassetteTests \
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+```
 
 ---
 
@@ -174,7 +196,23 @@ Each entry records source, cause, action taken, and when to revisit.
 
 ---
 
-### AppIntents metadata extraction skipped
+### MediaSessionRepresentable conformance isolation
+
+```
+warning: conformance of 'CassetteMediaSessionRepresentation' to protocol 'MediaSessionRepresentable'
+crosses into main actor-isolated code and can cause data races; this is an error in the Swift 6
+language mode [#ConformanceIsolation]
+```
+
+| Field    | Details |
+|----------|---------|
+| **Source** | `Cassette/Services/Playback/CassetteMediaSessionController.swift` — `CassetteMediaSessionRepresentation` |
+| **Cause** | The iOS 27 `NowPlaying` framework declares `MediaSessionRepresentable` without an isolation annotation, while Cassette's representation is `@MainActor` (it is mutated from the player and the UI). The isolation mismatch is theoretical: both sides live in the app process. |
+| **Action** | Fixed-by-exception. `@preconcurrency` on the conformance was measured and has no effect here, and there is no safe way to move `content` / `playbackSnapshot` off the main actor. Suppressed by the `ConformanceIsolation` filter in the quality-gate and CI commands; the doc comment at the declaration points here. |
+| **Revisit** | When the app target moves to the Swift 6 language mode, or when `MediaSessionRepresentable` documents its isolation contract. |
+
+---
+
 
 ```
 warning: Metadata extraction skipped. No AppIntents.framework dependency found.
@@ -184,8 +222,8 @@ warning: Metadata extraction skipped. No AppIntents.framework dependency found.
 |----------|---------|
 | **Source** | Xcode build system — `appintentsmetadataprocessor` runs on every project |
 | **Cause** | The processor is injected by Xcode regardless of whether the project uses AppIntents. It emits this warning when `AppIntents.framework` is absent from the dependency graph. |
-| **Action** | Suppressed by the `-v "appintentsmetadataprocessor"` filter in the quality-gate commands above. No code change possible without adding the AppIntents dependency. |
-| **Revisit** | If Cassette adopts App Intents (Siri shortcuts, Spotlight actions) in a future version — integrate AppIntents properly and remove this entry. |
+| **Action** | Suppressed by the `-v "appintentsmetadataprocessor"` filter in the quality-gate commands above. Cassette now ships App Intents (`Cassette/Siri`), so the app target no longer emits this line; the filter is kept as a safety net for targets without the dependency. |
+| **Revisit** | When every target in the project links AppIntents — then the filter (and this entry) can be deleted. |
 
 ---
 

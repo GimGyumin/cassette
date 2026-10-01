@@ -39,8 +39,11 @@ struct WrappedYearlyCard: View {
                         .font(.system(size: 30, weight: .medium))
                         .foregroundStyle(.white)
                         .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Play Wrapped story", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 .padding(CassetteSpacing.s)
             }
         }
@@ -56,7 +59,7 @@ struct WrappedYearlyCard: View {
                 .font(.system(size: 40, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
                 .lineLimit(1)
-            Text("Wrapped")
+            Text("Replay")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.75))
                 .lineLimit(1)

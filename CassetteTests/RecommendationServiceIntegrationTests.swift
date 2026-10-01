@@ -80,6 +80,7 @@ private let artistStubInt = SimilarArtistRecommendation(id: "sub-a1", name: "Sub
 
 @MainActor
 private final class RSILibraryNullStub: LibraryServiceProtocol {
+    func song(id: String) async throws -> Song { throw URLError(.unknown) }
     func artists() async throws -> [ArtistIndex] { throw URLError(.unknown) }
     func artist(id: String) async throws -> ArtistID3 { throw URLError(.unknown) }
     func album(id: String) async throws -> AlbumID3 { throw URLError(.unknown) }

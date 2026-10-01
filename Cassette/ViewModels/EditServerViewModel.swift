@@ -65,6 +65,15 @@ final class EditServerViewModel {
                 .map { CustomHeaderEntry(key: $0.key, value: $0.value) }
             customHeaders = pairs
             initialHeaders = pairs
+        } catch let error as CassetteError {
+            if case .credentialsMissing = error {
+                // Keychain wiped (e.g. Bundle ID change) — leave password blank so the user can re-enter.
+                password = ""
+                initialPassword = ""
+                saveError = String(localized: "Enter your server password again to reconnect.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+            } else {
+                saveError = error.localizedDescription
+            }
         } catch {
             saveError = error.localizedDescription
         }

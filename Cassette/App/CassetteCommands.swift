@@ -44,6 +44,11 @@ struct CassetteCommands: Commands {
                 NotificationCenter.default.post(name: .cassetteToggleQueue, object: nil)
             }
             .keyboardShortcut("e", modifiers: .command)
+
+            Button("Show Lyrics") {
+                NotificationCenter.default.post(name: .cassetteOpenFullPlayerLyrics, object: nil)
+            }
+            .keyboardShortcut("l", modifiers: .command)
         }
 
         CommandGroup(after: .toolbar) {

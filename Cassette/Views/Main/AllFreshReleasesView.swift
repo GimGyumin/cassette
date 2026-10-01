@@ -14,6 +14,7 @@ import SwiftUI
 
 struct AllFreshReleasesView: View {
     @Environment(\.appContainer) private var container
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let vm: AllFreshReleasesViewModel
 
     #if os(iOS)
@@ -30,11 +31,17 @@ struct AllFreshReleasesView: View {
         return f
     }()
 
-    #if os(macOS)
-    private var gridColumns: [GridItem] {
-        [GridItem(.adaptive(minimum: 130))]
+    private var usesGrid: Bool {
+        #if os(macOS)
+        true
+        #else
+        horizontalSizeClass == .regular
+        #endif
     }
-    #endif
+
+    private var gridColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 130), spacing: CassetteSpacing.m)]
+    }
 
     var body: some View {
         Group {
@@ -51,7 +58,7 @@ struct AllFreshReleasesView: View {
                 scrollContent
             }
         }
-        .navigationTitle("Fresh Releases")
+        .navigationTitle(String(localized: "Fresh Releases", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: AlbumRecommendation.self) { release in
@@ -86,7 +93,19 @@ struct AllFreshReleasesView: View {
 
     @ViewBuilder
     private var scrollContent: some View {
-        #if os(iOS)
+        if usesGrid {
+            releasesGrid
+        } else {
+            #if os(iOS)
+            releasesList
+            #else
+            releasesGrid
+            #endif
+        }
+    }
+
+    #if os(iOS)
+    private var releasesList: some View {
         List {
             ForEach(vm.groupedReleases, id: \.month) { section in
                 Section(Self.monthFormatter.string(from: section.month)) {
@@ -104,14 +123,27 @@ struct AllFreshReleasesView: View {
         }
         .listStyle(.plain)
         .refreshable { await vm.loadReleases() }
-        #else
+        .miniPlayerBottomMargin()
+    }
+    #endif
+
+    @ViewBuilder
+    private var releasesGrid: some View {
         let sv = ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
                 ForEach(vm.groupedReleases, id: \.month) { section in
                     Section {
                         LazyVGrid(columns: gridColumns, spacing: CassetteSpacing.m) {
                             ForEach(Array(section.items.enumerated()), id: \.offset) { _, release in
+                                #if os(iOS)
+                                FreshReleaseAlbumCell(
+                                    release: release,
+                                    zoomSourceId: release.id ?? "\(release.artistName)-\(release.title)",
+                                    zoomNamespace: releaseZoomNamespace
+                                )
+                                #else
                                 FreshReleaseAlbumCell(release: release, onTap: { selectedRelease = release })
+                                #endif
                             }
                         }
                         .padding(.horizontal, CassetteSpacing.m)
@@ -128,12 +160,10 @@ struct AllFreshReleasesView: View {
                 }
             }
         }
-        // .hiddenTitleBar + fullSizeContentView gives the detail column a top safe-area
-        // equal to the toolbar height. With titlebarAppearsTransparent = true the toolbar
-        // is invisible, but pinned section headers still stick at the safe-area boundary
-        // (bottom of the invisible toolbar) rather than at the true window top.
-        // ignoresSafeArea(.container, edges: .top) extends the scroll view frame to y = 0
-        // so pinned headers pin at the actual visible top of the detail column.
+        .refreshable { await vm.loadReleases() }
+        .miniPlayerBottomMargin()
+
+        #if os(macOS)
         if #available(macOS 26.0, *) {
             sv
                 .ignoresSafeArea(.container, edges: .top)
@@ -141,6 +171,8 @@ struct AllFreshReleasesView: View {
         } else {
             sv.ignoresSafeArea(.container, edges: .top)
         }
+        #else
+        sv
         #endif
     }
 

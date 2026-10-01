@@ -41,10 +41,11 @@ struct RadioListView: View {
                 }
                 .listStyle(.plain)
                 .refreshable { await load(forceRefresh: true) }
+                .miniPlayerBottomMargin()
             }
         }
         .cassetteContentWidth()
-        .navigationTitle("Radio")
+        .navigationTitle(String(localized: "Radio", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         .task(id: container?.serverState.isOnline) {
             guard container?.serverState.isOnline == true else { return }
             await load(forceRefresh: false)

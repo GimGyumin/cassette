@@ -6,6 +6,7 @@
 import SwiftUI
 import SwiftData
 import SwiftSonic
+import OSLog
 
 struct HomeView: View {
     @Environment(\.appContainer) private var container
@@ -30,11 +31,12 @@ struct HomeView: View {
     @Namespace private var pinnedZoomNamespace
     @Namespace private var recentlyAddedZoomNamespace
     @Namespace private var playlistZoomNamespace
-    @Environment(DominantColorExtractor.self) private var colorExtractor
-    @Environment(ArtworkImageCache.self) private var artworkImageCache
+    /// When false (Pad / Library stack parent), destinations are registered once above.
+    @Environment(\.registersHomeDestinations) private var registersHomeDestinations
     @State private var viewModel: HomeViewModel?
     @State private var showCreatePlaylist = false
-    @State private var navigateToSettings = false
+    @State private var showAccountSheet = false
+    @State private var isEditingPins = false
     @State private var navigateToAllAlbums = false
     // Local mutable copy for smooth drag-to-reorder; synced from @Query on count changes.
     @State private var localPinnedItems: [PinnedItem] = []
@@ -43,9 +45,7 @@ struct HomeView: View {
         GridItem(.adaptive(minimum: 140, maximum: 180), spacing: CassetteSpacing.m)
     ]
     private let pinnedColumns = [
-        GridItem(.flexible()),
-        GridItem(.flexible()),
-        GridItem(.flexible())
+        GridItem(.adaptive(minimum: 100, maximum: 140), spacing: CassetteSpacing.m)
     ]
 
     private var isOnline: Bool { container?.serverState.isOnline == true }
@@ -97,6 +97,16 @@ struct HomeView: View {
                 predicate: #Predicate { $0.playlistId == itemId }
             )
             return (try? modelContext.fetch(descriptor).first) != nil
+        case .song:
+            let descriptor = FetchDescriptor<DownloadedTrack>(
+                predicate: #Predicate { $0.songId == itemId }
+            )
+            return (try? modelContext.fetch(descriptor).first) != nil
+        case .artist:
+            let descriptor = FetchDescriptor<DownloadedTrack>(
+                predicate: #Predicate { $0.artistId == itemId }
+            )
+            return (try? modelContext.fetch(descriptor).first) != nil
         case .none:
             return false
         }
@@ -109,8 +119,6 @@ struct HomeView: View {
                 if !visiblePinnedItems.isEmpty {
                     pinnedSection
                 }
-                #endif
-                #if os(iOS)
                 librarySection
                 #endif
                 #if os(macOS)
@@ -123,102 +131,207 @@ struct HomeView: View {
             .padding(.top, CassetteSpacing.m)
             .padding(.bottom, CassetteSpacing.xl)
         }
-        .navigationTitle("Home")
+        .miniPlayerBottomMargin()
+        .navigationTitle(String(localized: "Library", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        .cassetteRootTabTitleAlignment()
         .toolbar {
-            #if !os(macOS)
-            ToolbarItem(placement: .automatic) {
-                Menu {
-                    Button { showCreatePlaylist = true } label: {
-                        Label("New Playlist", systemImage: "plus")
+            #if os(iOS)
+            if isEditingPins {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        HapticFeedback.light.trigger()
+                        withAnimation(CassetteAnimation.chrome) { isEditingPins = false }
+                    } label: {
+                        CircleToolbarLabel(systemName: "checkmark", filled: true)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(String(localized: "Done", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                }
+            } else {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        showCreatePlaylist = true
+                    } label: {
+                        Image(systemName: "text.badge.plus")
+                            .font(.body.weight(.semibold))
                     }
                     .disabled(!isOnline)
-                    Button { navigateToSettings = true } label: {
-                        Label("Settings", systemImage: "gear")
+                    .accessibilityLabel(String(localized: "New Playlist", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+
+                    Menu {
+                        Button {
+                            HapticFeedback.light.trigger()
+                            withAnimation(CassetteAnimation.chrome) { isEditingPins = true }
+                        } label: {
+                            Label(
+                                String(localized: "Edit Pins", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                                systemImage: "pin"
+                            )
+                        }
+                        .disabled(visiblePinnedItems.isEmpty)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.body.weight(.semibold))
                     }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.title3)
-                        .frame(width: 36, height: 36)
+                    .accessibilityLabel(String(localized: "More", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 }
-                .buttonStyle(.plain)
+
+                // Own ToolbarItem so the profile control sits apart from the action capsule.
+                if #available(iOS 26.0, *) {
+                    ToolbarSpacer(.fixed)
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showAccountSheet = true
+                    } label: {
+                        Image(systemName: "person.crop.circle.fill")
+                            .font(.body)
+                            .symbolRenderingMode(.hierarchical)
+                    }
+                    .accessibilityLabel(String(localized: "Account", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                }
             }
             #endif
         }
         .sheet(isPresented: $showCreatePlaylist) { CreatePlaylistSheet { _ in } }
-        .navigationDestination(isPresented: $navigateToSettings) { SettingsView() }
+        #if os(iOS)
+        .sheet(isPresented: $showAccountSheet) {
+            AccountSheetView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+        }
+        #endif
         #if os(macOS)
         .navigationDestination(isPresented: $navigateToAllAlbums) { AlbumsListView() }
         #endif
         #if os(iOS)
-        .navigationDestination(for: HomeDestination.self) { destination in
-            switch destination {
-            case .libraryAlbums:
-                AlbumsListView()
-            case .libraryArtists:
-                ArtistListView()
-            case .libraryPlaylists:
-                PlaylistListView(zoomNamespace: playlistZoomNamespace)
-            case .libraryFavorites:
-                FavoritesView()
-            case .libraryDownloads:
-                DownloadedView()
-            case .album(let album):
-                AlbumDetailView(
-                    album: album,
-                    zoomSourceId: album.id,
-                    zoomNamespace: recentlyAddedZoomNamespace,
-                    coverArtId: album.coverArt,
-                    initialDominantColor: colorExtractor.dominantColor(for: album.coverArt ?? album.id, image: nil),
-                    initialCoverImage: artworkImageCache.cachedImage(for: album.coverArt ?? album.id)
-                )
-            case .artist(let artist):
-                ArtistDetailView(artist: artist)
-            case .playlist(let playlist):
-                PlaylistDetailView(
-                    playlist: playlist,
-                    coverArtId: playlist.coverArt ?? playlist.id,
-                    initialCoverImage: artworkImageCache.cachedImage(for: playlist.coverArt ?? playlist.id),
-                    zoomSourceId: playlist.id,
-                    zoomNamespace: playlistZoomNamespace
-                )
-            case .downloadedAlbum(let display):
-                AlbumDetailView(albumId: display.albumId, albumName: display.name, coverArtId: display.coverArtId, mode: .downloadedOnly)
-            case .albumById(let id, let name, _, let coverArtId):
-                AlbumDetailView(
-                    albumId: id,
-                    albumName: name,
-                    zoomSourceId: id,
-                    zoomNamespace: pinnedZoomNamespace,
-                    coverArtId: coverArtId,
-                    initialCoverImage: artworkImageCache.cachedImage(for: coverArtId ?? id)
-                )
-            case .playlistById(let id, let name, let coverArtId):
-                PlaylistDetailView(
-                    playlistId: id,
-                    name: name,
-                    coverArtId: coverArtId,
-                    initialCoverImage: artworkImageCache.cachedImage(for: coverArtId ?? id),
-                    zoomSourceId: id,
-                    zoomNamespace: pinnedZoomNamespace
-                )
-            case .artistById(let id, let name, let coverArtId):
-                ArtistDetailView(artist: ArtistID3(id: id, name: name, coverArt: coverArtId))
-            case .offlineArtist(let artist):
-                OfflineArtistAlbumsView(artist: artist)
-            case .offlineAlbum(let album):
-                AlbumDetailView(albumId: album.albumId, albumName: album.albumName, coverArtId: album.coverArtId)
-            }
-        }
+        .modifier(HomeDestinationRegistrar(
+            enabled: registersHomeDestinations,
+            recentlyAddedZoomNamespace: recentlyAddedZoomNamespace,
+            playlistZoomNamespace: playlistZoomNamespace,
+            pinnedZoomNamespace: pinnedZoomNamespace
+        ))
         #endif
         .onAppear { localPinnedItems = allPinnedItems }
         .onChange(of: allPinnedItems.count) { _, _ in localPinnedItems = allPinnedItems }
+        .onChange(of: visiblePinnedItems.isEmpty) { _, isEmpty in
+            if isEmpty, isEditingPins {
+                withAnimation(CassetteAnimation.chrome) { isEditingPins = false }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cassetteServerCredentialsChanged)) { _ in
+            Task {
+                await viewModel?.loadLibrary(force: true)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cassetteFavoritesChanged)) { _ in
+            Task { await viewModel?.loadStarred(force: true) }
+        }
         .task(id: container?.serverState.isOnline) {
             guard let svc = container?.libraryService else { return }
             if viewModel == nil { viewModel = HomeViewModel(libraryService: svc) }
-            guard container?.serverState.isOnline == true else { return }
-            await viewModel?.load()
+            guard let vm = viewModel, container?.serverState.isOnline == true else { return }
+            // Wait for Listen Now's first claim on the Subsonic client before starring/library lists.
+            await AppBootGate.waitForHome()
+            await vm.loadLibrary()
         }
     }
+
+    // MARK: - Favorites shelf (starred artists / albums / songs)
+
+    #if os(iOS)
+    private func favoritesShelfSection(vm: HomeViewModel) -> some View {
+        VStack(alignment: .leading, spacing: CassetteSpacing.m) {
+            HStack {
+                Text(String(localized: "Favorites", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    .font(.cassetteSectionTitle)
+                Spacer(minLength: 0)
+                NavigationLink(value: HomeDestination.libraryFavorites) {
+                    Text(String(localized: "See All", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        .font(.cassetteCaption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if !vm.starredAlbums.isEmpty {
+                favoritesHorizontalShelf(title: String(localized: "Albums", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+                    ForEach(vm.starredAlbums) { album in
+                        NavigationLink(value: HomeDestination.album(album)) {
+                            LibraryFavoriteTile(
+                                title: album.name,
+                                subtitle: album.artist,
+                                coverArtId: album.coverArt ?? album.id,
+                                shape: .rounded
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .albumLongPressMenu(album)
+                    }
+                }
+            }
+
+            if !vm.starredArtists.isEmpty {
+                favoritesHorizontalShelf(title: String(localized: "Artists", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+                    ForEach(vm.starredArtists) { artist in
+                        NavigationLink(value: HomeDestination.artist(artist)) {
+                            LibraryFavoriteTile(
+                                title: artist.name,
+                                subtitle: nil,
+                                coverArtId: artist.coverArt ?? artist.id,
+                                shape: .circle,
+                                placeholderSystemImage: "person.fill"
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .artistLongPressMenu(artist)
+                    }
+                }
+            }
+
+            if !vm.starredSongs.isEmpty {
+                favoritesHorizontalShelf(title: String(localized: "Songs", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+                    ForEach(Array(vm.starredSongs.enumerated()), id: \.element.id) { index, song in
+                        Button {
+                            Task {
+                                let tracks = vm.starredSongs.map { DisplayableSong(from: $0) }
+                                try? await container?.playerService.play(tracks: tracks, startIndex: index)
+                            }
+                        } label: {
+                            LibraryFavoriteTile(
+                                title: song.title,
+                                subtitle: song.artist,
+                                coverArtId: song.coverArt ?? song.id,
+                                shape: .rounded
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .songLongPressMenu(DisplayableSong(from: song))
+                        .accessibilityHint(String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    }
+                }
+            }
+        }
+    }
+
+    private func favoritesHorizontalShelf<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: CassetteSpacing.s) {
+            Text(title)
+                .font(.cassetteCaption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: CassetteSpacing.m) {
+                    content()
+                }
+            }
+        }
+    }
+    #endif
 
     // MARK: - macOS carousels
 
@@ -330,11 +443,24 @@ struct HomeView: View {
 
     private var pinnedSection: some View {
         VStack(alignment: .leading, spacing: CassetteSpacing.s) {
-            Text("Pinned")
-                .font(.cassetteSectionTitle)
             LazyVGrid(columns: pinnedColumns, spacing: CassetteSpacing.m) {
                 ForEach(visiblePinnedItems) { item in
                     HomePinnedCard(item: item, namespace: pinnedZoomNamespace)
+                        .overlay(alignment: .topLeading) {
+                            if isEditingPins {
+                                Button {
+                                    unpin(item)
+                                } label: {
+                                    Image(systemName: "minus.circle.fill")
+                                        .font(.title2)
+                                        .symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, .black)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(CassetteSpacing.xs)
+                                .accessibilityLabel(String(localized: "Unpin", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                            }
+                        }
                         .scaleEffect(dropTargetId == item.id ? 1.05 : 1.0)
                         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: dropTargetId)
                         .draggable(item.id)
@@ -360,38 +486,44 @@ struct HomeView: View {
         }
     }
 
+    /// Removes a pinned item from Home and mirrors it locally for instant feedback.
+    private func unpin(_ item: PinnedItem) {
+        guard let type = PinnedItemType(rawValue: item.itemType) else { return }
+        HapticFeedback.light.trigger()
+        container?.pinService.unpin(itemType: type, itemId: item.itemId)
+        withAnimation(CassetteAnimation.chrome) {
+            localPinnedItems.removeAll { $0.id == item.id }
+        }
+    }
+
     // MARK: - Library section
 
     private var librarySection: some View {
-        VStack(alignment: .leading, spacing: CassetteSpacing.s) {
-            Text("Library")
-                .font(.cassetteSectionTitle)
-            VStack(spacing: 0) {
-                NavigationLink(value: HomeDestination.libraryPlaylists) {
-                    HomeLibraryRowLabel(title: "Playlists", systemImage: "music.note.list")
-                }
-                .buttonStyle(.plain)
-                Divider().padding(.leading, 52)
-                NavigationLink(value: HomeDestination.libraryAlbums) {
-                    HomeLibraryRowLabel(title: "Albums", systemImage: "square.stack")
-                }
-                .buttonStyle(.plain)
-                Divider().padding(.leading, 52)
-                NavigationLink(value: HomeDestination.libraryArtists) {
-                    HomeLibraryRowLabel(title: "Artists", systemImage: "music.mic")
-                }
-                .buttonStyle(.plain)
-                Divider().padding(.leading, 52)
-                NavigationLink(value: HomeDestination.libraryFavorites) {
-                    HomeLibraryRowLabel(title: "Favorites", systemImage: "heart.fill")
-                }
-                .buttonStyle(.plain)
-                Divider().padding(.leading, 52)
-                NavigationLink(value: HomeDestination.libraryDownloads) {
-                    HomeLibraryRowLabel(title: "Downloads", systemImage: "arrow.down.circle.fill")
-                }
-                .buttonStyle(.plain)
+        VStack(spacing: 0) {
+            NavigationLink(value: HomeDestination.libraryPlaylists) {
+                HomeLibraryRowLabel(title: String(localized: "Playlists", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "music.note.list")
             }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 40)
+            NavigationLink(value: HomeDestination.libraryArtists) {
+                HomeLibraryRowLabel(title: String(localized: "Album Artists", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "music.mic")
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 40)
+            NavigationLink(value: HomeDestination.libraryAlbums) {
+                HomeLibraryRowLabel(title: String(localized: "Albums", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "square.stack")
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 40)
+            NavigationLink(value: HomeDestination.librarySongs) {
+                HomeLibraryRowLabel(title: String(localized: "Songs", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "music.note")
+            }
+            .buttonStyle(.plain)
+            Divider().padding(.leading, 40)
+            NavigationLink(value: HomeDestination.libraryDownloads) {
+                HomeLibraryRowLabel(title: String(localized: "Downloads", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "arrow.down.circle")
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -445,6 +577,63 @@ struct HomeView: View {
     }
 }
 
+// MARK: - LibraryFavoriteTile
+
+#if os(iOS)
+private struct LibraryFavoriteTile: View {
+    enum ShapeKind {
+        case rounded, circle
+    }
+
+    let title: String
+    let subtitle: String?
+    let coverArtId: String
+    var shape: ShapeKind = .rounded
+    var placeholderSystemImage: String = "music.note"
+    private let size: CGFloat = 110
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
+            CoverArtView(
+                id: coverArtId,
+                size: Int(size * 2),
+                placeholderSystemImage: placeholderSystemImage
+            )
+            .frame(width: size, height: size)
+            .modifier(LibraryFavoriteCoverShape(shape: shape))
+
+            Text(title)
+                .font(.cassetteCaption)
+                .fontWeight(.semibold)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .frame(width: size, alignment: .leading)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.cassetteCaption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(width: size, alignment: .leading)
+            }
+        }
+        .frame(width: size, alignment: .leading)
+    }
+}
+
+private struct LibraryFavoriteCoverShape: ViewModifier {
+    let shape: LibraryFavoriteTile.ShapeKind
+
+    func body(content: Content) -> some View {
+        switch shape {
+        case .rounded:
+            content.cassetteCoverStyle(cornerRadius: CassetteCornerRadius.standard)
+        case .circle:
+            content.clipShape(Circle())
+        }
+    }
+}
+#endif
+
 // MARK: - HomePinnedCard
 
 private struct HomePinnedCard: View {
@@ -456,93 +645,189 @@ private struct HomePinnedCard: View {
     @Environment(DominantColorExtractor.self) private var colorExtractor
     @State private var coverImage: PlatformImage?
 
-    private var homeNavDestination: HomeDestination {
-        switch PinnedItemType(rawValue: item.itemType) {
+    private var pinnedType: PinnedItemType {
+        PinnedItemType(rawValue: item.itemType) ?? .album
+    }
+
+    private var homeNavDestination: HomeDestination? {
+        switch pinnedType {
         case .album:
             .albumById(id: item.itemId, name: item.displayName, subtitle: item.displaySubtitle, coverArtId: item.coverArtId)
         case .playlist:
             .playlistById(id: item.itemId, name: item.displayName, coverArtId: item.coverArtId)
-        case .none:
-            .albumById(id: item.itemId, name: item.displayName, subtitle: item.displaySubtitle, coverArtId: item.coverArtId)
+        case .artist:
+            .artistById(id: item.itemId, name: item.displayName, coverArtId: item.coverArtId)
+        case .song:
+            nil
         }
     }
 
     var body: some View {
-        NavigationLink(value: homeNavDestination) {
-            VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
-                GeometryReader { geo in
-                    if PinnedItemType(rawValue: item.itemType) == .playlist {
-                        PlaylistCoverThumbnail(playlistId: item.itemId, serverId: item.serverId, coverArtId: item.coverArtId ?? item.itemId, title: item.displayName, size: geo.size.width)
-                    } else {
-                        CoverArtView(id: item.coverArtId ?? item.itemId, size: Int(geo.size.width * 2))
-                            .frame(width: geo.size.width, height: geo.size.width)
-                            .cassetteCoverStyle(cornerRadius: CassetteCornerRadius.standard)
-                    }
+        Group {
+            if let destination = homeNavDestination {
+                NavigationLink(value: destination) {
+                    cardLabel
                 }
-                .aspectRatio(1, contentMode: .fit)
-                .cassetteMatchedTransitionSource(id: item.itemId, in: namespace)
-                Text(item.displayName)
-                    .font(.cassetteCaption)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if !item.displaySubtitle.isEmpty {
-                    Text(item.displaySubtitle)
-                        .font(.cassetteCaption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    playPinnedSong()
+                } label: {
+                    cardLabel
                 }
+                .buttonStyle(.plain)
+                .accessibilityHint(String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             }
         }
-        .buttonStyle(.plain)
         .onAppear {
             Task { coverImage = await artworkImageCache.load(coverArtId: item.coverArtId ?? item.itemId) }
         }
         .lazyCollectionContextMenu(
-            itemType: PinnedItemType(rawValue: item.itemType) ?? .album,
+            itemType: pinnedType,
             itemId: item.itemId,
             displayName: item.displayName,
             displaySubtitle: item.displaySubtitle,
             coverArtId: item.coverArtId,
             coverImage: coverImage,
-            favoriteType: item.itemType == PinnedItemType.album.rawValue ? .album : nil
+            favoriteType: favoriteTypeForPin
         ) {
-            let itemId = item.itemId
-            switch PinnedItemType(rawValue: item.itemType) {
-            case .album:
-                if container?.serverState.isOnline == true,
-                   let detail = try? await container?.libraryService.album(id: itemId) {
-                    return detail.song?.map { DisplayableSong(from: $0) } ?? []
-                }
-                let tracks = (try? modelContext.fetch(
-                    FetchDescriptor<DownloadedTrack>(
-                        predicate: #Predicate { $0.albumId == itemId }
-                    )
-                )) ?? []
-                return tracks
-                    .sorted { ($0.trackNumber ?? Int.max) < ($1.trackNumber ?? Int.max) }
-                    .map { DisplayableSong(from: $0) }
-            case .playlist:
-                if container?.serverState.isOnline == true,
-                   let detail = try? await container?.libraryService.playlist(id: itemId) {
-                    return (detail.entry ?? []).map { DisplayableSong(from: $0) }
-                }
-                let playlists = (try? modelContext.fetch(
-                    FetchDescriptor<DownloadedPlaylist>(
-                        predicate: #Predicate { $0.playlistId == itemId }
-                    )
-                )) ?? []
-                let songIds = playlists.first?.songIds ?? []
-                let allTracks = (try? modelContext.fetch(FetchDescriptor<DownloadedTrack>())) ?? []
-                let trackBySongId = Dictionary(
-                    allTracks.map { ($0.songId, $0) },
-                    uniquingKeysWith: { first, _ in first }
-                )
-                return songIds.compactMap { trackBySongId[$0] }.map { DisplayableSong(from: $0) }
-            case .none:
-                return []
+            try await loadPinnedSongs()
+        }
+    }
+
+    private var favoriteTypeForPin: FavoriteType? {
+        switch pinnedType {
+        case .album: .album
+        case .song: .song
+        case .artist: .artist
+        case .playlist: nil
+        }
+    }
+
+    private var cardLabel: some View {
+        VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
+            GeometryReader { geo in
+                artwork(size: geo.size.width)
             }
+            .aspectRatio(1, contentMode: .fit)
+            .cassetteMatchedTransitionSource(id: item.itemId, in: namespace)
+            Text(item.displayName)
+                .font(.cassetteCaption)
+                .fontWeight(.semibold)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if !item.displaySubtitle.isEmpty {
+                Text(item.displaySubtitle)
+                    .font(.cassetteCaption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func artwork(size: CGFloat) -> some View {
+        switch pinnedType {
+        case .playlist:
+            PlaylistCoverThumbnail(
+                playlistId: item.itemId,
+                serverId: item.serverId,
+                coverArtId: item.coverArtId ?? item.itemId,
+                title: item.displayName,
+                size: size
+            )
+        case .artist:
+            CoverArtView(id: item.coverArtId ?? item.itemId, size: Int(size * 2), placeholderSystemImage: "person.fill")
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+        case .album, .song:
+            CoverArtView(id: item.coverArtId ?? item.itemId, size: Int(size * 2))
+                .frame(width: size, height: size)
+                .cassetteCoverStyle(cornerRadius: CassetteCornerRadius.standard)
+        }
+    }
+
+    private func playPinnedSong() {
+        Task {
+            let song = DisplayableSong(
+                id: item.itemId,
+                title: item.displayName,
+                artist: item.displaySubtitle.isEmpty ? nil : item.displaySubtitle,
+                isDownloaded: isAvailableOfflineSong(item.itemId),
+                coverArtId: item.coverArtId
+            )
+            do {
+                try await container?.playerService.play(tracks: [song], startIndex: 0)
+            } catch {
+                Logger.player.error("[PLAYBACK] pinned song play failed: \(error, privacy: .public)")
+            }
+        }
+    }
+
+    private func isAvailableOfflineSong(_ songId: String) -> Bool {
+        let descriptor = FetchDescriptor<DownloadedTrack>(
+            predicate: #Predicate { $0.songId == songId }
+        )
+        return (try? modelContext.fetch(descriptor).first) != nil
+    }
+
+    private func loadPinnedSongs() async throws -> [DisplayableSong] {
+        let itemId = item.itemId
+        guard let container else { return [] }
+        switch pinnedType {
+        case .album:
+            if container.serverState.isOnline,
+               let detail = try? await container.libraryService.album(id: itemId) {
+                return detail.song?.map { DisplayableSong(from: $0) } ?? []
+            }
+            let tracks = (try? modelContext.fetch(
+                FetchDescriptor<DownloadedTrack>(predicate: #Predicate { $0.albumId == itemId })
+            )) ?? []
+            return tracks
+                .sorted { ($0.trackNumber ?? Int.max) < ($1.trackNumber ?? Int.max) }
+                .map { DisplayableSong(from: $0) }
+        case .playlist:
+            if container.serverState.isOnline,
+               let detail = try? await container.libraryService.playlist(id: itemId) {
+                return (detail.entry ?? []).map { DisplayableSong(from: $0) }
+            }
+            let playlists = (try? modelContext.fetch(
+                FetchDescriptor<DownloadedPlaylist>(predicate: #Predicate { $0.playlistId == itemId })
+            )) ?? []
+            let songIds = playlists.first?.songIds ?? []
+            let allTracks = (try? modelContext.fetch(FetchDescriptor<DownloadedTrack>())) ?? []
+            let trackBySongId = Dictionary(
+                allTracks.map { ($0.songId, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            return songIds.compactMap { trackBySongId[$0] }.map { DisplayableSong(from: $0) }
+        case .song:
+            return [
+                DisplayableSong(
+                    id: item.itemId,
+                    title: item.displayName,
+                    artist: item.displaySubtitle.isEmpty ? nil : item.displaySubtitle,
+                    isDownloaded: isAvailableOfflineSong(item.itemId),
+                    coverArtId: item.coverArtId
+                )
+            ]
+        case .artist:
+            if container.serverState.isOnline,
+               let artist = try? await container.libraryService.artist(id: itemId) {
+                var songs: [DisplayableSong] = []
+                for album in (artist.album ?? []).prefix(5) {
+                    if let detail = try? await container.libraryService.album(id: album.id) {
+                        songs.append(contentsOf: (detail.song ?? []).map { DisplayableSong(from: $0) })
+                    }
+                    if songs.count >= 40 { break }
+                }
+                return songs
+            }
+            let tracks = (try? modelContext.fetch(
+                FetchDescriptor<DownloadedTrack>(predicate: #Predicate { $0.artistId == itemId })
+            )) ?? []
+            return tracks.map { DisplayableSong(from: $0) }
         }
     }
 }
@@ -553,28 +838,28 @@ private struct HomeLibraryRowLabel: View {
     let title: String
     let systemImage: String
 
+    @ScaledMetric(relativeTo: .body) private var iconSide: CGFloat = 28
+
     var body: some View {
         HStack(spacing: CassetteSpacing.m) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.cassetteAccent)
-                    .frame(width: 30, height: 30)
-                Image(systemName: systemImage)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.white)
-            }
+            Image(systemName: systemImage)
+                .font(.title3)
+                .fontWeight(.regular)
+                .foregroundStyle(.primary)
+                .frame(width: iconSide, height: iconSide)
+                .accessibilityHidden(true)
             Text(title)
-                .font(.cassetteCellTitle)
+                .font(.body)
+                .fontWeight(.regular)
                 .foregroundStyle(.primary)
             Spacer(minLength: 0)
             Image(systemName: "chevron.right")
-                .font(.caption)
-                .fontWeight(.semibold)
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
         }
-        .padding(.horizontal, CassetteSpacing.m)
-        .padding(.vertical, CassetteSpacing.m)
+        .padding(.vertical, CassetteSpacing.s)
+        .frame(minHeight: 44)
         .contentShape(Rectangle())
     }
 }
@@ -694,6 +979,7 @@ private struct HomeAlbumCell: View {
             .aspectRatio(1, contentMode: .fit)
             .cassetteMatchedTransitionSource(id: album.id, in: namespace)
             Text(album.name)
+                .foregroundStyle(.primary)
                 .font(.cassetteCaption)
                 .fontWeight(.semibold)
                 .lineLimit(1)
@@ -723,3 +1009,93 @@ private struct HomeAlbumCell: View {
         }
     }
 }
+
+#if os(iOS)
+/// Registers `HomeDestination` only when no parent stack already owns that type.
+private struct HomeDestinationRegistrar: ViewModifier {
+    let enabled: Bool
+    let recentlyAddedZoomNamespace: Namespace.ID
+    let playlistZoomNamespace: Namespace.ID
+    let pinnedZoomNamespace: Namespace.ID
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.navigationDestination(for: HomeDestination.self) { destination in
+                switch destination {
+                case .libraryAlbums:
+                    AlbumsListView()
+                case .libraryArtists:
+                    ArtistListView()
+                case .librarySongs:
+                    SongsListView()
+                case .libraryPlaylists:
+                    PlaylistListView(zoomNamespace: playlistZoomNamespace)
+                case .libraryFavorites:
+                    FavoritesView()
+                case .libraryDownloads:
+                    DownloadedView()
+                case .album(let album):
+                    AlbumDetailView(
+                        album: album,
+                        zoomSourceId: album.id,
+                        zoomNamespace: recentlyAddedZoomNamespace,
+                        coverArtId: album.coverArt
+                    )
+                case .artist(let artist):
+                    ArtistDetailView(artist: artist)
+                case .playlist(let playlist):
+                    PlaylistDetailView(
+                        playlist: playlist,
+                        coverArtId: playlist.coverArt ?? playlist.id,
+                        zoomSourceId: playlist.id,
+                        zoomNamespace: playlistZoomNamespace
+                    )
+                case .downloadedAlbum(let display):
+                    AlbumDetailView(
+                        albumId: display.albumId,
+                        albumName: display.name,
+                        coverArtId: display.coverArtId,
+                        mode: .downloadedOnly
+                    )
+                case .albumById(let id, let name, _, let coverArtId):
+                    AlbumDetailView(
+                        albumId: id,
+                        albumName: name,
+                        zoomSourceId: id,
+                        zoomNamespace: pinnedZoomNamespace,
+                        coverArtId: coverArtId
+                    )
+                case .playlistById(let id, let name, let coverArtId):
+                    PlaylistDetailView(
+                        playlistId: id,
+                        name: name,
+                        coverArtId: coverArtId,
+                        zoomSourceId: id,
+                        zoomNamespace: pinnedZoomNamespace
+                    )
+                case .artistById(let id, let name, let coverArtId):
+                    ArtistDetailView(artist: ArtistID3(id: id, name: name, coverArt: coverArtId))
+                case .artistPush(let id, let name, let coverArtId, _):
+                    ArtistDetailView(artist: ArtistID3(id: id, name: name, coverArt: coverArtId))
+                case .replay:
+                    WrappedView()
+                case .replayPeriod(let period):
+                    WrappedView(initialPeriod: period)
+                case .offlineArtist(let artist):
+                    OfflineArtistAlbumsView(artist: artist)
+                case .offlineAlbum(let album):
+                    AlbumDetailView(
+                        albumId: album.albumId,
+                        albumName: album.albumName,
+                        coverArtId: album.coverArtId
+                    )
+                case .personalMix(let kind):
+                    PersonalMixDetailView(kind: kind)
+                }
+            }
+        } else {
+            content
+        }
+    }
+}
+#endif

@@ -6,7 +6,6 @@
 import WidgetKit
 import SwiftUI
 
-#if os(iOS)
 struct PinnedWidget: Widget {
     let kind = WidgetKind.pinned
 
@@ -14,8 +13,8 @@ struct PinnedWidget: Widget {
         StaticConfiguration(kind: kind, provider: PinnedProvider()) { entry in
             PinnedWidgetView(entry: entry)
         }
-        .configurationDisplayName("Éléments épinglés")
-        .description("Accédez rapidement à vos éléments épinglés.")
+        .configurationDisplayName("Pins")
+        .description("Quick access to albums and playlists you’ve pinned.")
         .supportedFamilies([.systemMedium, .systemLarge])
     }
 }
@@ -33,4 +32,3 @@ struct PinnedWidgetView: View {
         }
     }
 }
-#endif

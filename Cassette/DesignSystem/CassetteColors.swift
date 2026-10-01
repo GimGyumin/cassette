@@ -4,74 +4,111 @@
 // See LICENSE file in the project root for full license information.
 
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
+#if os(macOS)
+import AppKit
+#endif
 
-// MARK: - Cassette Design Tokens v1.8.1
-// Rebrand: Electric Violet (#6C47F5) — replaces orange (#FF7F3F)
+// MARK: - Cassette Design Tokens v1.9
+// Rebrand: Cassette Red (#E22134) — replaces Electric Violet (#6C47F5)
 // All colors are adaptive (light/dark) via Asset Catalog Color Sets.
 // Asset Catalog entries must be created alongside this file (see spec below).
 
 public enum CassetteColors {
     
     // MARK: — Accent
-    /// Primary brand color. CTA, active icons, progress bars, play button.
-    /// Light: #6C47F5 — Dark: #8060F7 (slightly lighter for contrast on dark bg)
+    /// Primary brand color. CTA, active icons, progress bars.
+    /// Light/Dark: Cassette Red (see CassetteAccent.colorset)
     public static let accent = Color("CassetteAccent")
     
     /// Tinted background for badges, pills, active states.
-    /// Light: #EDE9FE — Dark: #221E38
     public static let accentBackground = Color("CassetteAccentBackground")
     
     /// Text/icon color on top of accentBackground.
-    /// Light: #4C28D4 — Dark: #9F86FA
     public static let accentForeground = Color("CassetteAccentForeground")
     
     // MARK: — Backgrounds
-    /// App-level background. Subtly violet-tinted near-white / deep violet-black.
-    /// Light: #F6F4FF — Dark: #0F0D1A
     public static let backgroundPrimary = Color("CassetteBackgroundPrimary")
-    
-    /// Cards, list rows, bottom sheets, grouped table backgrounds.
-    /// Light: #EDEAFF — Dark: #1A1728
     public static let backgroundSecondary = Color("CassetteBackgroundSecondary")
-    
-    /// Elevated content: modals, popovers, context menus.
-    /// Light: #FFFFFF — Dark: #231F35
     public static let backgroundTertiary = Color("CassetteBackgroundTertiary")
     
-    // MARK: — Text
-    /// Primary content: titles, song names, main body text.
-    /// Light: #1A1520 — Dark: #F0EEF8
-    public static let textPrimary = Color("CassetteTextPrimary")
-    
-    /// Supporting content: artist names, subtitles, descriptions.
-    /// Light: #6B5F8A — Dark: #8C7DB8
-    public static let textSecondary = Color("CassetteTextSecondary")
-    
-    /// De-emphasized content: durations, placeholders, hints, timestamps.
-    /// Light: #9B8EBF — Dark: #5E5080
-    public static let textTertiary = Color("CassetteTextTertiary")
+    // MARK: — Text (Apple semantic labels — readable in light/dark; not brand purple)
+    public static var textPrimary: Color { SemanticLabel.primary }
+    public static var textSecondary: Color { SemanticLabel.secondary }
+    public static var textTertiary: Color { SemanticLabel.tertiary }
+
+    /// System label / status colors for descriptions, guidance, and warnings.
+    public enum SemanticLabel {
+        public static var primary: Color {
+            #if os(iOS)
+            Color(uiColor: .label)
+            #elseif os(macOS)
+            Color(nsColor: .labelColor)
+            #else
+            Color.primary
+            #endif
+        }
+
+        public static var secondary: Color {
+            #if os(iOS)
+            Color(uiColor: .secondaryLabel)
+            #elseif os(macOS)
+            Color(nsColor: .secondaryLabelColor)
+            #else
+            Color.secondary
+            #endif
+        }
+
+        public static var tertiary: Color {
+            #if os(iOS)
+            Color(uiColor: .tertiaryLabel)
+            #elseif os(macOS)
+            Color(nsColor: .tertiaryLabelColor)
+            #else
+            Color.secondary.opacity(0.8)
+            #endif
+        }
+
+        public static var warning: Color {
+            #if os(iOS)
+            Color(uiColor: .systemOrange)
+            #elseif os(macOS)
+            Color(nsColor: .systemOrange)
+            #else
+            .orange
+            #endif
+        }
+
+        public static var destructive: Color {
+            #if os(iOS)
+            Color(uiColor: .systemRed)
+            #elseif os(macOS)
+            Color(nsColor: .systemRed)
+            #else
+            .red
+            #endif
+        }
+    }
     
     // MARK: — Structure
-    /// List separators, dividers.
-    /// Light: violet @ 12% opacity — Dark: violet @ 15% opacity
     public static let separator = Color("CassetteSeparator")
-    
-    /// Card borders, input outlines.
-    /// Light: violet @ 18% opacity — Dark: violet @ 22% opacity
     public static let border = Color("CassetteBorder")
     
-    // MARK: — Violet Ramp (raw stops, light-mode only — use for gradients, artwork tints, etc.)
+    // MARK: — Brand ramp (Cassette Red — use for active chips / gradients)
     public enum Violet {
-        public static let v50  = Color(hex: "#F0ECFF")
-        public static let v100 = Color(hex: "#DDD5FE")
-        public static let v200 = Color(hex: "#C0B0FC")
-        public static let v300 = Color(hex: "#9F86FA")
-        public static let v400 = Color(hex: "#8060F7")
-        public static let v500 = Color(hex: "#6C47F5") // base accent
-        public static let v600 = Color(hex: "#5530D4")
-        public static let v700 = Color(hex: "#3F1FAF")
-        public static let v800 = Color(hex: "#2D1480")
-        public static let v900 = Color(hex: "#1B0A52")
+        // Kept as `Violet` for call-site compatibility; values are now red.
+        public static let v50  = Color(hex: "#FDE8EB")
+        public static let v100 = Color(hex: "#FACDD3")
+        public static let v200 = Color(hex: "#F49AA6")
+        public static let v300 = Color(hex: "#FF6B7A")
+        public static let v400 = Color(hex: "#F23B4F")
+        public static let v500 = Color(hex: "#E22134") // base accent
+        public static let v600 = Color(hex: "#B01020")
+        public static let v700 = Color(hex: "#8A0C19")
+        public static let v800 = Color(hex: "#5E0811")
+        public static let v900 = Color(hex: "#3A050A")
     }
 }
 
@@ -95,23 +132,20 @@ extension Color {
  ├──────────────────────────────────┬──────────────────┬───────────────────┤
  │  Color Set Name                  │  Light (Any)     │  Dark             │
  ├──────────────────────────────────┼──────────────────┼───────────────────┤
- │  CassetteAccent                  │  #6C47F5         │  #8060F7          │
- │  CassetteAccentBackground        │  #EDE9FE         │  #221E38          │
- │  CassetteAccentForeground        │  #4C28D4         │  #9F86FA          │
- │  CassetteBackgroundPrimary       │  #F6F4FF         │  #0F0D1A          │
+ │  CassetteAccent                  │  #E22134         │  #FF4554          │
+ │  CassetteAccentBackground        │  #FDE8EB         │  #2E1417          │
+ │  CassetteAccentForeground        │  #B01020         │  #FF6B7A          │
+ │  CassetteBackgroundPrimary       │  #F6F4FF         │  #17141E          │
  │  CassetteBackgroundSecondary     │  #EDEAFF         │  #1A1728          │
  │  CassetteBackgroundTertiary      │  #FFFFFF         │  #231F35          │
- │  CassetteTextPrimary             │  #1A1520         │  #F0EEF8          │
- │  CassetteTextSecondary           │  #6B5F8A         │  #8C7DB8          │
- │  CassetteTextTertiary            │  #9B8EBF         │  #5E5080          │
- │  CassetteSeparator               │  #6C47F5 @ 12%   │  #8060F7 @ 15%    │
- │  CassetteBorder                  │  #6C47F5 @ 18%   │  #8060F7 @ 22%    │
+ │  CassetteTextPrimary/Secondary/Tertiary  │  (unused assets — code uses UIColor.label family) │
+ │  CassetteSeparator               │  #E22134 @ 12%   │  #FF4554 @ 15%    │
+ │  CassetteBorder                  │  #E22134 @ 18%   │  #FF4554 @ 22%    │
  └──────────────────────────────────┴──────────────────┴───────────────────┘
  
- NOTE — CassetteAccent (Asset Catalog) must also be set as the app's
- global tint / accentColor in the root App or WindowGroup, and declared
- in Assets.xcassets as the "AccentColor" entry so system components
- (toggles, sliders, links) inherit the brand color automatically:
+ NOTE — CassetteAccent (Asset Catalog) is the app AccentColor for in-app chrome
+ (tabs, toggles, CTAs). System alerts/action sheets must NOT inherit that red tint —
+ see `CassetteSystemChrome.configure()` which restores Apple blue/red for UIAlertController.
  
  WindowGroup { ... }
  .tint(CassetteColors.accent)

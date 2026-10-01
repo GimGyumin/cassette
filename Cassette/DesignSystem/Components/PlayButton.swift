@@ -5,14 +5,14 @@
 
 import SwiftUI
 
-/// Primary action button — accent capsule with play icon. Used in album and playlist headers.
+/// Primary action button — tinted-glass capsule with play icon. Used in album and playlist headers.
 struct PlayButton: View {
     let action: () -> Void
     var label: String = "Play"
     var isDisabled: Bool = false
     var accentColor: Color = CassetteColors.accent
     /// Label/glyph color. Default white (`cassetteAccentText`) preserves existing callers; the hero passes the
-    /// contrast variant's foreground (the cover's dominant color on a dark cover).
+    /// cover-derived tint (or B/W fallback) on a black/white capsule.
     var labelColor: Color = Color.cassetteAccentText
 
     var body: some View {
@@ -25,9 +25,12 @@ struct PlayButton: View {
                 .foregroundStyle(labelColor)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, CassetteSpacing.m)
-                .background(isDisabled ? accentColor.opacity(0.4) : accentColor)
-                .clipShape(Capsule())
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(accentColor.opacity(isDisabled ? 0.45 : 1))
+                }
         }
+        .buttonStyle(.plain)
         .disabled(isDisabled)
     }
 }

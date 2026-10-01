@@ -21,7 +21,7 @@ struct CopyableCodeLabel: View {
         HStack(spacing: CassetteSpacing.xs) {
             Text(code)
                 .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(isCopied ? CassetteColors.accent : CassetteColors.textTertiary)
+                .foregroundStyle(isCopied ? CassetteColors.accent : CassetteColors.SemanticLabel.tertiary)
 
             if isCopied {
                 Image(systemName: "checkmark.circle.fill")

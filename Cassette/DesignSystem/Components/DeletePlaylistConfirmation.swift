@@ -13,28 +13,33 @@ extension View {
     /// purge them too — mirroring the per-song "Remove from Playlist" / "Remove Download" split. Otherwise it's
     /// a plain confirm. `onConfirm` receives `purgeDownloads`: `false` = server delete only, keep the local
     /// files (an intentional offline orphan); `true` = server delete + purge the downloads.
+    ///
+    /// Hosted with an isolated label tint so Cancel stays white/black under Cassette’s red accent.
     func deletePlaylistConfirmation(
         playlistName: String,
         isPresented: Binding<Bool>,
         hasDownloads: Bool,
         onConfirm: @escaping (_ purgeDownloads: Bool) -> Void
     ) -> some View {
-        confirmationDialog(
-            "Delete \"\(playlistName)\"?",
-            isPresented: isPresented,
-            titleVisibility: .visible
-        ) {
-            if hasDownloads {
-                Button("Delete Playlist Only", role: .destructive) { onConfirm(false) }
-                Button("Delete Playlist & Downloads", role: .destructive) { onConfirm(true) }
-            } else {
-                Button("Delete", role: .destructive) { onConfirm(false) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(hasDownloads
-                ? "This removes the playlist from your server. You can keep the files downloaded on this device, or remove them too. This cannot be undone."
-                : "This permanently deletes the playlist from your server. This action cannot be undone.")
+        cassetteSystemAlertTint {
+            Color.clear
+                .confirmationDialog(
+                    "Delete \"\(playlistName)\"?",
+                    isPresented: isPresented,
+                    titleVisibility: .visible
+                ) {
+                    if hasDownloads {
+                        Button("Delete Playlist Only", role: .destructive) { onConfirm(false) }
+                        Button("Delete Playlist & Downloads", role: .destructive) { onConfirm(true) }
+                    } else {
+                        Button("Delete", role: .destructive) { onConfirm(false) }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text(hasDownloads
+                        ? "This removes the playlist from your server. You can keep the files downloaded on this device, or remove them too. This cannot be undone."
+                        : "This permanently deletes the playlist from your server. This action cannot be undone.")
+                }
         }
     }
 }

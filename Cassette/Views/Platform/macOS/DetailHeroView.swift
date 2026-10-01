@@ -11,6 +11,9 @@ struct DetailHeroView: View {
     let title: String
     let primaryLine: String?
     let secondaryLine: String?
+    var onPrimaryLineTap: (() -> Void)? = nil
+    var quality: AudioQualityKind? = nil
+    var audioFormat: String? = nil
     let primaryAction: () -> Void
     let secondaryAction: () -> Void
 
@@ -51,10 +54,20 @@ struct DetailHeroView: View {
                     .lineLimit(2)
 
                 if let primaryLine {
-                    Text(primaryLine)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Color.cassetteAccent)
-                        .lineLimit(1)
+                    if let onPrimaryLineTap {
+                        Button(action: onPrimaryLineTap) {
+                            Text(primaryLine)
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(Color.cassetteAccent)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Text(primaryLine)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Color.cassetteAccent)
+                            .lineLimit(1)
+                    }
                 }
 
                 if let secondaryLine {
@@ -63,6 +76,13 @@ struct DetailHeroView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .padding(.top, 2)
+                }
+
+                if let quality {
+                    HStack(spacing: 8) {
+                        AudioQualityLabelView(quality: quality, foreground: .secondary, usesGlass: false)
+                    }
+                    .padding(.top, 4)
                 }
             }
 

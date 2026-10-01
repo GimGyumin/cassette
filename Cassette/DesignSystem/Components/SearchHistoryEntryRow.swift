@@ -40,7 +40,6 @@ struct SearchHistoryEntryRow: View, Equatable {
     let data: SearchHistoryRowData
 
     var body: some View {
-        let _ = Self._printChanges()
         HStack(spacing: CassetteSpacing.m) {
             CoverArtView(id: data.coverArtId ?? data.itemId, size: 88)
                 .frame(width: 44, height: 44)
@@ -53,12 +52,13 @@ struct SearchHistoryEntryRow: View, Equatable {
                 .font(.cassetteCellTitle)
                 .lineLimit(1)
             Spacer(minLength: 0)
-            Image(systemName: "arrow.up.left")
-                .font(.caption)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, CassetteSpacing.xs)
+        .padding(.vertical, CassetteSpacing.s)
         .padding(.horizontal, CassetteSpacing.m)
+        .frame(minHeight: 44)
         .contentShape(Rectangle())
     }
 }

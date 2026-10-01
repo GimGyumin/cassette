@@ -11,9 +11,9 @@ actor ReplayGainService {
     private let eqNode = AVAudioUnitEQ()
     private var isAttached = false
 
-    func attach(to player: AudioPlayer) {
-        guard !isAttached else { return }
-        player.attach(node: eqNode)
+    func attach(to graph: (any AudioGraphHosting)?) {
+        guard !isAttached, let graph else { return }
+        graph.attach(node: eqNode)
         isAttached = true
     }
 

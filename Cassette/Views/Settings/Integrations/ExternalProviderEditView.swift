@@ -13,8 +13,8 @@ struct ExternalProviderEditView: View {
 
         var title: String {
             switch self {
-            case .new:  return "New Provider"
-            case .edit: return "Edit Provider"
+            case .new: return String(localized: "New Provider", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+            case .edit: return String(localized: "Edit Provider", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
             }
         }
 
@@ -56,11 +56,11 @@ struct ExternalProviderEditView: View {
 
     private var urlErrorMessage: String? {
         switch urlValidation {
-        case .missingPlaceholder:  return "URL must contain a %s placeholder"
-        case .multiplePlaceholders: return "Only one %s placeholder is allowed"
-        case .invalidScheme:       return "URL must start with http:// or https://"
-        case .malformed:           return "URL is malformed"
-        case .valid, nil:          return nil
+        case .missingPlaceholder: return String(localized: "URL must contain a %s placeholder", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .multiplePlaceholders: return String(localized: "Only one %s placeholder is allowed", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .invalidScheme: return String(localized: "URL must start with http:// or https://", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .malformed: return String(localized: "URL is malformed", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .valid, nil: return nil
         }
     }
 
@@ -79,23 +79,27 @@ struct ExternalProviderEditView: View {
     var body: some View {
         Form {
             Section {
-                TextField("Name", text: $name)
+                SettingsTextFieldRow(title: "Name", systemImage: "textformat", color: .blue) {
+                    TextField(String(localized: "Name", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), text: $name)
+                }
                 if !name.isEmpty && !ExternalReleaseProvider.validate(name: name) {
-                    Text("Name must be 1–50 characters")
+                    Text(String(localized: "Name must be 1-50 characters", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
             } header: {
-                Text("Provider Name")
+                SettingsSectionHeader(verbatim: String(localized: "Provider Name", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             }
 
             Section {
-                TextField("https://example.com/search?q=%s", text: $urlTemplate, axis: .vertical)
-                    .autocorrectionDisabled()
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                    #endif
+                SettingsTextFieldRow(title: "URL Template", systemImage: "link", color: .orange) {
+                    TextField("https://example.com/search?q=%s", text: $urlTemplate, axis: .vertical)
+                        .autocorrectionDisabled()
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        #endif
+                }
 
                 if let error = urlErrorMessage {
                     Text(error)
@@ -104,36 +108,43 @@ struct ExternalProviderEditView: View {
                 }
 
                 if let preview = previewText {
-                    Text("Example: \(preview)")
+                    Text(String(format: String(localized: "Example: %@", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), preview))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                 }
             } header: {
-                Text("URL Template")
+                SettingsSectionHeader(verbatim: String(localized: "URL Template", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             } footer: {
-                Text("Use %s as a placeholder — replaced by \"Artist Album\" when opening a release.")
+                Text(String(localized: "Use %s as a placeholder — replaced by \"Artist Album\" when opening a release.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             }
 
             if case .edit = mode, onDelete != nil {
                 Section {
-                    Button("Delete Provider", role: .destructive) {
+                    Button(role: .destructive) {
                         showingDeleteConfirm = true
+                    } label: {
+                        Label {
+                            Text(String(localized: "Delete Provider", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        } icon: {
+                            SettingsIcon(systemImage: "trash.fill", color: .red)
+                        }
                     }
                 }
             }
         }
         .formStyle(.grouped)
+        .modifier(SettingsSubpageStyle())
         .navigationTitle(mode.title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
+                Button(String(localized: "Cancel", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) { dismiss() }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
+                Button(String(localized: "Save", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
                     let provider = ExternalReleaseProvider(
                         id: mode.existingID ?? UUID(),
                         name: name.trimmingCharacters(in: .whitespaces),
@@ -146,17 +157,17 @@ struct ExternalProviderEditView: View {
             }
         }
         .confirmationDialog(
-            "Delete \"\(name)\"?",
+            String(format: String(localized: "Delete \"%@\"?", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), name),
             isPresented: $showingDeleteConfirm,
             titleVisibility: .visible
         ) {
-            Button("Delete", role: .destructive) {
+            Button(String(localized: "Delete", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), role: .destructive) {
                 onDelete?()
                 dismiss()
             }
-            Button("Cancel", role: .cancel) {}
+            Button(String(localized: "Cancel", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), role: .cancel) {}
         } message: {
-            Text("This action cannot be undone.")
+            Text(String(localized: "This action cannot be undone.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
 }

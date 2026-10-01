@@ -41,10 +41,16 @@ Set these in the repo settings (Settings → Secrets and variables → Actions):
 | `DEVELOPER_ID_CERT_P12_BASE64` | Base64 of the Developer ID Application cert exported as `.p12` (with private key) |
 | `DEVELOPER_ID_CERT_PASSWORD` | Password protecting that `.p12` |
 | `KEYCHAIN_PASSWORD` | Arbitrary password for the temporary CI keychain |
+| `PROVISION_PROFILE_APP_BASE64` | Base64 of the Developer ID provisioning profile for `com.kyumin.Music.Cassette` |
+| `PROVISION_PROFILE_WIDGET_BASE64` | Base64 of the Developer ID provisioning profile for the widget extension |
 | `AC_API_KEY_P8_BASE64` | Base64 of the App Store Connect API key (`.p8`), used for notarization |
 | `AC_API_KEY_ID` | App Store Connect API key ID |
 | `AC_API_ISSUER_ID` | App Store Connect API issuer ID |
-| `HOMEBREW_TAP_TOKEN` | PAT with write access to `MathieuDubart/homebrew-cassette` |
+| `HOMEBREW_TAP_TOKEN` | PAT with write access to your fork's Homebrew tap (optional) |
+
+Set the optional repository variable `HOMEBREW_TAP_REPOSITORY` (for example,
+`owner/homebrew-cassette`) to enable the cask update job. It is skipped when
+the variable is empty so a fork never attempts to push to the upstream tap.
 
 `ExportOptions-DeveloperID.plist` is committed (Team ID is not a secret). No
 certificate, key, or password is stored in this repo.
@@ -58,8 +64,9 @@ certificate, key, or password is stored in this repo.
 2. **App Store Connect API key:** create an API key, download the `.p8`, and
    base64-encode it into `AC_API_KEY_P8_BASE64`; record its key ID and issuer ID.
 3. **Add the GitHub secrets** listed above.
-4. **Homebrew tap:** add `Casks/cassette.rb` to `MathieuDubart/homebrew-cassette`
-   (separate repo). The workflow rewrites its `version` and `sha256` on each tag.
+4. **Homebrew tap (optional):** add `Casks/cassette.rb` to your own tap repository,
+   set `HOMEBREW_TAP_REPOSITORY`, and add a token with write access. The workflow
+   rewrites its `version` and `sha256` on each tag.
 5. **Xcode Cloud:** create a tag-triggered (`v*`) iOS → TestFlight workflow in
    App Store Connect. It picks up `ci_scripts/ci_pre_xcodebuild.sh` automatically.
 6. **Validate end-to-end** with a throwaway tag (e.g. `v0.0.1-rc1`), then delete
@@ -67,8 +74,9 @@ certificate, key, or password is stored in this repo.
 
 ## Project facts the pipeline relies on
 
-- **Bundle ID:** `fr.mathieu-dubart.Cassette` · **Team ID:** `LK2358MPL8`
-- **macOS minimum:** 15.0 (Sequoia) — the cask should declare
+- **Bundle ID:** `com.kyumin.Music.Cassette` · **Team ID:** `ZKZ9SNL8LZ`
+- **Widget Bundle ID:** `com.kyumin.Music.Cassette.CassetteWidgetsExtension`
+- **macOS minimum:** 15.6 (Sequoia) — the cask should declare
   `depends_on macos: ">= :sequoia"`.
 - **Toolchain:** the workflow runs on `macos-26` and selects the newest stable
   Xcode via `maxim-lobanov/setup-xcode@v1` (`latest-stable`). The project is
@@ -80,11 +88,17 @@ certificate, key, or password is stored in this repo.
   `agvtool` (the Xcode Cloud script) requires. The macOS job sets the version via
   `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` build-setting overrides, which
   flow into the generated `Info.plist`.
+- **Product build identifier:** the About screen shows `26A1001e` next to the
+  marketing version. `26` is the 2026 development year, `A` is the 1.x release
+  family, `1001` is the first build in that series, and `e` is the stabilization
+  state (`a` is nearest to release; later letters indicate less stable builds).
+  The App Store-facing `CFBundleVersion` remains numeric (`1001` locally) for
+  Apple tooling compatibility.
 
 ## Known things to check on the first run
 
-- The Widgets extension is **iOS-only** (`SUPPORTED_PLATFORMS` excludes macOS).
-  The macOS archive should skip it; if the macOS app is configured to embed it,
-  the archive step will fail and the embed must be made platform-conditional.
+- The Widgets extension builds for **iOS and macOS** (`SUPPORTED_PLATFORMS`
+  includes `macosx`). Confirm the macOS archive embeds the appex under
+  `PlugIns/` and that App Groups match across app + extension entitlements.
 - `create-dmg` cosmetics (icon coordinates, window size) assume a standard
   drag-to-Applications layout; adjust in `release.yml` if the volume looks off.

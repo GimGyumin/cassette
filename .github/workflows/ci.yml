@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch: {}
+
+# One run per branch/PR: superseded pushes stop instead of queueing builds.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Mirrors CONTRIBUTING's quality gate: a clean build that emits no warnings.
+  ios-build:
+    name: iOS build (warning gate)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild -project Cassette.xcodeproj -scheme Cassette \
+            -destination 'generic/platform=iOS Simulator' \
+            clean build 2>&1 | tee ios-build.log
+
+      - name: Warning gate
+        run: |
+          if grep -E "warning:|error:" ios-build.log \
+              | grep -v "/SourcePackages/" \
+              | grep -v "appintentsmetadataprocessor" \
+              | grep -v "AppIcon.appiconset" \
+              | grep -v "ConformanceIsolation" \
+              | grep .; then
+            echo "::error::iOS build emitted warnings or errors. See CONTRIBUTING › Quality gates."
+            exit 1
+          fi
+
+  # The macOS target is a first-class surface. Signing secrets are not required:
+  # this job only proves the target still compiles.
+  macos-build:
+    name: macOS build (warning gate)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild -project Cassette.xcodeproj -scheme Cassette \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            clean build 2>&1 | tee macos-build.log
+
+      - name: Warning gate
+        run: |
+          if grep -E "warning:|error:" macos-build.log \
+              | grep -v "/SourcePackages/" \
+              | grep -v "appintentsmetadataprocessor" \
+              | grep -v "AppIcon.appiconset" \
+              | grep -v "ConformanceIsolation" \
+              | grep .; then
+            echo "::error::macOS build emitted warnings or errors. See CONTRIBUTING › Quality gates."
+            exit 1
+          fi
+
+  unit-tests:
+    name: Unit tests
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # macOS destination keeps this job independent of an installed iOS
+      # simulator runtime, matching the release workflow's test step.
+      - name: Run unit tests
+        run: |
+          xcodebuild test \
+            -project Cassette.xcodeproj \
+            -scheme CassetteTests \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO

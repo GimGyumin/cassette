@@ -56,13 +56,26 @@ struct PlaylistDetailMacOS: View {
             Task { await deletePlaylistMacOS(purgeDownloads: purgeDownloads) }
         }
         .sheet(isPresented: $showEditSheet) {
-            PlaylistEditSheet(
-                initialName: vm?.name ?? name,
-                initialDescription: vm?.playlistDetail?.comment ?? "",
-                onSave: { newName, newDesc in
-                    Task { await saveEdit(name: newName, description: newDesc) }
-                }
-            )
+            if let serverId = container?.serverState.activeServer?.id {
+                EditPlaylistSheet(
+                    playlistId: playlistId,
+                    serverId: serverId,
+                    currentName: vm?.name ?? name,
+                    currentComment: vm?.playlistDetail?.comment ?? "",
+                    currentCoverArtId: vm?.coverArtId ?? coverArtId,
+                    songs: vm?.songs ?? [],
+                    onCommitted: {
+                        Task { await vm?.load() }
+                    },
+                    onDeleted: {
+                        postPlaylistDeleted()
+                        dismiss()
+                    }
+                )
+                .environment(\.appContainer, container)
+                .environment(colorExtractor)
+                .frame(minWidth: 520, minHeight: 640)
+            }
         }
         .sheet(isPresented: $showAddMusic) {
             if let vm, let c = container, let serverId = c.serverState.activeServer?.id {
@@ -111,7 +124,7 @@ struct PlaylistDetailMacOS: View {
                 coverArtId: vm.coverArtId ?? coverArtId,
                 title: vm.name.isEmpty ? name : vm.name,
                 primaryLine: vm.owner,
-                secondaryLine: songs.isEmpty ? nil : "\(songs.count) track\(songs.count == 1 ? "" : "s")",
+                secondaryLine: songs.isEmpty ? nil : String(localized: "\(songs.count) tracks", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
                 primaryAction: {
                     Task { try? await container?.playerService.play(tracks: songs, startIndex: 0) }
                 },
@@ -125,6 +138,16 @@ struct PlaylistDetailMacOS: View {
                 }
             )
             .frame(maxWidth: .infinity)
+
+            if let comment = vm.playlistDetail?.comment?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !comment.isEmpty {
+                Text(comment)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 12)
+            }
 
             List {
                 if vm.isLoading && songs.isEmpty {
@@ -176,34 +199,6 @@ struct PlaylistDetailMacOS: View {
                 AddToPlaylistSheet(song: song)
             }
         }
-    }
-
-    private func saveEdit(name newName: String, description: String) async {
-        guard let c = container else { return }
-        let trimmedName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDesc = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let originalDesc = (vm?.playlistDetail?.comment ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if !trimmedName.isEmpty && trimmedName != (vm?.name ?? name) {
-            do {
-                try await c.playlistService.renamePlaylist(id: playlistId, newName: trimmedName)
-                vm?.name = trimmedName
-            } catch {
-                Logger.playlist.warning("PlaylistDetailMacOS: rename failed: \(error)")
-                c.toastService.showError("Failed to rename playlist")
-            }
-        }
-
-        if trimmedDesc != originalDesc {
-            do {
-                try await c.playlistService.updateDescription(id: playlistId, description: trimmedDesc)
-            } catch {
-                Logger.playlist.warning("PlaylistDetailMacOS: description update failed: \(error)")
-                c.toastService.showError("Failed to update description")
-            }
-        }
-
-        await vm?.load()
     }
 
     private func deletePlaylistMacOS(purgeDownloads: Bool) async {
@@ -277,31 +272,44 @@ struct PlaylistDetailMacOS: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Cancel Download")
-            } else if vm?.songs.contains(where: { $0.isDownloaded }) == true {
-                // Downloaded → this button manages the LOCAL copy (free space) — distinct from the trash, which
-                // deletes the playlist itself. Reuses the existing "Remove downloaded playlist?" confirmation.
-                Button {
-                    showDeleteAlert = true
-                } label: {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .cassetteGlassButton(size: 28)
+            } else if let vm, vm.isOffline != true {
+                let total = vm.songs.count
+                let downloaded = vm.songs.filter(\.isDownloaded).count
+                if total > 0, downloaded == total {
+                    Button {
+                        showDeleteAlert = true
+                    } label: {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .cassetteGlassButton(size: 28)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Remove Download")
+                } else if downloaded > 0, downloaded < total {
+                    Button {
+                        Task { await vm.downloadMissingTracks() }
+                    } label: {
+                        Image(systemName: "arrow.down.circle.dotted")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .cassetteGlassButton(size: 28)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Download Missing Tracks")
+                } else {
+                    Button {
+                        Task { await vm.downloadPlaylist() }
+                    } label: {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .cassetteGlassButton(size: 28)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(container?.serverState.isOnline != true || vm.songs.isEmpty)
+                    .help("Download Playlist")
                 }
-                .buttonStyle(.borderless)
-                .help("Remove Download")
-            } else {
-                Button {
-                    Task { await vm?.downloadPlaylist() }
-                } label: {
-                    Image(systemName: "arrow.down.circle")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .cassetteGlassButton(size: 28)
-                }
-                .buttonStyle(.borderless)
-                .disabled(vm?.isOffline == true || container?.serverState.isOnline != true)
-                .help("Download Playlist")
             }
         }
         .cassetteSharedBackgroundVisibility(.hidden)
@@ -319,49 +327,6 @@ struct PlaylistDetailMacOS: View {
             .help("Delete Playlist")
         }
         .cassetteSharedBackgroundVisibility(.hidden)
-    }
-}
-
-private struct PlaylistEditSheet: View {
-    let initialName: String
-    let initialDescription: String
-    let onSave: (String, String) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var editName: String = ""
-    @State private var editDescription: String = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Edit Playlist")
-                .font(.title3.weight(.semibold))
-
-            Form {
-                TextField("Name", text: $editName)
-                TextField("Description", text: $editDescription, axis: .vertical)
-                    .lineLimit(3...6)
-            }
-            .formStyle(.grouped)
-
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.escape, modifiers: [])
-                Button("Save") {
-                    onSave(editName, editDescription)
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(editName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(24)
-        .frame(minWidth: 340)
-        .onAppear {
-            editName = initialName
-            editDescription = initialDescription
-        }
     }
 }
 #endif

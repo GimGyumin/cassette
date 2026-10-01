@@ -59,6 +59,9 @@ struct WrappedStoryPlayerView: View {
                 .ignoresSafeArea()
                 .id(currentIndex)
                 .transition(.opacity)
+                .accessibilityLabel(
+                    String(localized: "Slide \(currentIndex + 1) of \(slides.count)", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                )
 
             gestureLayer
 
@@ -69,6 +72,12 @@ struct WrappedStoryPlayerView: View {
                 closingShareOverlay(data: data)
             }
             #endif
+        }
+        .accessibilityAction(named: String(localized: "Previous", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+            goBack()
+        }
+        .accessibilityAction(named: String(localized: "Next", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+            goForward()
         }
         #if os(iOS)
         .statusBarHidden(true)
@@ -114,8 +123,11 @@ struct WrappedStoryPlayerView: View {
                         .foregroundStyle(.white)
                         .padding(8)
                         .background(Color.white.opacity(0.2), in: Circle())
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Close", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             }
             .padding(.horizontal, CassetteSpacing.l)
             .padding(.top, CassetteSpacing.s)

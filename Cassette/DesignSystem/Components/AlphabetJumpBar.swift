@@ -9,6 +9,8 @@ struct AlphabetJumpBar: View {
     let availableLetters: Set<String>
     let onLetterTap: (String) -> Void
 
+    @State private var accessibilityFocusedLetter: String?
+
     #if os(iOS)
     @State private var lastLetterReported: String?
     @State private var lastHapticTime: Date = .distantPast
@@ -21,10 +23,19 @@ struct AlphabetJumpBar: View {
 
     var body: some View {
         #if os(iOS)
-        iOSBody
+        iOSBody.modifier(alphabetAccessibilityModifier)
         #else
-        macOSBody
+        macOSBody.modifier(alphabetAccessibilityModifier)
         #endif
+    }
+
+    private var alphabetAccessibilityModifier: AlphabetJumpBarAccessibility {
+        AlphabetJumpBarAccessibility(
+            availableLetters: availableLetters,
+            letters: Self.letters,
+            focusedLetter: $accessibilityFocusedLetter,
+            onLetterTap: onLetterTap
+        )
     }
 
     #if os(iOS)
@@ -55,6 +66,7 @@ struct AlphabetJumpBar: View {
                           now.timeIntervalSince(lastHapticTime) > 0.04 else { return }
                     lastLetterReported = letter
                     lastHapticTime = now
+                    accessibilityFocusedLetter = letter
                     HapticFeedback.selection.trigger()
                     onLetterTap(letter)
                 }
@@ -69,6 +81,7 @@ struct AlphabetJumpBar: View {
             ForEach(Self.letters, id: \.self) { letter in
                 Button {
                     if availableLetters.contains(letter) {
+                        accessibilityFocusedLetter = letter
                         onLetterTap(letter)
                     }
                 } label: {
@@ -89,6 +102,40 @@ struct AlphabetJumpBar: View {
         .padding(.horizontal, 4)
     }
     #endif
+}
+
+private struct AlphabetJumpBarAccessibility: ViewModifier {
+    let availableLetters: Set<String>
+    let letters: [String]
+    @Binding var focusedLetter: String?
+    let onLetterTap: (String) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(String(localized: "Alphabet index", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            .accessibilityValue(focusedLetter ?? "")
+            .accessibilityAdjustableAction { direction in
+                let available = letters.filter { availableLetters.contains($0) }
+                guard !available.isEmpty else { return }
+
+                let currentIndex = focusedLetter.flatMap { available.firstIndex(of: $0) }
+
+                let nextIndex: Int
+                switch direction {
+                case .increment:
+                    nextIndex = currentIndex.map { min($0 + 1, available.count - 1) } ?? 0
+                case .decrement:
+                    nextIndex = currentIndex.map { max($0 - 1, 0) } ?? available.count - 1
+                @unknown default:
+                    return
+                }
+
+                let letter = available[nextIndex]
+                focusedLetter = letter
+                onLetterTap(letter)
+            }
+    }
 }
 
 // MARK: - Helpers

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml"
+    xmlns:itunes="http://music.apple.com/lyric-ttml-internal"
+    xmlns:ttm="http://www.w3.org/ns/ttml#metadata"
+    itunes:timing="Word"
+    xml:lang="en">
+  <head>
+    <metadata>
+      <ttm:agent type="person" xml:id="v1">
+        <ttm:name type="full">Michael Jackson</ttm:name>
+      </ttm:agent>
+      <ttm:agent type="person" xml:id="v2"/>
+      <iTunesMetadata xmlns="http://music.apple.com/lyric-ttml-internal" leadingSilence="0.260">
+        <translations/>
+        <songwriters>
+          <songwriter>Michael Jackson</songwriter>
+        </songwriters>
+      </iTunesMetadata>
+    </metadata>
+  </head>
+  <body dur="5:10.507">
+    <div begin="44.554" end="1:11.512" itunes:songPart="Chorus">
+      <p begin="1:43.575" end="1:48.639" itunes:key="L26" ttm:agent="v1">
+        <span begin="1:43.575" end="1:45.061">Should</span>
+        <span begin="1:45.061" end="1:45.479">heart</span><span begin="1:45.479" end="1:46.388">breaker</span>
+        <span ttm:role="x-bg">
+          <span begin="1:46.338" end="1:46.631">(When</span>
+          <span begin="1:46.631" end="1:46.799">we</span>
+          <span begin="1:46.799" end="1:48.639">baby)</span>
+        </span>
+      </p>
+    </div>
+    <div begin="2:35.932" end="2:50.430" itunes:songPart="Verse" ttm:agent="v2">
+      <p begin="2:35.932" end="2:38.532" itunes:key="L41" ttm:agent="v2">
+        <span begin="2:35.932" end="2:36.082">I</span>
+        <span begin="2:36.082" end="2:36.311">can't</span>
+      </p>
+    </div>
+  </body>
+</tt>

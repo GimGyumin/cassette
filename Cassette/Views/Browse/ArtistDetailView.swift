@@ -6,19 +6,25 @@
 import SwiftUI
 import SwiftSonic
 import SwiftData
+import OSLog
 
 struct ArtistDetailView: View {
     let artist: ArtistID3
 
     @Environment(\.appContainer) private var container
-    @Environment(ArtworkImageCache.self) private var artworkImageCache
     @State private var viewModel: ArtistDetailViewModel?
     @State private var selectedOutOfLibraryArtist: SimilarArtistRecommendation?
     @Query private var artistFavoriteMatches: [FavoriteRecord]
     @Environment(DominantColorExtractor.self) private var colorExtractor
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @State private var dominantColor: Color = .clear
     @State private var heroHeight: CGFloat = 540
+    @State private var showBiographySheet = false
+    @State private var showPinLimitAlert = false
+    /// Identity of this page instance: a repeated `[ARTIST-PAGE] task start` with a new id means the
+    /// page was destroyed and re-created while it was on top (the back-gesture regression signature).
+    @State private var pageInstanceID = UUID()
 
     init(artist: ArtistID3) {
         self.artist = artist
@@ -33,11 +39,20 @@ struct ArtistDetailView: View {
     private var isArtistFavorite: Bool { !artistFavoriteMatches.isEmpty }
     private var isOnline: Bool { container?.serverState.isOnline == true }
 
-    // MARK: Theming — reuses the playlist/album dominant-color theme + ColorContrastUtils (no reimplementation).
-    private var theme: PlaylistTheme { PlaylistTheme(dominantColor: dominantColor) }
-    private var bodyColor: Color { theme.isThemed ? theme.dominantColor : systemBackgroundColor }
-    private var headerTextColor: Color { theme.contentColor }
-    private var headerSecondaryColor: Color { theme.secondaryContentColor }
+    // MARK: Theming — cover extract → refined Apple Music atmosphere.
+    private var atmosphere: AlbumAtmosphere {
+        AlbumAtmosphere.from(
+            dominantColor: dominantColor,
+            appearance: AlbumAtmosphere.appearance(
+                colorScheme: colorScheme,
+                increaseContrast: colorSchemeContrast == .increased
+            )
+        )
+    }
+    private var theme: PlaylistTheme { atmosphere.heroTheme }
+    private var bodyColor: Color { atmosphere.isThemed ? atmosphere.pageColor : systemBackgroundColor }
+    private var headerTextColor: Color { atmosphere.contentColor }
+    private var headerSecondaryColor: Color { atmosphere.secondaryContentColor }
     private var systemBackgroundColor: Color {
         #if canImport(UIKit)
         Color(UIColor.systemBackground)
@@ -71,6 +86,8 @@ struct ArtistDetailView: View {
                         subtitle: error.displayMessage,
                         action: .init(label: "Retry") { Task { await vm.load() } }
                     )
+                } else if vm.artist == nil {
+                    skeletonGrid
                 } else {
                     let albums = vm.artist?.album ?? []
                     if albums.isEmpty {
@@ -81,35 +98,45 @@ struct ArtistDetailView: View {
                         )
                     } else {
                         ScrollView {
-                            artistHero(vm: vm)
-                            VStack(alignment: .leading, spacing: CassetteSpacing.xl) {
-                                if let featured = latestRelease(vm) {
-                                    featuredReleaseSection(featured)
+                            VStack(spacing: 0) {
+                                artistHero(vm: vm)
+                                VStack(alignment: .leading, spacing: CassetteSpacing.xl) {
+                                    if let featured = latestRelease(vm) {
+                                        featuredReleaseSection(featured)
+                                    }
+                                    if vm.isLoadingTopSongs {
+                                        topSongsSkeleton
+                                    } else if !vm.topSongs.isEmpty {
+                                        topSongsSection(vm: vm)
+                                    }
+                                    albumsSections(albums)
+                                    if vm.isLoadingSimilarArtists || !vm.similarArtists.isEmpty {
+                                        similarArtistsSection(vm: vm)
+                                    }
                                 }
-                                if vm.isLoadingTopSongs {
-                                    topSongsSkeleton
-                                } else if !vm.topSongs.isEmpty {
-                                    topSongsSection(vm: vm)
-                                }
-                                albumsSection(albums)
-                                if vm.isLoadingSimilarArtists || !vm.similarArtists.isEmpty {
-                                    similarArtistsSection(vm: vm)
-                                }
+                                .padding(.vertical, CassetteSpacing.l)
+                                .frame(maxWidth: .infinity)
+                                // Force the themed scheme so the shared cells contrast the tinted body.
+                                .environment(\.colorScheme, atmosphere.preferredColorScheme ?? colorScheme)
                             }
-                            .padding(.vertical, CassetteSpacing.l)
-                            .frame(maxWidth: .infinity)
-                            .background(bodyColor)
-                            // Force the themed scheme so the shared cells contrast the tinted body.
-                            .environment(\.colorScheme, theme.isThemed ? (theme.isLight ? .light : .dark) : colorScheme)
                         }
+                        .chromeAppearance(atmosphere.preferredColorScheme)
                         .ignoresSafeArea(.container, edges: .top)
                         .cassetteHideTopScrollEdgeEffect()
-                        .background(bodyColor.ignoresSafeArea())
-                        .refreshable { await vm.load() }
+                        .cassetteStatusBarScrim(isLightPage: atmosphere.isLight)
+                        // One page tone for the whole page, matching the hero's terminal melt tone
+                        // (the same solid backdrop the album page uses) and animating the tone change
+                        // with the shared theme curve — a raw `.background(bodyColor)` let the hero's
+                        // melt and the body settle at different times, which read as a seam.
+                        .background { AlbumAtmosphereBackground(atmosphere: atmosphere) }
+                        .refreshable { await vm.reloadAll() }
+                        .miniPlayerBottomMargin()
                         .task(id: heroCoverArtId) {
+                            // Bottom-strip tone, not the whole-image dominant: the cold path below stores
+                            // the bottom strip, so a warm cache must not fall back to a different tone.
                             let cached = colorExtractor.bottomStripColor(for: heroCoverArtId, image: nil)
                             if cached != .clear {
-                                dominantColor = cached
+                                withAnimation(CassetteAnimation.theme) { dominantColor = cached }
                             } else {
                                 await loadDominantColor(coverArtId: heroCoverArtId)
                             }
@@ -123,10 +150,29 @@ struct ArtistDetailView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayModeInline()
         #if os(iOS)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbarColorScheme(theme.isThemed ? (theme.isLight ? .light : .dark) : nil, for: .navigationBar)
+        .cassetteImmersiveStatusBar(colorScheme: atmosphere.preferredColorScheme)
+        .toolbarColorScheme(atmosphere.preferredColorScheme, for: .navigationBar)
+        // Keep UIKit's back button, and arm the edge swipe explicitly: this page is normally pushed
+        // *from* an album (or another detail) page, where the gesture delegate installed for the
+        // page below refuses a pop it was not set up for, so the swipe back would do nothing.
+        .navigationBarBackButtonHidden(false)
+        .enableSwipeBack()
         #endif
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                artistMoreMenu
+                    .tint(headerTextColor)
+            }
+        }
+        .alert(String(localized: "Pin Limit Reached", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), isPresented: $showPinLimitAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(PinError.limitReached.errorDescription ?? "")
+        }
         .task {
+            Logger.ui.debug(
+                "[ARTIST-PAGE] task start instance=\(pageInstanceID, privacy: .public) id=\(artist.id, privacy: .public)"
+            )
             guard let c = container else { return }
             if viewModel == nil {
                 viewModel = ArtistDetailViewModel(
@@ -136,6 +182,7 @@ struct ArtistDetailView: View {
                     imageResolver: c.externalArtistImageResolver
                 )
             }
+            // Skip network when popping back from an album — VM already has warm data.
             await viewModel?.load()
             await viewModel?.loadTopSongs()
             await viewModel?.loadSimilarArtists()
@@ -147,12 +194,33 @@ struct ArtistDetailView: View {
                 providers: container?.externalProvidersStore.load() ?? []
             )
         }
+        // Presented as a sheet, not `.navigationDestination(isPresented:)`: declaring an isPresented
+        // destination from inside a page that is itself a pushed path entry desyncs the stack (the pushed
+        // page can be re-created or the back button stops responding). The album page's description sheet
+        // uses the same shape.
+        .sheet(isPresented: $showBiographySheet) {
+            NavigationStack {
+                ArtistInfoView(
+                    artistName: artist.name,
+                    coverArtId: heroCoverArtId,
+                    biography: viewModel?.artistBiography,
+                    genres: viewModel?.primaryGenres ?? [],
+                    musicBrainzId: viewModel?.musicBrainzId
+                )
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(String(localized: "Done", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+                            showBiographySheet = false
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Hero
 
-    /// Immersive artist hero (reuses ImmersiveCoverHero + the dominant-color theme): the artist photo (server
-    /// cover, else latest-release cover) full-bleed + the name + Play(=shuffle) + Favorite star floating over it.
+    /// Immersive artist hero: photo full-bleed + name + Info / Play / Favorite over it.
     private func artistHero(vm: ArtistDetailViewModel) -> some View {
         let albums = vm.artist?.album ?? []
         let count = albums.count
@@ -160,20 +228,33 @@ struct ArtistDetailView: View {
             coverArtId: heroCoverArtId,
             coverImage: nil,
             theme: theme,
-            heroHeight: heroHeight
+            heroHeight: heroHeight,
+            meltTargetColor: bodyColor
         ) {
             VStack(spacing: CassetteSpacing.s) {
                 Text(artist.name)
                     .font(.system(.title, design: .rounded, weight: .semibold))
                     .foregroundStyle(headerTextColor)
                     .multilineTextAlignment(.center)
-                Text("\(count) album\(count == 1 ? "" : "s")")
+                Text(CassetteCountLabel.albums(count))
                     .font(.cassetteCaption)
                     .foregroundStyle(headerSecondaryColor)
                     .padding(.bottom, CassetteSpacing.xs)
                 HStack(spacing: CassetteSpacing.l) {
-                    // Invisible block the size of the favorite button so the Play disc sits truly centred.
-                    Color.clear.frame(width: 42, height: 42)
+                    // Info — mirrors the favorite star on the right so Play stays centred.
+                    Button {
+                        HapticFeedback.light.trigger()
+                        showBiographySheet = true
+                    } label: {
+                        Image(systemName: "info")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(headerTextColor)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(String(localized: "About", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
                     // Big white round Play (= shuffle) — just the play glyph.
                     Button {
@@ -194,6 +275,8 @@ struct ArtistDetailView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(vm.isPlayLoading || albums.isEmpty)
+                    .accessibilityLabel(String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    .accessibilityHint(String(localized: "Shuffles this artist", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
                     // Smaller favorite star.
                     Button {
@@ -209,11 +292,17 @@ struct ArtistDetailView: View {
                         Image(systemName: isArtistFavorite ? "star.fill" : "star")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(isArtistFavorite ? .white : headerTextColor)
-                            .frame(width: 42, height: 42)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
                             .background(.ultraThinMaterial, in: Circle())
                     }
                     .buttonStyle(.plain)
                     .disabled(!isOnline)
+                    .accessibilityLabel(
+                        isArtistFavorite
+                            ? String(localized: "Remove from Favorites", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                            : String(localized: "Add to Favorites", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                    )
                 }
             }
             .padding(.horizontal, CassetteSpacing.l)
@@ -221,18 +310,27 @@ struct ArtistDetailView: View {
     }
 
     private func loadDominantColor(coverArtId: String) async {
-        guard let image = await container?.artworkImageCache.load(coverArtId: coverArtId) else { return }
-        let color = colorExtractor.bottomStripColor(for: coverArtId, image: image)
-        withAnimation(.easeIn(duration: 0.2)) {
-            dominantColor = color
+        guard let image = await container?.artworkImageCache.load(coverArtId: coverArtId, tier: .hero) else { return }
+        // Artist heroes are frequently portraits: analyze the bottom region (transition
+        // band into the body) rather than the whole-image average, so a bright face doesn't
+        // become the page tone. Falls back to the whole-image dominant when a strip is
+        // unavailable (non-square / too small artwork).
+        let analysis = await Task.detached(priority: .utility) {
+            AlbumColorAnalyzer.analyze(from: image, bottomStrip: true)?.raw
+        }.value
+        guard let analysis else { return }
+        _ = colorExtractor.storeColor(packed: analysis.packedBackground, for: coverArtId)
+        _ = colorExtractor.storeBottomStripColor(packed: analysis.packedBackground, for: coverArtId)
+        withAnimation(CassetteAnimation.theme) {
+            dominantColor = analysis.backgroundCandidate
         }
     }
 
     // MARK: - Body sections (Gate 2)
 
-    /// The most recent release (max year) — featured + the hero fallback cover.
+    /// The most recent release — featured + the hero fallback cover.
     private func latestRelease(_ vm: ArtistDetailViewModel) -> AlbumID3? {
-        (vm.artist?.album ?? []).max(by: { ($0.year ?? 0) < ($1.year ?? 0) })
+        ArtistAlbumCategorizer.sortedByNewest(vm.artist?.album ?? []).first
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -248,20 +346,20 @@ struct ArtistDetailView: View {
             sectionHeader("Latest Release")
             NavigationLink(value: HomeDestination.album(album)) {
                 HStack(spacing: CassetteSpacing.m) {
-                    CoverArtView(id: album.coverArt ?? album.id, size: 200)
+                    CoverArtView(id: album.coverArt ?? album.id, size: 200, tier: .hero)
                         .frame(width: 88, height: 88)
                         .clipShape(RoundedRectangle(cornerRadius: CassetteCornerRadius.standard, style: .continuous))
                     VStack(alignment: .leading, spacing: 4) {
-                        if let year = album.year {
-                            Text(verbatim: "\(year)")
-                                .font(.cassetteCaption)
-                                .foregroundStyle(headerSecondaryColor)
-                        }
                         Text(album.name)
                             .font(.cassetteCellTitle)
                             .foregroundStyle(headerTextColor)
                             .lineLimit(2)
-                        Text("\(album.songCount) song\(album.songCount == 1 ? "" : "s")")
+                        if let year = ReleaseDateFormatting.yearOnly(from: album.releaseDate ?? album.originalReleaseDate) ?? album.year {
+                            Text(verbatim: "\(year)")
+                                .font(.cassetteCaption)
+                                .foregroundStyle(headerSecondaryColor)
+                        }
+                        Text(CassetteCountLabel.songs(album.songCount))
                             .font(.cassetteCaption)
                             .foregroundStyle(headerSecondaryColor)
                     }
@@ -275,6 +373,7 @@ struct ArtistDetailView: View {
                 .padding(.horizontal, CassetteSpacing.l)
             }
             .buttonStyle(.plain)
+            .albumLongPressMenu(album)
         }
     }
 
@@ -323,17 +422,53 @@ struct ArtistDetailView: View {
         .allowsHitTesting(false)
     }
 
-    /// Albums — big covers, horizontal scroll, title + year.
+    /// Albums grouped by release type (Albums, Singles & EPs, Compilations, Live Album).
+    private func albumsSections(_ albums: [AlbumID3]) -> some View {
+        ForEach(ArtistAlbumCategorizer.sections(from: albums), id: \.0) { section, items in
+            VStack(alignment: .leading, spacing: CassetteSpacing.s) {
+                sectionHeader(section.rawValue)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: CassetteSpacing.m) {
+                        ForEach(items) { album in
+                            NavigationLink(value: HomeDestination.album(album)) {
+                                VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
+                                    CoverArtView(id: album.coverArt ?? album.id, size: 480, tier: .hero, contentMode: .fit)
+                                        .frame(width: 160, height: 160)
+                                        .clipShape(RoundedRectangle(cornerRadius: CassetteCornerRadius.large, style: .continuous))
+                                    Text(album.name)
+                                        .font(.cassetteCellTitle)
+                                        .foregroundStyle(headerTextColor)
+                                        .lineLimit(1)
+                                    if let year = ReleaseDateFormatting.yearOnly(from: album.releaseDate ?? album.originalReleaseDate) ?? album.year {
+                                        Text(verbatim: "\(year)")
+                                            .font(.cassetteCaption)
+                                            .foregroundStyle(headerSecondaryColor)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .frame(width: 160, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                            .albumLongPressMenu(album)
+                        }
+                    }
+                    .padding(.horizontal, CassetteSpacing.l)
+                }
+            }
+        }
+    }
+
+    /// Legacy flat albums section — kept for reference, replaced by albumsSections.
     private func albumsSection(_ albums: [AlbumID3]) -> some View {
         VStack(alignment: .leading, spacing: CassetteSpacing.s) {
             sectionHeader("Albums")
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: CassetteSpacing.m) {
-                    // Most recent first (albums without a year sort last).
-                    ForEach(albums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }) { album in
+                    // Most recent first (albums without a date sort last).
+                    ForEach(ArtistAlbumCategorizer.sortedByNewest(albums)) { album in
                         NavigationLink(value: HomeDestination.album(album)) {
                             VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
-                                CoverArtView(id: album.coverArt ?? album.id, size: 320)
+                                CoverArtView(id: album.coverArt ?? album.id, size: 480, tier: .hero)
                                     .frame(width: 160, height: 160)
                                     .clipShape(RoundedRectangle(cornerRadius: CassetteCornerRadius.large, style: .continuous))
                                 Text(album.name)
@@ -347,9 +482,6 @@ struct ArtistDetailView: View {
                                 }
                             }
                             .frame(width: 160, alignment: .leading)
-                            .task(id: album.id) {
-                                await artworkImageCache.load(coverArtId: album.coverArt ?? album.id)
-                            }
                         }
                         .buttonStyle(.plain)
                     }
@@ -371,6 +503,66 @@ struct ArtistDetailView: View {
         } catch {
             c.toastService.showError("Playback failed. Please try again.")
         }
+    }
+
+    // MARK: - More menu
+
+    private var isArtistPinned: Bool {
+        container?.pinService.isPinned(itemType: .artist, itemId: artist.id) == true
+    }
+
+    @ViewBuilder
+    private var artistMoreMenu: some View {
+        Menu {
+            Button {
+                playInstantMix(container: container, itemID: artist.id, source: .artist)
+            } label: {
+                Label(String(localized: "Instant Mix", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "wand.and.stars")
+            }
+            .disabled(!isOnline)
+
+            Divider()
+
+            if isArtistPinned {
+                Button {
+                    HapticFeedback.light.trigger()
+                    container?.pinService.unpin(itemType: .artist, itemId: artist.id)
+                } label: {
+                    Label(String(localized: "Unpin from Home", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "pin.slash")
+                }
+            } else {
+                Button {
+                    pinCurrentArtist()
+                } label: {
+                    Label(String(localized: "Pin to Home", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "pin")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 15, weight: .semibold))
+        }
+        .menuOrder(.fixed)
+        .accessibilityLabel(String(localized: "More options", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+    }
+
+    private func pinCurrentArtist() {
+        guard let serverId = container?.serverState.activeServer?.id,
+              let pin = container?.pinService else { return }
+        do {
+            try pin.pin(
+                itemType: .artist,
+                itemId: artist.id,
+                displayName: viewModel?.artist?.name ?? artist.name,
+                displaySubtitle: "",
+                coverArtId: heroCoverArtId,
+                serverId: serverId
+            )
+            HapticFeedback.success.trigger()
+            container?.toastService.showConfirmation(String(localized: "Pinned to Home", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        } catch PinError.limitReached {
+            HapticFeedback.warning.trigger()
+            showPinLimitAlert = true
+        } catch {}
     }
 
     private var skeletonGrid: some View {

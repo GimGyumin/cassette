@@ -3,59 +3,55 @@
 // Licensed under the Mozilla Public License 2.0.
 // See LICENSE file in the project root for full license information.
 
-#if os(iOS)
 import SwiftUI
-import UIKit
 import AppIntents
 
-/// Cover art thumbnail shared between Small and Medium NowPlaying widget views.
-/// Caller is responsible for applying `.frame()` before this view.
+/// Apple Music–style square cover (continuous corners, subtle lift).
 struct WidgetCoverArtView: View {
-    let image: UIImage?
-    var cornerRadius: CGFloat = 8
+    let image: PlatformImage?
+    var cornerRadius: CGFloat = 12
 
     var body: some View {
         Group {
             if let image {
-                Image(uiImage: image)
+                Image(platformImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(.white.opacity(0.15))
+                ZStack {
+                    Color.primary.opacity(0.08)
+                    Image(systemName: "music.note")
+                        .font(.title2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
-/// Interactive play/pause CTA shared between Small and Medium NowPlaying widget views.
+/// Circular play/pause control — matches Apple Music widget chrome (no text capsule).
 struct WidgetPlayButton: View {
     let isPlaying: Bool
+    var compact: Bool = false
 
     var body: some View {
         Button(intent: PlayPauseIntent()) {
-            HStack(spacing: 4) {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.caption)
-                Text(isPlaying ? "Pause" : "Lecture")
-                    .font(.system(.caption, design: .rounded, weight: .bold))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.white.opacity(0.2), in: Capsule())
+            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                .font(compact ? .system(size: 12, weight: .bold) : .system(size: 15, weight: .bold))
+                .foregroundStyle(.primary)
+                .frame(width: compact ? 28 : 36, height: compact ? 28 : 36)
+                .background(.ultraThinMaterial, in: Circle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(isPlaying ? Text("Pause") : Text("Play"))
     }
 }
 
-/// Widget container background that stays readable on light covers: the cover's dominant color, with a dark
-/// scrim layered on top ONLY when that color is light, so the white widget content keeps contrast. Mirrors
-/// the app's `isLightBackground` luminance threshold (BT.601 perceived luminance > 0.6). Dark covers are
-/// unchanged (no scrim).
+/// Soft tinted backdrop from the cover’s dominant color (AM-style, not a solid brand fill).
 struct WidgetReadableBackground: View {
     let dominantColor: Color
+    var image: PlatformImage? = nil
 
     private var isLightCover: Bool {
         guard let components = dominantColor.cgColor?.components, components.count >= 3 else { return false }
@@ -65,11 +61,21 @@ struct WidgetReadableBackground: View {
 
     var body: some View {
         ZStack {
-            dominantColor
-            if isLightCover {
-                Color.black.opacity(0.6)
+            if let image {
+                Image(platformImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .blur(radius: 28)
+                    .scaleEffect(1.15)
+                    .overlay(Color.black.opacity(isLightCover ? 0.45 : 0.35))
+            } else {
+                dominantColor
+                if isLightCover {
+                    Color.black.opacity(0.45)
+                } else {
+                    Color.black.opacity(0.2)
+                }
             }
         }
     }
 }
-#endif

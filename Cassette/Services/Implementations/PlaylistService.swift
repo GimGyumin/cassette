@@ -37,6 +37,13 @@ actor PlaylistService: PlaylistServiceProtocol {
         return fresh
     }
 
+    func invalidateClientCache() async {
+        cachedClient = nil
+        cachedServerId = nil
+        listCache = nil
+        detailCache = [:]
+    }
+
     // MARK: - Read
 
     func listPlaylists() async throws -> [Playlist] {
@@ -148,6 +155,25 @@ actor PlaylistService: PlaylistServiceProtocol {
         }
     }
 
+    func updateVisibility(id: String, isPublic: Bool) async throws {
+        let previousList = listCache
+        let previousDetail = detailCache[id]
+        if let idx = listCache?.firstIndex(where: { $0.id == id }), let playlist = listCache?[idx] {
+            listCache?[idx] = copying(playlist, isPublic: isPublic)
+        }
+        if let playlist = detailCache[id] {
+            detailCache[id] = copying(playlist, isPublic: isPublic)
+        }
+        do {
+            try await client().updatePlaylist(id: id, isPublic: isPublic)
+            Logger.playlist.info("Updated visibility for playlist id=\(id, privacy: .public) public=\(isPublic, privacy: .public)")
+        } catch {
+            listCache = previousList
+            detailCache[id] = previousDetail
+            throw error
+        }
+    }
+
     // MARK: - Track mutations
 
     func addTracks(playlistId: String, songs: [Song]) async throws {
@@ -239,10 +265,8 @@ actor PlaylistService: PlaylistServiceProtocol {
             return record.serverId
         }
         guard let serverId else { return }
-        for song in addedSongs {
-            Task { [weak self] in
-                try? await self?.downloadService.download(song: song, serverId: serverId)
-            }
+        Task { [weak self] in
+            await self?.downloadSongsBounded(addedSongs, serverId: serverId)
         }
     }
 
@@ -262,9 +286,19 @@ actor PlaylistService: PlaylistServiceProtocol {
     }
 
     func retryMissingPlaylistDownloads() async {
+        // Only the active server can provide authoritative playlist contents. Querying records
+        // from other servers through the active client wasted requests and could never pass the
+        // DownloadService server-identity guard.
+        guard let activeServerId = await MainActor.run(body: {
+            serverService.state.activeServer?.id
+        }) else { return }
+
         let records = await MainActor.run { () -> [(playlistId: String, serverId: UUID, songIds: [String])] in
             let context = modelContainer.mainContext
-            let descriptor = FetchDescriptor<DownloadedPlaylist>()
+            let sid = activeServerId
+            let descriptor = FetchDescriptor<DownloadedPlaylist>(
+                predicate: #Predicate { $0.serverId == sid }
+            )
             guard let fetched = try? context.fetch(descriptor) else { return [] }
             return fetched
                 .filter { !$0.songIds.isEmpty }
@@ -272,8 +306,12 @@ actor PlaylistService: PlaylistServiceProtocol {
         }
         guard !records.isEmpty else { return }
 
+        // Every record is scoped to one server, so a single SwiftData lookup is enough.
+        let downloadedIds = await downloadService.downloadedSongIds(serverId: activeServerId)
+        var queuedSongIds = Set<String>()
+        var songsToDownload: [Song] = []
+
         for record in records {
-            let downloadedIds = await downloadService.downloadedSongIds(serverId: record.serverId)
             let missingIds = record.songIds.filter { !downloadedIds.contains($0) }
 
             guard !missingIds.isEmpty else { continue }
@@ -286,12 +324,35 @@ actor PlaylistService: PlaylistServiceProtocol {
             }
 
             let missingIdSet = Set(missingIds)
-            let songsToDownload = (playlist.entry ?? []).filter { missingIdSet.contains($0.id) }
-            let serverId = record.serverId
+            for song in playlist.entry ?? []
+            where missingIdSet.contains(song.id) && queuedSongIds.insert(song.id).inserted {
+                songsToDownload.append(song)
+            }
+        }
 
-            for song in songsToDownload {
-                Task { [weak self] in
-                    try? await self?.downloadService.download(song: song, serverId: serverId)
+        guard !songsToDownload.isEmpty else { return }
+        await downloadSongsBounded(songsToDownload, serverId: activeServerId)
+    }
+
+    /// Bounds repair/add downloads so large playlists do not create one URLSession task per song
+    /// at once. DownloadService still coalesces duplicate track requests across other callers.
+    private func downloadSongsBounded(_ songs: [Song], serverId: UUID) async {
+        let maxConcurrent = 3
+        await withTaskGroup(of: Void.self) { group in
+            var iterator = songs.makeIterator()
+
+            for _ in 0..<maxConcurrent {
+                guard let song = iterator.next() else { break }
+                group.addTask { [downloadService] in
+                    try? await downloadService.download(song: song, serverId: serverId)
+                }
+            }
+
+            for await _ in group {
+                if let song = iterator.next() {
+                    group.addTask { [downloadService] in
+                        try? await downloadService.download(song: song, serverId: serverId)
+                    }
                 }
             }
         }
@@ -303,6 +364,7 @@ actor PlaylistService: PlaylistServiceProtocol {
         _ p: Playlist,
         name: String? = nil,
         comment: String? = nil,
+        isPublic: Bool? = nil,
         songCountDelta: Int = 0,
         durationDelta: Int = 0
     ) -> Playlist {
@@ -313,7 +375,7 @@ actor PlaylistService: PlaylistServiceProtocol {
             duration: max(0, p.duration + durationDelta),
             comment: comment ?? p.comment,
             owner: p.owner,
-            isPublic: p.isPublic,
+            isPublic: isPublic ?? p.isPublic,
             created: p.created,
             changed: p.changed,
             coverArt: p.coverArt
@@ -324,6 +386,7 @@ actor PlaylistService: PlaylistServiceProtocol {
         _ p: PlaylistWithSongs,
         name: String? = nil,
         comment: String? = nil,
+        isPublic: Bool? = nil,
         songCountDelta: Int = 0,
         durationDelta: Int = 0,
         entry: [Song]? = nil
@@ -335,7 +398,7 @@ actor PlaylistService: PlaylistServiceProtocol {
             duration: max(0, p.duration + durationDelta),
             comment: comment ?? p.comment,
             owner: p.owner,
-            isPublic: p.isPublic,
+            isPublic: isPublic ?? p.isPublic,
             created: p.created,
             changed: p.changed,
             coverArt: p.coverArt,

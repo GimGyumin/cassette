@@ -17,9 +17,14 @@ struct WrappedAwardMedal: View {
     let isFocused: Bool
 
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    /// Observed so the holo ring stops immediately when the performance budget shrinks.
+    @State private var governor = PerformanceGovernor.shared
+    @State private var isVisible = false
 
-    private var spinEnabled: Bool { isFocused && !reduceMotion }
+    private var spinEnabled: Bool {
+        isFocused && isVisible && scenePhase == .active && governor.budget.allowsDecorativeMotion
+    }
 
     var body: some View {
         ZStack {
@@ -71,6 +76,8 @@ struct WrappedAwardMedal: View {
         }
         .drawingGroup()
         .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+        .onAppear { isVisible = true }
+        .onDisappear { isVisible = false }
     }
 
     // MARK: - Outer ring
@@ -81,7 +88,9 @@ struct WrappedAwardMedal: View {
             // TimelineView drives rotation from absolute time — no seam at cycle boundary.
             // Gradient captured once per body evaluation; closure reuses it each tick without reallocating.
             let gradient = holoGradient
-            TimelineView(.animation(minimumInterval: 1 / 60, paused: false)) { context in
+            // 24 fps instead of the display rate: a slowly rotating ring reads identically and
+            // costs ~20% fewer frames — this is a large `drawingGroup()` surface.
+            TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: false)) { context in
                 let elapsed = context.date.timeIntervalSinceReferenceDate
                 let degrees = (elapsed / 12.0).truncatingRemainder(dividingBy: 1) * 360
                 Circle()

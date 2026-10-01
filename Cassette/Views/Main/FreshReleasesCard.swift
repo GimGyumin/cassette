@@ -25,9 +25,11 @@ struct FreshReleasesCard: View {
                 Spacer(minLength: 0)
                 if !releases.isEmpty {
                     Button(action: onSeeAll) {
-                        Text("See all")
+                        Text(String(localized: "See all", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                             .font(.cassetteCaption)
                             .foregroundStyle(Color.cassetteAccent)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }

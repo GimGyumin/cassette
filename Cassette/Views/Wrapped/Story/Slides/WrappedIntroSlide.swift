@@ -31,7 +31,7 @@ struct WrappedIntroSlide: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
 
-                    Text("Wrapped")
+                    Text("Replay")
                         .font(.system(size: 52, weight: .heavy, design: .rounded))
                         .kerning(-1)
                         .foregroundStyle(.white)

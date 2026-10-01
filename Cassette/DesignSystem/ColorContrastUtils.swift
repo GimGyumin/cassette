@@ -6,12 +6,13 @@
 import SwiftUI
 
 extension CassetteColors {
-    // Light (#9F86FA): WCAG relative luminance ≈ 0.314
-    // Dark  (#4C28D4): WCAG relative luminance ≈ 0.078
-    private static let accentFgLight = Color(hex: "#9F86FA")
-    private static let accentFgDark  = Color(hex: "#4C28D4")
-    private static let luminanceFgLight: Double = 0.314
-    private static let luminanceFgDark:  Double = 0.078
+    // Cassette Red foreground variants (replaces Electric Violet).
+    // Light (#FF6B7A): WCAG relative luminance ≈ 0.35
+    // Dark  (#B01020): WCAG relative luminance ≈ 0.08
+    private static let accentFgLight = Color(hex: "#FF6B7A")
+    private static let accentFgDark  = Color(hex: "#B01020")
+    private static let luminanceFgLight: Double = 0.35
+    private static let luminanceFgDark:  Double = 0.08
     static var contrastThreshold: Double = 3.0
 
     /// Returns whichever accentForeground variant achieves WCAG 2.1 contrast (≥3.0:1)
@@ -25,42 +26,45 @@ extension CassetteColors {
         let lightPasses = cLight >= contrastThreshold
         let darkPasses  = cDark  >= contrastThreshold
         if lightPasses != darkPasses { return lightPasses ? accentFgLight : accentFgDark }
-        // Neither passes (dead zone): always use dark variant.
         if !lightPasses { return accentFgDark }
-        // Both pass: pick whichever has higher contrast.
         return lBg > 0.179 ? accentFgDark : accentFgLight
     }
 
-    /// Whether an over-cover control should sit on a LIGHT (white) surface — true for dark covers. Mirrors
-    /// the `accentForeground` light-variant decision (incl. the dead-zone default to dark), so the hero
-    /// buttons pick their variant from the COVER, not the device appearance.
+    /// Dark cover → light (white) control surface; light cover → dark (black) control surface.
     static func prefersLightControl(on background: Color) -> Bool {
         guard let lBg = sRGBLuminance(of: background) else { return false }
-        let lightPasses = contrastRatio(lBg, luminanceFgLight) >= contrastThreshold
-        let darkPasses  = contrastRatio(lBg, luminanceFgDark)  >= contrastThreshold
-        if lightPasses != darkPasses { return lightPasses }
-        if !lightPasses { return false }   // dead zone -> dark control
-        return lBg <= 0.179                 // both pass -> light control only on a genuinely dark cover
+        return contrastRatio(lBg, 1) > contrastRatio(lBg, 0)
     }
 
-    /// Unified (background, glyph/label) for ALL hero over-cover buttons (chevron/pencil, transport, Play).
-    /// Dark cover -> WHITE surface + the cover's `dominantColor` glyph; light/mid/dead-zone -> the dark-violet
-    /// accent surface + white glyph. Single source so every hero button stays consistent.
-    static func heroButtonVariant(on dominantColor: Color) -> (background: Color, foreground: Color) {
-        if prefersLightControl(on: dominantColor) {
-            return (background: .white, foreground: dominantColor)
+    /// Album/playlist Play CTA: capsule is black or white only; label/icon use a cover tint
+    /// when it still meets contrast on that fill, otherwise fall back to opposite B/W.
+    static func heroButtonVariant(
+        on dominantColor: Color,
+        labelTint: Color? = nil
+    ) -> (background: Color, foreground: Color) {
+        let fill: Color = prefersLightControl(on: dominantColor) ? .white : .black
+        let fallback: Color = fill == .white ? .black : .white
+        guard let tint = labelTint, meetsContrast(tint, on: fill) else {
+            return (background: fill, foreground: fallback)
         }
-        return (background: accentForeground(on: dominantColor), foreground: .white)
+        return (background: fill, foreground: tint)
+    }
+
+    /// Whether `foreground` has enough WCAG contrast against `background`.
+    static func meetsContrast(_ foreground: Color, on background: Color, minimum: Double = 3.0) -> Bool {
+        guard let lf = sRGBLuminance(of: foreground),
+              let lb = sRGBLuminance(of: background) else { return false }
+        return contrastRatio(lf, lb) >= minimum
     }
 
     // MARK: - WCAG 2.1 luminance
 
-    private static func sRGBLuminance(of color: Color) -> Double? {
+    static func sRGBLuminance(of color: Color) -> Double? {
         guard let (r, g, b) = sRGBComponents(of: color) else { return nil }
         return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b)
     }
 
-    private static func contrastRatio(_ a: Double, _ b: Double) -> Double {
+    static func contrastRatio(_ a: Double, _ b: Double) -> Double {
         let lighter = max(a, b)
         let darker  = min(a, b)
         return (lighter + 0.05) / (darker + 0.05)

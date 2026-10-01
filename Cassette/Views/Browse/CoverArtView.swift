@@ -38,6 +38,7 @@ struct CoverArtView: View {
     var cornerRadius: CGFloat = 0
     var placeholderSystemImage: String = "music.note"
     var initialImage: PlatformImage? = nil
+    var contentMode: ContentMode = .fill
     /// When false, the artwork load is deferred (placeholder/initial image only) until it flips true —
     /// used to avoid firing artwork tasks for rows mounted but not yet visible (e.g. the inline queue at
     /// opacity 0). Defaults to true so every other call site is unchanged.
@@ -54,6 +55,7 @@ struct CoverArtView: View {
             cornerRadius: cornerRadius,
             placeholderSystemImage: placeholderSystemImage,
             initialImage: initialImage,
+            contentMode: contentMode,
             loadingEnabled: loadingEnabled
         )
     }
@@ -67,6 +69,7 @@ private struct CoverArtViewContent: View {
     let tier: ArtworkTier?
     let cornerRadius: CGFloat
     let placeholderSystemImage: String
+    let contentMode: ContentMode
     let loadingEnabled: Bool
 
     @Environment(\.appContainer) private var container
@@ -77,18 +80,20 @@ private struct CoverArtViewContent: View {
     @AppStorage("coverArtUploadVersion") private var coverArtUploadVersion = 0
     @State private var cachedImage: PlatformImage?
     @State private var url: URL?
+    @State private var originalRevision = 0
     /// The id whose image `cachedImage` currently represents. Lets a track change resolve the
     /// NEW id instead of short-circuiting on a stale image: we only keep the current image when
     /// `displayedId == id`. A failed hero load can therefore never leave the previous track's
     /// artwork on screen — the resolution below clears it and falls back against the current id.
     @State private var displayedId: String?
 
-    init(id: String, size: Int?, tier: ArtworkTier?, cornerRadius: CGFloat, placeholderSystemImage: String, initialImage: PlatformImage?, loadingEnabled: Bool = true) {
+    init(id: String, size: Int?, tier: ArtworkTier?, cornerRadius: CGFloat, placeholderSystemImage: String, initialImage: PlatformImage?, contentMode: ContentMode = .fill, loadingEnabled: Bool = true) {
         self.id = id
         self.size = size
         self.tier = tier
         self.cornerRadius = cornerRadius
         self.placeholderSystemImage = placeholderSystemImage
+        self.contentMode = contentMode
         self.loadingEnabled = loadingEnabled
         _cachedImage = State(initialValue: initialImage)
         // A caller-provided image is its best guess for THIS id, so mark it displayed for `id`:
@@ -105,7 +110,7 @@ private struct CoverArtViewContent: View {
             if let cached = cachedImage {
                 Image(platformImage: cached)
                     .resizable()
-                    .scaledToFill()
+                    .aspectRatio(contentMode: contentMode)
             } else {
                 // AsyncImage safety fallback — reached only when artworkCache.load() fails.
                 AsyncImage(url: url) { phase in
@@ -113,7 +118,7 @@ private struct CoverArtViewContent: View {
                     case .success(let image):
                         image
                             .resizable()
-                            .scaledToFill()
+                            .aspectRatio(contentMode: contentMode)
                     case .failure:
                         placeholder
                     case .empty:
@@ -130,9 +135,14 @@ private struct CoverArtViewContent: View {
                 }
             }
         }
+        .clipped()
+        .contentShape(Rectangle())
         // Keyed on (loadingEnabled, id) so deferring/undeferring re-runs the load: a deferred row shows its
         // placeholder/initial image and fires NO artwork task until it becomes visible (loadingEnabled flips).
-        .task(id: "\(loadingEnabled):\(id):\(coverArtUploadVersion)") {
+        .onReceive(NotificationCenter.default.publisher(for: OriginalArtwork.didInstall)) { note in
+            if note.object as? String == id { originalRevision &+= 1 }
+        }
+        .task(id: "\(loadingEnabled):\(id):\(coverArtUploadVersion):\(originalRevision)") {
             guard loadingEnabled else { return }
             url = nil
             let t = resolvedTier
@@ -146,52 +156,59 @@ private struct CoverArtViewContent: View {
             // 1. RAM hit for the requested tier. Sync read in .task (not body) — reads in task
             //    closures are not tracked by @Observable, so this creates no observation on the
             //    global cache dictionary.
-            if let ram = artworkCache.cachedImage(for: id, tier: t) {
-                apply(ram, for: id)
+            if let local = await artworkCache.loadPlainDiskCover(coverArtId: id, tier: t) {
+                guard !Task.isCancelled else { return }
+                apply(local, for: id)
                 return
             }
+            if let ram = artworkCache.cachedImage(for: id, tier: t) { apply(ram, for: id) }
 
-            // 2. Tiered load (RAM → disk `{id}@{tier}` → network). Network is online-only — offline
-            //    we skip straight to the local fallbacks rather than wait on a doomed fetch.
-            if online, let image = await artworkCache.load(coverArtId: id, tier: t) {
+            // 2. For hero artwork, paint any already-available thumbnail immediately, then keep
+            //    resolving the requested tier. This makes the full player open with the same cover
+            //    the mini player has already loaded instead of showing a skeleton while hero loads.
+            if t != .thumb {
+                if let ramThumb = artworkCache.cachedImage(for: id, tier: .thumb) {
+                    apply(ramThumb, for: id)
+                } else if let diskThumb = await artworkCache.load(coverArtId: id, tier: .thumb, allowNetwork: false) {
+                    guard !Task.isCancelled else { return }
+                    apply(diskThumb, for: id)
+                }
+            }
+
+            // A local thumbnail is preferable to fetching another copy for the player.
+            if let local = await artworkCache.load(coverArtId: id, tier: t, allowNetwork: false) {
+                guard !Task.isCancelled else { return }
+                apply(local, for: id)
+                return
+            }
+            if displayedId == id, cachedImage != nil { return }
+
+            // 3. Tiered load (RAM → disk `{id}@{tier}` → optional network). Always go through the
+            //    cache so disk decode is gated — never ungated ImageIO from this view.
+            if let image = await artworkCache.load(coverArtId: id, tier: t, allowNetwork: online) {
                 guard !Task.isCancelled else { return }
                 apply(image, for: id)
                 return
             }
 
             // The image already on screen is correct for this id (a caller-provided initialImage,
-            // or an unchanged id) — keep it rather than fall back to a lower tier or clear it.
+            // an unchanged id, or the immediate thumb fallback) — keep it rather than clear it.
             if displayedId == id { return }
 
-            // 3. Local on-disk file, decoded off-main at the requested tier size. Try the tiered file
-            //    `{id}@{tier}` FIRST — generated gradient covers and the online cache both persist there
-            //    (DownloadService.persistCover), so it is what resolves a gradient playlist (or any
-            //    online-cached cover) offline — then the untagged base file saved at download time (the
-            //    primary offline source for downloaded tracks).
-            for diskId in ["\(id)@\(t.rawValue)", id] {
-                if let baseURL = await container?.downloadService.localCoverArtURL(forId: diskId),
-                   let image = await Self.decodedImage(at: baseURL, maxDimension: t.decodePixels) {
-                    guard !Task.isCancelled else { return }
-                    apply(image, for: id)
-                    return
-                }
-                // A track change cancels this task; bail before the next probe / any @State write so a
-                // cancelled task that resumed after `id` changed can never stomp the new id's resolution.
+            // 4. Legacy plain-`id` offline download file — gated decode via the shared cache.
+            if let image = await artworkCache.loadPlainDiskCover(coverArtId: id, tier: t) {
                 guard !Task.isCancelled else { return }
-            }
-
-            // 4. Local thumb already in RAM — lower-res but the correct track (only when a larger
-            //    tier was requested; a thumb request was already covered by step 1).
-            if t != .thumb, let ramThumb = artworkCache.cachedImage(for: id, tier: .thumb) {
-                apply(ramThumb, for: id)
+                apply(image, for: id)
                 return
             }
+            guard !Task.isCancelled else { return }
 
             // 5. Nothing local resolved and the on-screen image belongs to a previous id — clear it
             //    so a mismatched cover is never left up, then try the online URL safety net
             //    (AsyncImage falls through to the placeholder when offline).
             cachedImage = nil
             displayedId = nil
+            guard online else { url = nil; return }
             let fallbackURL = await container?.libraryService.coverArtURL(id: id, size: size)
             guard !Task.isCancelled else { return }
             url = fallbackURL
@@ -203,15 +220,6 @@ private struct CoverArtViewContent: View {
         cachedImage = image
         displayedId = resolvedId
         url = nil
-    }
-
-    /// Decodes a local cover file off the main actor at `maxDimension`, reusing the cache's ImageIO
-    /// thumbnail path so the base-file fallback decodes identically to the tiered cache.
-    private static func decodedImage(at url: URL, maxDimension: Int) async -> PlatformImage? {
-        await Task.detached(priority: .userInitiated) {
-            guard let data = try? Data(contentsOf: url) else { return nil as PlatformImage? }
-            return ArtworkImageCache.thumbnailImage(from: data, maxDimension: maxDimension)
-        }.value
     }
 
     private var placeholder: some View {

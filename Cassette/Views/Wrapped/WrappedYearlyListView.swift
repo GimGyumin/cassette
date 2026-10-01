@@ -40,9 +40,7 @@ struct WrappedYearlyListView: View {
                         }
                     }
 
-                    NavigationLink {
-                        WrappedView()
-                    } label: {
+                    NavigationLink(value: HomeDestination.replay) {
                         HStack(spacing: CassetteSpacing.s) {
                             Image(systemName: "chart.bar.fill")
                                 .font(.title2)
@@ -70,7 +68,8 @@ struct WrappedYearlyListView: View {
             .padding(CassetteSpacing.l)
         }
         .cassetteContentWidth()
-        .navigationTitle("Wrapped")
+        .miniPlayerBottomMargin()
+        .navigationTitle(String(localized: "Replay", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         .task {
             guard let container,
                   let serverId = container.serverState.activeServer?.id.uuidString else {
@@ -87,9 +86,9 @@ struct WrappedYearlyListView: View {
             Image(systemName: "waveform")
                 .font(.largeTitle)
                 .foregroundStyle(Color.cassetteAccent.opacity(0.5))
-            Text("No Wrapped playlists yet.")
+            Text("No Replay playlists yet.")
                 .font(.cassetteCellTitle)
-            Text("Your Wrapped \(currentYear) will be available on December 28.")
+            Text("Your Replay \(currentYear) will be available on December 28.")
                 .font(.cassetteCaption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

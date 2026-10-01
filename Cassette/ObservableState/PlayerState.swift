@@ -19,6 +19,9 @@ final class PlayerState {
     var playbackState: PlaybackState = .idle
     var position: TimeInterval = 0
     var duration: TimeInterval = 0
+    /// Reflects the active engine/format, not merely the presence of track metadata.
+    /// Some streaming formats expose a duration but cannot actually seek.
+    var isSeekable: Bool = false
     var repeatMode: RepeatMode = .off
     var isShuffled: Bool = false
     /// False when a restored track cannot be resolved (offline + streamed only).
@@ -29,6 +32,9 @@ final class PlayerState {
     var currentRadio: InternetRadioStation?
     /// True when a radio is the current playback source. Equivalent to currentRadio != nil.
     var isLiveStream: Bool { currentRadio != nil }
+    /// True when the active stream uses a lossy Subsonic transcode (mp3/opus/aac).
+    /// Local downloads/caches and `format=raw` / match-stream originals are false.
+    var isDeliveringTranscodedAudio: Bool = false
     /// True when the current playback session was started via Smart Shuffle.
     /// Survives skips and pauses; resets on new explicit play, radio, stop, or cold start.
     var isSmartShuffleActive: Bool = false

@@ -6,11 +6,13 @@
 #if os(macOS)
 import Foundation
 
+/// Sidebar IA mirrors Apple Music: Search → Home → Discover → Library, plus desktop library shortcuts.
 nonisolated enum SidebarSection: String, Hashable, Identifiable, CaseIterable {
+    case search
     case home
-    case radio
-    case freshReleases
-    case wrapped
+    case discover
+    case library
+    case recentlyAdded
     case albums
     case artists
     case playlists
@@ -21,11 +23,12 @@ nonisolated enum SidebarSection: String, Hashable, Identifiable, CaseIterable {
 
     var displayLabel: String {
         switch self {
+        case .search:    return "Search"
         case .home:      return "Home"
-        case .radio:         return "Radio"
-        case .freshReleases: return "Fresh Releases"
-        case .wrapped:       return "Wrapped"
-        case .albums:        return "Albums"
+        case .discover:  return "Discover"
+        case .library:   return "Library"
+        case .recentlyAdded: return "Recently Added"
+        case .albums:    return "Albums"
         case .artists:   return "Artists"
         case .playlists: return "Playlists"
         case .favorites: return "Favorites"
@@ -35,14 +38,15 @@ nonisolated enum SidebarSection: String, Hashable, Identifiable, CaseIterable {
 
     var systemImage: String {
         switch self {
+        case .search:    return "magnifyingglass"
         case .home:      return "house"
-        case .radio:         return "antenna.radiowaves.left.and.right"
-        case .freshReleases: return "sparkles"
-        case .wrapped:       return "play.square.stack"
-        case .albums:        return "square.stack"
+        case .discover:  return "safari"
+        case .library:   return "square.stack"
+        case .recentlyAdded: return "clock"
+        case .albums:    return "square.stack"
         case .artists:   return "music.mic"
         case .playlists: return "music.note.list"
-        case .favorites: return "heart"
+        case .favorites: return "star"
         case .downloads: return "arrow.down.circle"
         }
     }

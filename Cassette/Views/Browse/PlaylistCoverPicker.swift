@@ -55,7 +55,7 @@ struct PlaylistCoverPicker: View {
                         label: shape.displayName,
                         action: { onSelectGradient(shape) }
                     ) {
-                        PlaylistGradientView(spec: .neutral(shape: shape))
+                        PlaylistGradientView(spec: .neutral(shape: shape), lightweight: true)
                     }
                 }
             }

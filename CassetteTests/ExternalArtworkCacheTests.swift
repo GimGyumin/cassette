@@ -39,6 +39,45 @@ private final class CountingFetcher: ExternalArtworkFetcher {
     private func increment() { callCount += 1 }
 }
 
+private actor SuspendedArtworkFetcher: ExternalArtworkFetcher {
+    private(set) var callCount = 0
+    private let data: Data
+    private var pending: CheckedContinuation<Data, Error>?
+
+    init(data: Data) { self.data = data }
+
+    func fetchData(from url: URL) async throws -> Data {
+        callCount += 1
+        guard callCount == 1 else { return data }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+                else { pending = continuation }
+            }
+        } onCancel: {
+            Task { await self.cancelPending() }
+        }
+    }
+
+    private func cancelPending() {
+        pending?.resume(throwing: CancellationError())
+        pending = nil
+    }
+}
+
+private actor DelayedArtworkFetcher: ExternalArtworkFetcher {
+    private(set) var callCount = 0
+    private let data: Data
+
+    init(data: Data) { self.data = data }
+
+    func fetchData(from url: URL) async throws -> Data {
+        callCount += 1
+        try await Task.sleep(for: .milliseconds(100))
+        return data
+    }
+}
+
 // MARK: - Helpers
 
 private func makeTempDir() throws -> URL {
@@ -61,7 +100,76 @@ private func makeCache(
 @Suite("ExternalArtworkCache")
 struct ExternalArtworkCacheTests {
 
+    @Test("Concurrent requests share one network fetch and decode")
+    func concurrentRequestsAreCoalesced() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fetcher = DelayedArtworkFetcher(data: validImageData)
+        let cache = makeCache(dir: dir, fetcher: fetcher)
+        let url = testURL
+        let successes = await withTaskGroup(of: Bool.self) { group in
+            for _ in 0..<20 {
+                group.addTask { await cache.image(for: url) != nil }
+            }
+            var count = 0
+            for await succeeded in group where succeeded { count += 1 }
+            return count
+        }
+        #expect(successes == 20)
+        #expect(await fetcher.callCount == 1)
+    }
+
+    @Test("Memory purge preserves disk artwork for an offline reload")
+    func memoryPurgePreservesDisk() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fetcher = CountingFetcher(data: validImageData)
+        let cache = makeCache(dir: dir, fetcher: fetcher)
+        #expect(await cache.image(for: testURL) != nil)
+        await cache.clearMemoryCache()
+        #expect(await cache.image(for: testURL) != nil)
+        #expect(fetcher.callCount == 1)
+    }
+
+    @Test("Corrupt payloads are not cached and can be retried")
+    func corruptImageCanBeRetried() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fetcher = CountingFetcher(data: invalidImageData)
+        let cache = makeCache(dir: dir, fetcher: fetcher)
+        #expect(await cache.image(for: testURL) == nil)
+        #expect(await cache.image(for: testURL) == nil)
+        #expect(fetcher.callCount == 2)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty)
+    }
+
     // MARK: Memory cache
+
+    @Test("An image larger than the byte budget is returned but not retained")
+    func oversizedMemoryEntryIsNotRetained() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fetcher = CountingFetcher(data: validImageData)
+        let cache = ExternalArtworkCache(cacheDirectory: dir, fetcher: fetcher, ttl: 0, maxMemoryBytes: 1)
+        #expect(await cache.image(for: testURL) != nil)
+        #expect(await cache.image(for: testURL) != nil)
+        #expect(fetcher.callCount == 2)
+    }
+
+    @Test("Reset drains pending downloads before removing disk entries")
+    func resetDuringFetchDoesNotRepopulateDisk() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fetcher = SuspendedArtworkFetcher(data: validImageData)
+        let cache = makeCache(dir: dir, fetcher: fetcher)
+        let task = Task { await cache.image(for: testURL) }
+        while await fetcher.callCount == 0 { await Task.yield() }
+        await cache.clearAll()
+        #expect(await task.value == nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty)
+        #expect(await cache.image(for: testURL) != nil)
+        #expect(await fetcher.callCount == 2)
+    }
 
     @Test("memory cache hit prevents second network call")
     func memoryCacheHitSkipsNetwork() async throws {

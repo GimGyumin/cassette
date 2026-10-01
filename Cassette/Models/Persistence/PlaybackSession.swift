@@ -6,27 +6,30 @@
 import Foundation
 import SwiftData
 
-/// Persisted playback session — singleton (id = "current").
+/// Persisted playback session — logical singleton (`id == "current"`).
 ///
 /// Stores the full queue as JSON so the MiniPlayer can restore instantly
 /// without a network round-trip. Track metadata is duplicated as top-level
 /// fields for fast MiniPlayer rendering before the full queue is decoded.
+///
+/// CloudKit does not support unique constraints; duplicates are resolved with
+/// last-write-wins on `lastUpdated` in `PlaybackSessionService`.
 @Model
 final class PlaybackSession {
-    @Attribute(.unique) var id: String
-    var currentIndex: Int
-    var currentPosition: TimeInterval
-    var queueData: Data
+    var id: String = "current"
+    var currentIndex: Int = 0
+    var currentPosition: TimeInterval = 0
+    var queueData: Data = Data()
 
     // Current track metadata — duplicated for fast MiniPlayer display
     var currentTrackId: String?
     var currentTrackTitle: String?
     var currentTrackArtist: String?
     var currentTrackCoverArtId: String?
-    var currentTrackDuration: TimeInterval
-    var currentTrackIsDownloaded: Bool
+    var currentTrackDuration: TimeInterval = 0
+    var currentTrackIsDownloaded: Bool = false
 
-    var lastUpdated: Date
+    var lastUpdated: Date = Date()
     var repeatModeRaw: String = RepeatMode.off.rawValue
 
     init(

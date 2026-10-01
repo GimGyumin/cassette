@@ -9,7 +9,15 @@ import SwiftData
 @Model
 final class DownloadedTrack {
     var id: UUID
+    /// Cassette-owned identity. Existing rows lazily adopt `id.uuidString`; keeping this
+    /// optional makes the schema addition a non-destructive lightweight migration.
+    var localStableID: String?
     var songId: String
+    /// Current server representation, while `songId` remains the historical key used by the
+    /// on-disk filename and old queues. Never overwrite `songId` during ID reconciliation.
+    var currentRemoteID: String?
+    var legacyRemoteIDs: [String]?
+    var jellyfinID: String?
     var serverId: UUID
     var albumId: String?
     var filePath: String        // relative to Documents/app.cassette/downloads/
@@ -22,10 +30,20 @@ final class DownloadedTrack {
     var artistId: String?
     var album: String?
     var trackNumber: Int?
+    var discNumber: Int?
     var durationSeconds: Int?
+    var mediaPath: String?
+    var musicBrainzID: String?
+    var isrc: String?
     var coverArtId: String?
     var suffix: String?
     var genre: String?
+    /// Audio metadata for offline engine routing (Atmos / multichannel → AVPlayer).
+    var bitRate: Int?
+    var bitDepth: Int?
+    var samplingRate: Int?
+    var channelCount: Int?
+    var comment: String?
     // ReplayGain metadata — captured at download time for offline normalization.
     var replayGainTrackGain: Double?
     var replayGainTrackPeak: Double?
@@ -36,7 +54,11 @@ final class DownloadedTrack {
 
     init(
         id: UUID = UUID(),
+        localStableID: String? = nil,
         songId: String,
+        currentRemoteID: String? = nil,
+        legacyRemoteIDs: [String]? = nil,
+        jellyfinID: String? = nil,
         serverId: UUID,
         albumId: String? = nil,
         filePath: String,
@@ -48,10 +70,19 @@ final class DownloadedTrack {
         artistId: String? = nil,
         album: String? = nil,
         trackNumber: Int? = nil,
+        discNumber: Int? = nil,
         durationSeconds: Int? = nil,
+        mediaPath: String? = nil,
+        musicBrainzID: String? = nil,
+        isrc: String? = nil,
         coverArtId: String? = nil,
         suffix: String? = nil,
         genre: String? = nil,
+        bitRate: Int? = nil,
+        bitDepth: Int? = nil,
+        samplingRate: Int? = nil,
+        channelCount: Int? = nil,
+        comment: String? = nil,
         replayGainTrackGain: Double? = nil,
         replayGainTrackPeak: Double? = nil,
         replayGainAlbumGain: Double? = nil,
@@ -60,7 +91,11 @@ final class DownloadedTrack {
         replayGainFallbackGain: Double? = nil
     ) {
         self.id = id
+        self.localStableID = localStableID ?? id.uuidString
         self.songId = songId
+        self.currentRemoteID = currentRemoteID ?? songId
+        self.legacyRemoteIDs = legacyRemoteIDs
+        self.jellyfinID = jellyfinID
         self.serverId = serverId
         self.albumId = albumId
         self.filePath = filePath
@@ -72,10 +107,19 @@ final class DownloadedTrack {
         self.artistId = artistId
         self.album = album
         self.trackNumber = trackNumber
+        self.discNumber = discNumber
         self.durationSeconds = durationSeconds
+        self.mediaPath = mediaPath
+        self.musicBrainzID = musicBrainzID
+        self.isrc = isrc
         self.coverArtId = coverArtId
         self.suffix = suffix
         self.genre = genre
+        self.bitRate = bitRate
+        self.bitDepth = bitDepth
+        self.samplingRate = samplingRate
+        self.channelCount = channelCount
+        self.comment = comment
         self.replayGainTrackGain = replayGainTrackGain
         self.replayGainTrackPeak = replayGainTrackPeak
         self.replayGainAlbumGain = replayGainAlbumGain

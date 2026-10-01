@@ -45,6 +45,13 @@ private final class DVCapturingProvider: RecommendationProvider {
 
 @MainActor
 private final class DVLibraryStub: LibraryServiceProtocol {
+    func song(id: String) async throws -> Song { throw URLError(.unknown) }
+    var songPages: [Int: [Song]] = [:]
+    var requestedOffsets: [Int] = []
+    func librarySongs(offset: Int, count: Int) async throws -> [Song] {
+        requestedOffsets.append(offset)
+        return songPages[offset] ?? []
+    }
     func artists() async throws -> [ArtistIndex] { throw URLError(.unknown) }
     func artist(id: String) async throws -> ArtistID3 { throw URLError(.unknown) }
     func album(id: String) async throws -> AlbumID3 { throw URLError(.unknown) }
@@ -78,6 +85,32 @@ private final class DVLibraryStub: LibraryServiceProtocol {
 @Suite("DiscoverViewModel — fresh releases")
 @MainActor
 struct DiscoverViewModelFreshReleasesTests {
+
+    @Test("Spatial shelf finds later pages and deduplicates multichannel albums")
+    func spatialPagination() async {
+        let library = DVLibraryStub()
+        library.songPages = [
+            0: [Song(id: "stereo", title: "Stereo", suffix: "aac", albumId: "stereo-album", channelCount: 2)],
+            1: [Song(id: "surround", title: "Surround", suffix: "flac", albumId: "surround-album", channelCount: 6),
+                Song(id: "surround-2", title: "Surround 2", suffix: "aac", albumId: "surround-album", channelCount: 8)]
+        ]
+        let vm = DiscoverViewModel(libraryService: library, recommendationService: RecommendationService(providers: []))
+        await vm.loadSpatialAlbums(force: true)
+        #expect(vm.spatialAlbums.map(\.id) == ["surround-album"])
+        #expect(library.requestedOffsets == [0, 1, 3])
+        #expect(!vm.isLoadingSpatialAlbums)
+    }
+
+    @Test("Spatial shelf stops when a server ignores pagination")
+    func spatialRepeatedPage() async {
+        let library = DVLibraryStub()
+        let song = Song(id: "surround", title: "Surround", suffix: "flac", albumId: "album", channelCount: 6)
+        library.songPages = [0: [song], 1: [song]]
+        let vm = DiscoverViewModel(libraryService: library, recommendationService: RecommendationService(providers: []))
+        await vm.loadSpatialAlbums(force: true)
+        #expect(vm.spatialAlbums.count == 1)
+        #expect(library.requestedOffsets == [0, 1])
+    }
 
     private func makeVM(releases: [AlbumRecommendation] = [], shouldThrow: Bool = false) -> DiscoverViewModel {
         let provider = DVMockProvider(releases: releases, shouldThrow: shouldThrow)

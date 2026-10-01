@@ -51,23 +51,22 @@ struct ExternalProvidersSettingsView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationTitle("Open Releases In")
+        .navigationTitle(String(localized: "Open Releases In", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
-        #endif
-        #if os(iOS)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { showingAdd = true } label: {
                     Image(systemName: "plus")
                 }
+                .accessibilityLabel(String(localized: "Add Provider", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             }
         }
         #endif
         #if os(macOS)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Close") { dismiss() }
+                Button(String(localized: "Close", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) { dismiss() }
             }
         }
         #endif
@@ -110,11 +109,11 @@ struct ExternalProvidersSettingsView: View {
     private func content(vm: ExternalProvidersSettingsViewModel) -> some View {
         if vm.providers.isEmpty {
             ContentUnavailableView {
-                Label("No Providers Configured", systemImage: "arrow.up.right.square")
+                Label(String(localized: "No Providers Configured", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "arrow.up.forward.square")
             } description: {
-                Text("Add a custom search provider to open releases in your service of choice. Without a provider, releases fall back to ListenBrainz.")
+                Text(String(localized: "Add a custom search provider to open releases in your service of choice. Without a provider, releases fall back to ListenBrainz.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             } actions: {
-                Button("Add Provider") { showingAdd = true }
+                Button(String(localized: "Add Provider", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) { showingAdd = true }
                     .buttonStyle(.borderedProminent)
             }
         } else {
@@ -124,33 +123,49 @@ struct ExternalProvidersSettingsView: View {
                         Button {
                             editingProvider = provider
                         } label: {
-                            HStack {
-                                Text(provider.name)
-                                    .foregroundStyle(.primary)
-                                Spacer(minLength: 0)
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            Label {
+                                HStack {
+                                    Text(provider.name)
+                                        .foregroundStyle(.primary)
+                                    Spacer(minLength: 0)
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            } icon: {
+                                SettingsIcon(systemImage: "magnifyingglass", color: .orange)
                             }
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
-                            Button("Edit") { editingProvider = provider }
-                            Button("Delete", role: .destructive) { vm.delete(provider) }
+                            Button(String(localized: "Edit", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) { editingProvider = provider }
+                            Button(String(localized: "Delete", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), role: .destructive) { vm.delete(provider) }
                         }
                     }
                     .onDelete { indexSet in
                         for i in indexSet { vm.delete(vm.providers[i]) }
                     }
                 } footer: {
-                    Text("URL template must contain %s — replaced by \"Artist Album\" when opening a release.")
+                    Text(String(localized: "URL template must contain %s — replaced by \"Artist Album\" when opening a release.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 }
 
                 Section {
-                    Button("Add Provider") { showingAdd = true }
+                    Button {
+                        showingAdd = true
+                    } label: {
+                        Label {
+                            Text(String(localized: "Add Provider", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        } icon: {
+                            SettingsIcon(systemImage: "plus", color: .blue)
+                        }
+                    }
                 }
             }
+            .modifier(SettingsSubpageStyle())
+            #if os(iOS)
+            .listStyle(.insetGrouped)
+            #endif
         }
     }
 }

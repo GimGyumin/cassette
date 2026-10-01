@@ -19,18 +19,21 @@ import SwiftSonic
 ///   require separate header injection at their respective call sites.
 ///
 /// Timeout policy: the default initializer creates a dedicated URLSession with
-/// `timeoutIntervalForRequest = 30` and `timeoutIntervalForResource = 30`.
+/// `timeoutIntervalForRequest = 15` and `timeoutIntervalForResource = 20`.
 /// The resource timeout (default 7 days in URLSession) is the critical guard
 /// against hung Subsonic responses when the server triggers slow external lookups.
 struct CustomHeadersTransport: HTTPTransport, Sendable {
     private let base: any HTTPTransport
     private let headers: [String: String]
 
-    /// Normal use case. Creates a dedicated URLSession with 30-second timeouts.
+    /// Normal use case. Creates a dedicated URLSession with snappy cold-start timeouts.
     init(headers: [String: String]) {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 30
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 20
+        // Cap concurrent API calls to the Subsonic host so browse/backfill
+        // cannot starve audio streaming on the same server.
+        config.httpMaximumConnectionsPerHost = 4
         // Session-level injection ensures headers reach Cloudflare Access on every
         // request path, including any internal URLSession hop before SwiftSonic
         // intercepts the redirect.

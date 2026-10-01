@@ -31,6 +31,8 @@ final class MockPlayerService: PlayerServiceProtocol {
     func addToQueue(_ song: DisplayableSong) async {}
     func addToQueue(_ songs: [DisplayableSong]) async {}
     func removeFromQueue(at index: Int) async {}
+    func clearQueueHistory() async {}
+    func clearUpNext() async {}
     func moveInQueue(fromIndex: Int, toIndex: Int) async {}
     func restoreSession() async {}
     func handleNetworkRestored() async {}
@@ -40,8 +42,12 @@ final class MockPlayerService: PlayerServiceProtocol {
     func setVolume(_ volume: Float) async {}
     func togglePlayPause() async {}
     func saveCurrentPosition() async {}
+    func handleAppBecameActive() async {}
+    func handleAppWillResignActive() async {}
+    func handleAppDidEnterBackground() async {}
     func replayGainSettingsDidChange() async {}
     func crossfadeSettingsDidChange() async {}
+    func gaplessSettingsDidChange() async {}
     nonisolated func stopAudioEngineSync() {}
 }
 
@@ -102,7 +108,76 @@ private func multiLanguageList() -> LyricsList {
     ])
 }
 
+private func unsyncedPlainList() -> LyricsList {
+    LyricsList(structuredLyrics: [
+        StructuredLyrics(
+            lang: "en",
+            synced: false,
+            line: [
+                Line(value: "No timestamps here"),
+                Line(value: "Still should not crash on load"),
+            ]
+        )
+    ])
+}
+
 // MARK: - update(elapsedMs:)
+
+@Suite("Lyrics tracking cache regressions")
+@MainActor
+struct LyricsTrackingCacheTests {
+    @Test func distinctTimestampsAreRequired() {
+        let untimedCases: [[Int?]] = [[], [nil, nil], [0], [0, 0, nil]]
+        for starts in untimedCases {
+            let lyrics = StructuredLyrics(lang: "en", synced: true,
+                line: starts.map { Line(value: "Line", start: $0) })
+            #expect(!LyricsViewModel.hasUsableTiming(lyrics))
+        }
+        let lyrics = StructuredLyrics(lang: "en", synced: false,
+            line: [Line(value: "Untimed"), Line(value: "First", start: 0),
+                   Line(value: "Duet", start: 0), Line(value: "Next", start: 1000)])
+        #expect(LyricsViewModel.hasUsableTiming(lyrics))
+    }
+
+    @Test func replacingDocumentInvalidatesTrackingCache() throws {
+        let (vm, _) = try makeViewModel()
+        #expect(!vm.followsPlayback)
+        vm.state = .loaded(syncedList().structuredLyrics[0])
+        #expect(vm.followsPlayback)
+        vm.state = .loaded(unsyncedPlainList().structuredLyrics[0])
+        #expect(!vm.followsPlayback)
+        vm.state = .loaded(syncedList().structuredLyrics[0])
+        #expect(vm.followsPlayback)
+        vm.state = .loading
+        #expect(!vm.followsPlayback)
+        vm.state = .empty
+        #expect(!vm.followsPlayback)
+    }
+}
+
+@Suite("Apple translation session lifecycle")
+@MainActor
+struct LyricsAppleTranslationSessionTests {
+    @Test func ignoresOldAndInactiveSessions() throws {
+        let (vm, _) = try makeViewModel()
+        vm.appleTranslationRequestID = 2
+        vm.isTranslating = true
+        #expect(!vm.beginAppleTranslationSession(requestID: 1))
+        #expect(vm.isTranslating)
+        #expect(vm.beginAppleTranslationSession(requestID: 2))
+        vm.isTranslating = false
+        #expect(!vm.beginAppleTranslationSession(requestID: 2))
+    }
+
+    @Test func reportsTranslationFailureWithoutDiscardingLyrics() async throws {
+        let (vm, _) = try makeViewModel(serverId: UUID(), lyrics: syncedList())
+        await vm.load()
+        await vm.failAppleTranslation(message: "Language download unavailable")
+        #expect(vm.translationErrorMessage == "Language download unavailable")
+        #expect(!vm.isTranslating)
+        #expect(!vm.translatedLyrics.isEmpty)
+    }
+}
 
 @Suite("LyricsViewModel — update(elapsedMs:)")
 @MainActor
@@ -160,6 +235,81 @@ struct LyricsViewModelUpdateTests {
         // adjustedMs = 1600 - 500 = 1100 → line 1
         vm.update(elapsedMs: 1600)
         #expect(vm.currentLineIndex == 1)
+    }
+
+    @Test func highlightsSimultaneousTimestampLines() async throws {
+        let lyrics = LyricsList(structuredLyrics: [
+            StructuredLyrics(
+                lang: "en",
+                synced: true,
+                line: [
+                    Line(value: "I'm starting with the man", start: 1000),
+                    Line(value: "(man in the mirror)", start: 1000),
+                    Line(value: "Next verse", start: 5000),
+                ],
+                offset: 0
+            )
+        ])
+        let id = UUID()
+        let (vm, _) = try makeViewModel(serverId: id, lyrics: lyrics)
+        await vm.load()
+
+        vm.update(elapsedMs: 1000)
+        #expect(vm.currentLineIndex == 0)
+        #expect(vm.activeLineIndices == [0, 1])
+
+        vm.update(elapsedMs: 3000)
+        #expect(vm.currentLineIndex == 0)
+        #expect(vm.activeLineIndices == [0, 1])
+
+        vm.update(elapsedMs: 5000)
+        #expect(vm.currentLineIndex == 2)
+        #expect(vm.activeLineIndices == [2])
+    }
+
+    @Test func loadUnsyncedLyrics_doesNotCrashOnInstrumentalGapCache() async throws {
+        // Regression: empty timed-lead starts used to build `1..<0` and trap with
+        // "Range requires lowerBound <= upperBound" during seedOriginalLyrics.
+        let id = UUID()
+        let (vm, _) = try makeViewModel(serverId: id, lyrics: unsyncedPlainList())
+        await vm.load()
+        guard case .loaded = vm.state else {
+            Issue.record("Expected loaded unsynced lyrics")
+            return
+        }
+        vm.update(elapsedMs: 1_000)
+        #expect(vm.currentLineIndex == nil)
+        #expect(vm.followsPlayback == false)
+    }
+
+    @Test func lrcLongPhraseIsNotReplacedByDotsTooEarly() async throws {
+        let lyrics = LyricsList(structuredLyrics: [
+            StructuredLyrics(
+                lang: "en",
+                synced: true,
+                line: [
+                    Line(value: "First line", start: 0),
+                    Line(value: "Second line", start: 3_000),
+                    Line(value: "This phrase is still being sung", start: 6_000),
+                    Line(value: "After the musical break", start: 20_000),
+                ]
+            )
+        ])
+        let id = UUID()
+        let (vm, _) = try makeViewModel(serverId: id, lyrics: lyrics)
+        await vm.load()
+
+        // The former fixed hold switched to dots at about 8.3 s, even though the
+        // LRC line can still be sung. Keep the phrase visible at that point.
+        vm.update(elapsedMs: 8_500)
+        #expect(vm.currentLineIndex == 2)
+        #expect(vm.instrumentalGapProgress == nil)
+
+        // Once the conservative phrase window has elapsed, the genuinely long
+        // remaining interval may use the instrumental indicator.
+        vm.update(elapsedMs: 16_000)
+        #expect(vm.currentLineIndex == nil)
+        #expect(vm.instrumentalGapProgress != nil)
     }
 }
 
@@ -253,7 +403,7 @@ struct LyricsViewModelLanguageTests {
         // Simulate a non-nil currentLineIndex
         vm.update(elapsedMs: 0)
 
-        vm.selectLanguage("fr")
+        await vm.selectLanguage("fr")
         #expect(vm.selectedLanguage == "fr")
         #expect(vm.currentLineIndex == nil)
         if initial != "fr" {
@@ -273,9 +423,67 @@ struct LyricsViewModelLanguageTests {
 
         guard let lang = vm.selectedLanguage else { return }
         let stateBefore = vm.state
-        vm.selectLanguage(lang)
+        await vm.selectLanguage(lang)
         // State must not change
         #expect(vm.state == stateBefore)
+    }
+}
+
+// MARK: - activeChorusBlock (x-bg timing)
+
+private func chorusedList() -> LyricsList {
+    LyricsList(structuredLyrics: [
+        StructuredLyrics(
+            lang: "en",
+            synced: true,
+            line: [
+                Line(value: "Just lift yourself (Change)", start: 120_400),
+                Line(value: "You know", start: 122_100),
+            ],
+            agents: [
+                LyricsAgent(id: "lead", role: "main"),
+                LyricsAgent(id: "choir", role: "bg"),
+            ],
+            cueLine: [
+                CueLine(index: 0, start: 120_400, value: "Just lift yourself", agentId: "lead", cue: [
+                    LyricCue(start: 120_400, end: 121_000, value: "Just", byteStart: 0, byteEnd: 3),
+                ]),
+                CueLine(index: 0, start: 120_150, value: "(Change)", agentId: "choir", cue: [
+                    LyricCue(start: 120_150, end: 120_800, value: "(Change)", byteStart: 0, byteEnd: 7),
+                ]),
+                CueLine(index: 1, start: 122_100, value: "You know", agentId: "lead", cue: [
+                    LyricCue(start: 122_100, end: 123_000, value: "You know", byteStart: 0, byteEnd: 7),
+                ]),
+            ]
+        )
+    ])
+}
+
+@Suite("LyricsViewModel — activeChorusBlock")
+@MainActor
+struct LyricsViewModelChorusTests {
+
+    @Test func chorusEndIsExclusive() async throws {
+        let id = UUID()
+        let (vm, _) = try makeViewModel(serverId: id, lyrics: chorusedList())
+        await vm.load()
+
+        // bg span 120_150...120_800 — inside → visible.
+        vm.update(elapsedMs: 120_400)
+        let inside = vm.activeChorusBlock(at: 0)
+        #expect(inside?.isVisible == true)
+
+        // Just before end → visible.
+        vm.update(elapsedMs: 120_799)
+        #expect(vm.activeChorusBlock(at: 0)?.isVisible == true)
+
+        // Exactly at end → hidden (strict end exclusive).
+        vm.update(elapsedMs: 120_800)
+        #expect(vm.activeChorusBlock(at: 0)?.isVisible == false)
+
+        // After end → hidden.
+        vm.update(elapsedMs: 120_801)
+        #expect(vm.activeChorusBlock(at: 0)?.isVisible == false)
     }
 }
 

@@ -9,11 +9,10 @@ import AVFoundation
 import MediaPlayer
 #endif
 
-/// Custom volume slider visually identical to the scrubber in FullPlayerView. The slider DISPLAYS the system
-/// volume (`AVAudioSession.outputVolume`, observed via KVO). The system volume is WRITTEN — through a hidden
-/// `MPVolumeView`, the only sanctioned iOS API — ONLY for a value the user posted via the slider's `set`
-/// (`userTarget`), consumed once. A KVO/observation update and the cold-start read NEVER write back, so there
-/// is no feedback loop and no clobber. The write value is never animated.
+/// Custom volume slider matching Apple Music Now Playing:
+/// thin pill at rest, thick white pill while pressed/dragging — no circular thumb.
+/// Displays `AVAudioSession.outputVolume` (KVO). Writes system volume via hidden `MPVolumeView`
+/// only for user-posted `userTarget` values (no KVO feedback loop).
 struct SystemVolumeView: View {
     var contentColor: Color = .white
 
@@ -24,25 +23,43 @@ struct SystemVolumeView: View {
         ProgressSlider(
             value: Binding(
                 get: { TimeInterval(observer.displayVolume) },
-                // Any user-posted value (drag OR the accessibility adjust, both go through this set) moves the
-                // display immediately AND schedules the one-shot system write. The KVO never comes through here.
                 set: { newValue in
                     let v = Float(max(0, min(1, newValue)))
+                    #if !targetEnvironment(simulator)
+                    observer.setUserVolume(v)
+                    #else
                     observer.displayVolume = v
-                    observer.userTarget = v
+                    #endif
                 }
             ),
             total: 1.0,
-            onEditingChanged: { editing in observer.isEditing = editing },
-            trackColor: contentColor.opacity(0.2),
-            fillColor: contentColor.opacity(0.95)
+            onEditingChanged: { editing in observer.setEditing(editing) },
+            trackColor: contentColor.opacity(0.22),
+            fillColor: contentColor,
+            height: 36,
+            trackHeight: 6,
+            activeTrackHeight: 28,
+            dragMinimumDistance: 0,
+            // A tap only shows the active bar — it must not slam the volume to that position.
+            ignoresTapForValueChange: true
         )
         .background {
-            HiddenVolumeWriter(observer: observer)
-                .frame(width: 0, height: 0)
-            .opacity(0)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+            #if !targetEnvironment(simulator)
+            // Keep one MPVolumeView attached for the lifetime of this control. Re-creating a
+            // zero-sized view for every drag sample occasionally left its internal UISlider
+            // unavailable, so the visual slider moved while the system volume did not.
+            //
+            // Mounted lazily: MPVolumeView talks to MediaRemote, which is denied to third-party
+            // apps (`getSystemIsMuted` → ClientNotEntitled). There is no reason to pay that (or
+            // log it) at launch when the volume slider is never touched.
+            if observer.needsVolumeWriter {
+                HiddenVolumeWriter(observer: observer)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            #endif
         }
         .accessibilityLabel("Volume")
         .accessibilityValue("\(Int(observer.displayVolume * 100))%")
@@ -71,10 +88,14 @@ struct SystemVolumeView: View {
 private final class SystemVolumeObserver {
     /// Slider position. Updated by the user's input (immediate) and by the KVO (animated, when not dragging).
     var displayVolume: Float = AVAudioSession.sharedInstance().outputVolume
-    /// A value the user posted via the slider that must be pushed to the system ONCE. nil = nothing to write.
-    var userTarget: Float?
+    /// True once the user has touched the control. Gates the hidden `MPVolumeView`, so the
+    /// MediaRemote round-trip it performs only happens for someone who actually changes volume.
+    private(set) var needsVolumeWriter = false
     /// True while the user is dragging — keeps the KVO from yanking the slider position out from under the finger.
-    var isEditing = false
+    private var isEditing = false
+    /// Retained until MPVolumeView has created its private UISlider.
+    private var pendingUserTarget: Float?
+    private weak var volumeView: MPVolumeView?
     private var observation: NSKeyValueObservation?
 
     init() {
@@ -101,6 +122,52 @@ private final class SystemVolumeObserver {
         displayVolume = AVAudioSession.sharedInstance().outputVolume
     }
 
+    func setEditing(_ editing: Bool) {
+        if editing {
+            // A press on the slider is enough to need the writer: the value may follow immediately.
+            needsVolumeWriter = true
+        }
+        isEditing = editing
+        if !editing {
+            // outputVolume KVO can arrive while the drag is active. Refresh after the final
+            // MPVolumeView event so the displayed value reflects the value iOS accepted.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(80))
+                guard let self, !self.isEditing else { return }
+                self.refreshFromSystem()
+            }
+        }
+    }
+
+    func setUserVolume(_ volume: Float) {
+        needsVolumeWriter = true
+        displayVolume = volume
+        pendingUserTarget = volume
+        applyPendingUserVolume()
+    }
+
+    func attach(_ view: MPVolumeView) {
+        volumeView = view
+        // MPVolumeView may create its slider after the first layout pass.
+        applyPendingUserVolume()
+        Task { @MainActor [weak self, weak view] in
+            await Task.yield()
+            guard let self, let view else { return }
+            self.volumeView = view
+            self.applyPendingUserVolume()
+        }
+    }
+
+    private func applyPendingUserVolume() {
+        guard let target = pendingUserTarget,
+              let slider = volumeView?.subviews.compactMap({ $0 as? UISlider }).first else { return }
+        pendingUserTarget = nil
+        slider.setValue(target, animated: false)
+        // On newer iOS releases assigning UISlider.value alone is not guaranteed to invoke
+        // MPVolumeView's volume route. Deliver the same control event as a native drag.
+        slider.sendActions(for: .valueChanged)
+    }
+
     // NSKeyValueObservation auto-invalidates on dealloc — no deinit needed.
 }
 
@@ -113,22 +180,14 @@ private struct HiddenVolumeWriter: UIViewRepresentable {
     let observer: SystemVolumeObserver
 
     func makeUIView(context: Context) -> MPVolumeView {
-        let view = MPVolumeView(frame: .zero)
+        let view = MPVolumeView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
         view.isUserInteractionEnabled = false
+        observer.attach(view)
         return view
     }
 
     func updateUIView(_ uiView: MPVolumeView, context: Context) {
-        guard let target = observer.userTarget,
-              let slider = uiView.subviews.compactMap({ $0 as? UISlider }).first else { return }
-        if abs(slider.value - target) > 0.001 {
-            slider.setValue(target, animated: false)
-        }
-        // Consume once — deferred so we don't mutate observable state during the view update; cleared only if no
-        // newer value arrived, so a fast drag never drops its last value and a stale target is never re-written.
-        Task { @MainActor [observer] in
-            if observer.userTarget == target { observer.userTarget = nil }
-        }
+        observer.attach(uiView)
     }
 }
 #endif

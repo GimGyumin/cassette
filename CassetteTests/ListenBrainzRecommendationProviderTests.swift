@@ -84,6 +84,7 @@ private struct PRNeverCalledTransport: ListenBrainzTransport {
 // Null library stub — safe defaults, never actually called in fresh releases tests.
 @MainActor
 private final class PRLibraryNullStub: LibraryServiceProtocol {
+    func song(id: String) async throws -> Song { throw URLError(.unknown) }
     func artists() async throws -> [ArtistIndex] { throw URLError(.unknown) }
     func artist(id: String) async throws -> ArtistID3 { throw URLError(.unknown) }
     func album(id: String) async throws -> AlbumID3 { throw URLError(.unknown) }
@@ -115,6 +116,7 @@ private final class PRLibraryNullStub: LibraryServiceProtocol {
 // Configurable library stub for similar artists tests.
 @MainActor
 private final class PRLibraryConfigurableStub: LibraryServiceProtocol {
+    func song(id: String) async throws -> Song { throw URLError(.unknown) }
     private var mbidResult: Result<String?, Error> = .success(nil)
     private var artistsByName: [String: ArtistID3] = [:]
 

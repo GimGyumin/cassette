@@ -19,7 +19,7 @@ enum CassetteSpacing {
 
     /// Bottom scroll margin reserved for the iOS tabViewBottomAccessory mini player,
     /// which floats over tab content without extending the safe area.
-    static let miniPlayerBottomMargin: CGFloat = 80
+    static let miniPlayerBottomMargin: CGFloat = 56
 }
 
 // MARK: - Corner radius scale
@@ -44,41 +44,109 @@ enum CassetteShadow {
     static let coverOpacity: Double  = 0.15
 }
 
-// MARK: - macOS Layout
+// MARK: - Wide / desktop detail layout
+
+/// Shared sizing for macOS + iPad regular detail/player surfaces (not iPhone compact).
+enum CassetteWideLayout {
+    /// Fixed album/playlist sidebar cover on desktop layouts.
+    static let heroCoverArtSize: CGFloat = 280
+    /// Sidebar column width (cover + horizontal padding).
+    static let detailSidebarWidth: CGFloat = 320
+    /// Full-player cover cap on wide layouts (iPad / macOS).
+    static let playerCoverCap: CGFloat = 480
+    /// Full-player cover cap on iPhone landscape.
+    static let playerCoverCapCompactHeight: CGFloat = 240
+    /// Reserved height under NavigationSplitView content for the floating bottom player bar.
+    static let playerBarReservedHeight: CGFloat = 120
+
+    /// macOS always; iPad regular width. iPhone compact stays on the phone Immersive stack.
+    static func usesDesktopDetail(horizontalSizeClass: UserInterfaceSizeClass?) -> Bool {
+        #if os(macOS)
+        true
+        #else
+        horizontalSizeClass == .regular
+        #endif
+    }
+
+    /// Full player “wide chrome”: desktop detail **or** iPhone landscape (compact height).
+    static func usesWidePlayerLayout(
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        verticalSizeClass: UserInterfaceSizeClass?
+    ) -> Bool {
+        #if os(macOS)
+        true
+        #else
+        horizontalSizeClass == .regular || verticalSizeClass == .compact
+        #endif
+    }
+}
 
 #if os(macOS)
+/// Legacy alias — prefer `CassetteWideLayout`.
 enum CassetteMacOSLayout {
-    static let heroCoverArtSize: CGFloat = 280
-    /// heroHeight = heroCoverArtSize + 32 (top) + 32 (bottom padding)
-    static let heroHeight: CGFloat = 344
-    static let playerBarReservedHeight: CGFloat = 120
+    static let heroCoverArtSize: CGFloat = CassetteWideLayout.heroCoverArtSize
+    static let heroHeight: CGFloat = CassetteWideLayout.heroCoverArtSize + 64
+    static let playerBarReservedHeight: CGFloat = CassetteWideLayout.playerBarReservedHeight
 }
 #endif
 
 // MARK: - View modifier: content width
 
+/// How aggressively content is centered on wide layouts (macOS windows, iPad regular width).
+enum CassetteContentWidthStyle {
+    /// Browse / home / discover — nearly fill the detail column.
+    case fill
+    /// Settings / dense text — keep a readable column.
+    case readable
+}
+
 struct ContentWidthModifier: ViewModifier {
+    var style: CassetteContentWidthStyle = .fill
+
+    #if !os(macOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
+    /// Readable column: keeps dense text (settings, long lists) from stretching across a large window
+    /// or a full-width iPad canvas. `.fill` is left alone — shelves and grids want the width.
+    private func readableWidth(_ total: CGFloat) -> CGFloat {
+        let inset: CGFloat = 48
+        switch total {
+        case ..<900:  return min(total - inset, 640)
+        case ..<1200: return min(total - inset, 780)
+        case ..<1600: return min(total - inset, 920)
+        default:      return min(total - inset, 1080)
+        }
+    }
+
     @ViewBuilder
     func body(content: Content) -> some View {
         #if os(macOS)
         content
             .containerRelativeFrame(.horizontal, alignment: .center) { total, _ in
-                switch total {
-                case ..<900:  return min(total, 560)
-                case ..<1200: return min(total, 680)
-                case ..<1600: return min(total, 800)
-                default:      return min(total, 960)
+                switch style {
+                case .fill:     return max(320, total - 48)
+                case .readable: return readableWidth(total)
                 }
             }
         #else
-        content
+        if horizontalSizeClass == .regular, style == .readable {
+            // iPad at full width (or the wide half of Split View) gets the same readable cap as macOS;
+            // iPhone stays edge-to-edge because it never has a regular horizontal size class.
+            content
+                .containerRelativeFrame(.horizontal, alignment: .center) { total, _ in
+                    readableWidth(total)
+                }
+        } else {
+            content
+        }
         #endif
     }
 }
 
 extension View {
-    func cassetteContentWidth() -> some View {
-        modifier(ContentWidthModifier())
+    func cassetteContentWidth(_ style: CassetteContentWidthStyle = .fill) -> some View {
+        modifier(ContentWidthModifier(style: style))
     }
 
     /// Hides the iOS/macOS 26 scroll-edge effect (the soft blur the system fades under top bars). Used on the
@@ -88,6 +156,19 @@ extension View {
     func cassetteHideTopScrollEdgeEffect() -> some View {
         if #available(iOS 26.0, macOS 26.0, *) {
             scrollEdgeEffectHidden(true, for: .top)
+        } else {
+            self
+        }
+    }
+
+    /// Hides top + bottom scroll-edge blur (lyrics above chrome / translate controls).
+    /// Do not set `.hard` first — that still paints a visible bottom band under lyrics.
+    @ViewBuilder
+    func cassetteHideScrollEdgeEffects() -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            self
+                .scrollEdgeEffectHidden(true, for: .top)
+                .scrollEdgeEffectHidden(true, for: .bottom)
         } else {
             self
         }

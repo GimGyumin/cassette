@@ -134,21 +134,40 @@ struct ShouldStartFadeOutTests {
 struct ShouldProceedWithPrefetchTests {
 
     @Test func proceedsOnWifi() {
-        #expect(PlayerService.shouldProceedWithPrefetch(isExpensive: false, allowCellular: false) == true)
+        #expect(PlayerService.shouldProceedWithPrefetch(isLimited: false, allowCellular: false) == true)
     }
 
-    @Test func proceedsOnCellularWhenAllowed() {
-        #expect(PlayerService.shouldProceedWithPrefetch(isExpensive: true, allowCellular: true) == true)
+    @Test func proceedsOnLimitedNetworkWhenAllowed() {
+        #expect(PlayerService.shouldProceedWithPrefetch(isLimited: true, allowCellular: true) == true)
     }
 
-    @Test func blockedOnCellularWhenNotAllowed() {
-        #expect(PlayerService.shouldProceedWithPrefetch(isExpensive: true, allowCellular: false) == false)
+    @Test func blockedOnLimitedNetworkWhenNotAllowed() {
+        #expect(PlayerService.shouldProceedWithPrefetch(isLimited: true, allowCellular: false) == false)
     }
 
-    @Test func proceedsWhenNotExpensiveRegardlessOfAllowCellular() {
-        // isExpensive=false means we're on Wi-Fi; allowCellular flag is irrelevant
-        #expect(PlayerService.shouldProceedWithPrefetch(isExpensive: false, allowCellular: true) == true)
-        #expect(PlayerService.shouldProceedWithPrefetch(isExpensive: false, allowCellular: false) == true)
+    @Test func proceedsWhenUnlimitedRegardlessOfAllowCellular() {
+        // A metered *or* constrained network counts as limited only when flagged; an unlimited
+        // link ignores the cellular preference.
+        #expect(PlayerService.shouldProceedWithPrefetch(isLimited: false, allowCellular: true) == true)
+        #expect(PlayerService.shouldProceedWithPrefetch(isLimited: false, allowCellular: false) == true)
+    }
+}
+
+// MARK: - Automatic download cellular policy
+
+@Suite("PlayerService.shouldAllowAutomaticDownload")
+struct AutomaticDownloadCellularPolicyTests {
+
+    @Test func allowsWifiRegardlessOfCellularPreference() {
+        #expect(PlayerService.shouldAllowAutomaticDownload(isLimited: false, allowCellular: false))
+    }
+
+    @Test func blocksLimitedNetworkByDefault() {
+        #expect(!PlayerService.shouldAllowAutomaticDownload(isLimited: true, allowCellular: false))
+    }
+
+    @Test func allowsCellularWhenExplicitlyEnabled() {
+        #expect(PlayerService.shouldAllowAutomaticDownload(isLimited: true, allowCellular: true))
     }
 }
 

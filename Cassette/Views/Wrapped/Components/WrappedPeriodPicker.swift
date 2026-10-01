@@ -22,11 +22,14 @@ struct WrappedPeriodPicker: View {
                             .foregroundStyle(isSelected ? Color.cassetteAccentText : .primary)
                             .padding(.horizontal, CassetteSpacing.m)
                             .padding(.vertical, CassetteSpacing.s)
+                            .frame(minHeight: 44)
                             .background(isSelected ? Color.cassetteAccent : Color.primary.opacity(0.08))
                             .clipShape(Capsule())
+                            .contentShape(Capsule())
                             .animation(.easeInOut(duration: 0.15), value: isSelected)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
             .padding(.vertical, CassetteSpacing.xs)

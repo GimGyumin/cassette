@@ -7,3 +7,15 @@ CACHE_AUDIT.md
 xcuserdata/
 *.xcuserstate
 build/
+
+# Build artifacts & Xcode caches (were previously tracked accidentally)
+.derivedData*/
+DerivedData/
+*.xcresult
+
+# macOS metadata
+.DS_Store
+
+# Local archives and scratch folders
+*.zip
+.cursor-tmp/

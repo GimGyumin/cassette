@@ -4,6 +4,9 @@
 // See LICENSE file in the project root for full license information.
 
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct EditServerView: View {
     @Bindable var viewModel: EditServerViewModel
@@ -78,6 +81,7 @@ struct EditServerView: View {
             customHeadersSection
         }
         .formStyle(.grouped)
+        .modifier(SettingsSubpageStyle())
         #if os(iOS)
         .scrollDismissesKeyboard(.interactively)
         #endif
@@ -88,6 +92,14 @@ struct EditServerView: View {
 
     private var saveButton: some View {
         Button {
+            // Resign the keyboard first so iOS Password AutoFill's "Save Password"
+            // sheet doesn't stack on top of this form and freeze the UI.
+            #if os(iOS)
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil, from: nil, for: nil
+            )
+            #endif
             Task {
                 await viewModel.save()
                 if viewModel.connectionError == nil,
@@ -100,12 +112,14 @@ struct EditServerView: View {
             if viewModel.isSaving {
                 ProgressView()
                     .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
             } else {
-                Text("Save Changes")
+                Label("Save Changes", systemImage: "checkmark")
                     .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
             }
         }
-        .buttonStyle(.borderedProminent)
+        .cassetteAccentGlassButton(disabled: !viewModel.canSave || viewModel.isSaving)
         .controlSize(.large)
         .disabled(!viewModel.canSave || viewModel.isSaving)
         .padding(.horizontal)
@@ -115,12 +129,15 @@ struct EditServerView: View {
 
     private var serverSection: some View {
         Section("Server") {
-            TextField("https://music.example.com", text: $viewModel.serverURL)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                #endif
+            SettingsTextFieldRow(title: "Address", systemImage: "network", color: .blue) {
+                TextField("https://music.example.com", text: $viewModel.serverURL)
+                    .textContentType(.URL)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    #endif
+            }
             invalidURLHint
             httpWarning
         }
@@ -128,23 +145,32 @@ struct EditServerView: View {
 
     private var credentialsSection: some View {
         Section("Credentials") {
-            TextField("Username", text: $viewModel.username)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                #endif
+            SettingsTextFieldRow(title: "Username", systemImage: "person.fill", color: .blue) {
+                TextField("Username", text: $viewModel.username)
+                    .textContentType(.username)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+            }
 
-            HStack(spacing: 8) {
-                passwordField
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            LabeledContent {
+                HStack(spacing: 8) {
+                    passwordField
+                        .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
 
-                Button {
-                    isPasswordRevealed.toggle()
-                } label: {
-                    Image(systemName: isPasswordRevealed ? "eye.slash" : "eye")
-                        .foregroundStyle(.secondary)
+                    Button {
+                        isPasswordRevealed.toggle()
+                    } label: {
+                        Image(systemName: isPasswordRevealed ? "eye.slash" : "eye")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isPasswordRevealed ? "Hide password" : "Show password")
                 }
-                .buttonStyle(.plain)
+            } label: {
+                SettingsRowLabel(title: "Password", systemImage: "key.fill", color: .orange)
             }
         }
     }
@@ -153,12 +179,14 @@ struct EditServerView: View {
     private var passwordField: some View {
         if isPasswordRevealed {
             TextField("Password", text: $viewModel.password)
+                .textContentType(.password)
                 .autocorrectionDisabled()
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 #endif
         } else {
             SecureField("Password", text: $viewModel.password)
+                .textContentType(.password)
         }
     }
 
@@ -199,7 +227,7 @@ struct EditServerView: View {
 
     private var customHeadersSection: some View {
         Section {
-            DisclosureGroup("Custom Headers") {
+            DisclosureGroup {
                 ForEach($viewModel.customHeaders) { $header in
                     CustomHeaderRowView(
                         key: $header.key,
@@ -210,6 +238,8 @@ struct EditServerView: View {
                 Button(action: viewModel.addCustomHeader) {
                     Label("Add Header", systemImage: "plus")
                 }
+            } label: {
+                SettingsRowLabel(title: "Custom Headers", systemImage: "curlybraces", color: .gray)
             }
         } footer: {
             Text("Optional headers sent with every request — useful for Cloudflare Access or other reverse-proxy authentication.")

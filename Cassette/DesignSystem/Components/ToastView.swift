@@ -16,13 +16,14 @@ struct ToastView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(toast.message)
-                    .font(.cassetteCellTitle)
-                    .lineLimit(1)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(CassetteColors.SemanticLabel.primary)
+                    .lineLimit(2)
                 if let subtitle = toast.subtitle {
                     Text(subtitle)
-                        .font(.cassetteCaption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .font(.footnote)
+                        .foregroundStyle(CassetteColors.SemanticLabel.secondary)
+                        .lineLimit(2)
                 }
             }
             .multilineTextAlignment(.leading)
@@ -30,8 +31,8 @@ struct ToastView: View {
             // Chevron only when the toast is tappable (e.g. add-to-playlist → opens the playlist).
             if toast.action != nil {
                 Image(systemName: "chevron.forward")
-                    .font(.cassetteCaption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(CassetteColors.SemanticLabel.tertiary)
                     .padding(.leading, CassetteSpacing.s)
             }
         }

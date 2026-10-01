@@ -23,4 +23,13 @@ extension View {
         self
         #endif
     }
+
+    /// Hides the navigation bar toolbar. No-op on macOS (`ToolbarPlacement.navigationBar` is iOS-only).
+    func cassetteHideNavigationBar() -> some View {
+        #if os(iOS)
+        self.toolbar(.hidden, for: .navigationBar)
+        #else
+        self
+        #endif
+    }
 }

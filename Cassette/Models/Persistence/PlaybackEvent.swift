@@ -13,24 +13,26 @@ import SwiftData
 /// All metadata fields are snapshotted at recording time for resilience against
 /// server-side deletions. PersistentModel instances never cross actor boundaries —
 /// use PlaybackEventDTO for all inter-actor communication.
+///
+/// Defaults on non-optional properties are required for SwiftData CloudKit sync.
 @Model
 final class PlaybackEvent {
     #Index<PlaybackEvent>([\.timestamp], [\.serverId])
 
-    var timestamp: Date
-    var serverId: String
+    var timestamp: Date = Date()
+    var serverId: String = ""
 
-    var id: UUID
-    var trackId: String
-    var trackTitle: String
+    var id: UUID = UUID()
+    var trackId: String = ""
+    var trackTitle: String = ""
     var albumId: String?
     var albumTitle: String?
     var artistId: String?
-    var artistName: String
+    var artistName: String = ""
     var genre: String?
-    var durationListened: TimeInterval
-    var trackDuration: TimeInterval
-    var wasCompleted: Bool
+    var durationListened: TimeInterval = 0
+    var trackDuration: TimeInterval = 0
+    var wasCompleted: Bool = false
 
     init(
         id: UUID = UUID(),

@@ -11,7 +11,7 @@ struct ReplayGainSettingsSection: View {
     var body: some View {
         let rg = container?.replayGainSettings
 
-        Section("Playback") {
+        Section {
             Toggle(isOn: Binding(
                 get: { rg?.enabled ?? false },
                 set: { newVal in
@@ -20,9 +20,9 @@ struct ReplayGainSettingsSection: View {
                 }
             )) {
                 Label {
-                    Text("ReplayGain")
+                    Text(String(localized: "ReplayGain", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 } icon: {
-                    SettingsIcon(systemImage: "speaker.wave.3", color: .purple)
+                    SettingsIcon(systemImage: "speaker.wave.3.fill", color: .pink)
                 }
             }
 
@@ -34,33 +34,23 @@ struct ReplayGainSettingsSection: View {
                         Task { await container?.playerService.replayGainSettingsDidChange() }
                     }
                 )) {
-                    Text("Track").tag(ReplayGainMode.track)
-                    Text("Album").tag(ReplayGainMode.album)
+                    Text(String(localized: "Track", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)).tag(ReplayGainMode.track)
+                    Text(String(localized: "Album", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)).tag(ReplayGainMode.album)
                 } label: {
                     Label {
-                        Text("Mode")
+                        Text(String(localized: "Mode", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                     } icon: {
-                        SettingsIcon(systemImage: "music.note", color: .purple)
+                        SettingsIcon(systemImage: "rectangle.stack.fill", color: .purple)
                     }
                 }
                 .pickerStyle(.menu)
 
-                Stepper(
-                    value: Binding(
-                        get: { rg?.preAmp ?? 0 },
-                        set: { newVal in
-                            rg?.preAmp = newVal
-                            Task { await container?.playerService.replayGainSettingsDidChange() }
-                        }
-                    ),
-                    in: ReplayGainSettings.minPreAmp...ReplayGainSettings.maxPreAmp,
-                    step: 0.5
-                ) {
+                VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Label {
-                            Text("Pre-amp")
+                            Text(String(localized: "Pre-amp", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                         } icon: {
-                            SettingsIcon(systemImage: "slider.horizontal.3", color: .purple)
+                            SettingsIcon(systemImage: "slider.horizontal.3", color: .orange)
                         }
                         Spacer()
                         Text(preAmpLabel(rg?.preAmp ?? 0))
@@ -68,6 +58,17 @@ struct ReplayGainSettingsSection: View {
                             .monospacedDigit()
                             .font(.body.weight(.medium))
                     }
+                    Slider(
+                        value: Binding(
+                            get: { rg?.preAmp ?? 0 },
+                            set: { newVal in
+                                rg?.preAmp = newVal
+                                Task { await container?.playerService.replayGainSettingsDidChange() }
+                            }
+                        ),
+                        in: ReplayGainSettings.minPreAmp...ReplayGainSettings.maxPreAmp,
+                        step: 0.5
+                    )
                 }
 
                 Toggle(isOn: Binding(
@@ -78,12 +79,16 @@ struct ReplayGainSettingsSection: View {
                     }
                 )) {
                     Label {
-                        Text("Prevent clipping")
+                        Text(String(localized: "Prevent clipping", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                     } icon: {
-                        SettingsIcon(systemImage: "waveform.path.ecg", color: .purple)
+                        SettingsIcon(systemImage: "waveform.path.ecg", color: CassetteColors.accent)
                     }
                 }
             }
+        } header: {
+            SettingsSectionHeader(verbatim: String(localized: "Volume", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        } footer: {
+            Text(String(localized: "ReplayGain levels volume across tracks so quieter and louder songs play more evenly.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
 

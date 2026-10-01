@@ -7,22 +7,50 @@ import SwiftUI
 
 /// Reusable mesh gradient background derived from a 3-color palette.
 /// Falls back to LinearGradient on macOS 14 where MeshGradient is unavailable.
+/// Animation is paused off-screen, in the background, in Low Power Mode, under Reduce Motion,
+/// and while the device reports thermal pressure (see `PerformanceGovernor`).
 struct MeshGradientBackground: View {
     /// 3 colors from WrappedYearPalette.
     let palette: [Color]
     /// When true, subtly animates mesh control points (8s period, ±0.04 amplitude).
     let animated: Bool
 
+    @Environment(\.scenePhase) private var scenePhase
+    /// Observed so a budget change restarts/stops the animation immediately instead of waiting for
+    /// the next unrelated state change.
+    @State private var governor = PerformanceGovernor.shared
     @State private var animationPhase: CGFloat = 0
+    @State private var isVisible = false
+
+    private var shouldAnimate: Bool {
+        animated && isVisible && scenePhase == .active && governor.budget.allowsDecorativeMotion
+    }
 
     var body: some View {
         gradient
             .onAppear {
-                guard animated else { return }
-                withAnimation(.easeInOut(duration: 8).repeatForever(autoreverses: true)) {
-                    animationPhase = 1
-                }
+                isVisible = true
+                syncAnimation()
             }
+            .onDisappear {
+                isVisible = false
+                syncAnimation()
+            }
+            .onChange(of: scenePhase) { _, _ in syncAnimation() }
+            .onChange(of: governor.budget) { _, _ in syncAnimation() }
+            .onChange(of: animated) { _, _ in syncAnimation() }
+    }
+
+    private func syncAnimation() {
+        guard shouldAnimate else {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { animationPhase = 0 }
+            return
+        }
+        withAnimation(.easeInOut(duration: 8).repeatForever(autoreverses: true)) {
+            animationPhase = 1
+        }
     }
 
     @ViewBuilder
@@ -44,7 +72,7 @@ struct MeshGradientBackground: View {
     }
 
     private var currentPoints: [SIMD2<Float>] {
-        let p = Float(animationPhase)
+        let p = Float(shouldAnimate ? animationPhase : 0)
         return [
             [0.0, 0.0], [0.5 + 0.04 * p, 0.0],                        [1.0, 0.0],
             [0.0, 0.5 + 0.03 * p], [0.5 - 0.04 * p, 0.5 + 0.04 * p], [1.0, 0.5 - 0.03 * p],

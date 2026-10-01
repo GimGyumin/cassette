@@ -5,6 +5,7 @@
 
 #if os(macOS)
 import SwiftUI
+import SwiftData
 import SwiftSonic
 
 struct ArtistDetailMacOS: View {
@@ -18,13 +19,25 @@ struct ArtistDetailMacOS: View {
         self.artistName = artistName
         self.coverArtId = coverArtId
         self.showBackButton = showBackButton
+        let cid = "artist:\(artistId)"
+        _artistFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> { $0.id == cid })
     }
 
     @Environment(\.appContainer) private var container
     @Environment(\.dismiss) private var dismiss
     @State private var vm: ArtistDetailViewModel?
     @State private var selectedOutOfLibraryArtist: SimilarArtistRecommendation?
+    /// Shared album ordering, persisted and reused by the global album list too.
+    @AppStorage("cassette.albumSort") private var albumSort: AlbumSort = .recentlyAdded
+    /// Discography layout: false = 2-row horizontal scroll (default), true = vertical grid.
+    @AppStorage("cassette.artistAlbumsGrid") private var artistAlbumsGrid = false
+    @Query private var artistFavoriteMatches: [FavoriteRecord]
+    @State private var showPinLimitAlert = false
 
+    private var isArtistFavorite: Bool { !artistFavoriteMatches.isEmpty }
+    private var isArtistPinned: Bool {
+        container?.pinService.isPinned(itemType: .artist, itemId: artistId) == true
+    }
     private var effectiveCoverArtId: String? { vm?.artist?.coverArt ?? coverArtId }
 
     var body: some View {
@@ -49,6 +62,7 @@ struct ArtistDetailMacOS: View {
                 )
             }
             await vm?.load()
+            await vm?.loadTopSongs()
             await vm?.loadSimilarArtists()
         }
         .sheet(item: $selectedOutOfLibraryArtist) { rec in
@@ -58,6 +72,11 @@ struct ArtistDetailMacOS: View {
                 providers: container?.externalProvidersStore.load() ?? []
             )
         }
+        .alert(String(localized: "Pin Limit Reached", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), isPresented: $showPinLimitAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(PinError.limitReached.errorDescription ?? "")
+        }
     }
 
     private func artistContent(_ vm: ArtistDetailViewModel) -> some View {
@@ -65,13 +84,30 @@ struct ArtistDetailMacOS: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 32) {
                 heroSection(vm: vm)
+
+                // Biography — skeleton while first load is in progress, then fade in (or collapse if none).
+                if vm.isLoading && vm.artistBiography == nil {
+                    ArtistBioSkeleton()
+                        .padding(.horizontal, 32)
+                        .transition(.opacity)
+                } else if let bio = vm.artistBiography {
+                    ArtistBioView(bio: bio, lastFmURL: nil)
+                        .padding(.horizontal, 32)
+                        .transition(.opacity)
+                }
+
+                if let featured = latestRelease(vm) {
+                    featuredReleaseSection(featured)
+                }
+
+                if vm.isLoadingTopSongs {
+                    topSongsSkeleton
+                } else if !vm.topSongs.isEmpty {
+                    topSongsSection(vm: vm)
+                }
+
                 if !albums.isEmpty {
-                    CarouselSection(title: "Albums") {
-                        ForEach(albums) { album in
-                            CarouselAlbumCard(album: album)
-                        }
-                    }
-                    .padding(.bottom, 16)
+                    albumsGridSection(albums)
                 }
 
                 let similar = vm.similarArtists
@@ -81,8 +117,156 @@ struct ArtistDetailMacOS: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.bottom, CassetteMacOSLayout.playerBarReservedHeight / 2)
+            // Cross-fade the skeleton into the bio smoothly when it resolves.
+            .animation(.easeInOut(duration: 0.35), value: vm.artistBiography)
         }
-        .refreshable { await vm.load() }
+        .refreshable { await vm.reloadAll() }
+    }
+
+    // MARK: - Top songs / latest release
+
+    private func latestRelease(_ vm: ArtistDetailViewModel) -> AlbumID3? {
+        ArtistAlbumCategorizer.sortedByNewest(vm.artist?.album ?? []).first
+    }
+
+    private func featuredReleaseSection(_ album: AlbumID3) -> some View {
+        VStack(alignment: .leading, spacing: CassetteSpacing.s) {
+            Text("Latest Release")
+                .font(.cassetteSectionTitle)
+                .padding(.horizontal, 32)
+            NavigationLink(value: HomeDestination.album(album)) {
+                HStack(spacing: CassetteSpacing.m) {
+                    CoverArtView(id: album.coverArt ?? album.id, size: 200, tier: .hero)
+                        .frame(width: 88, height: 88)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(album.name)
+                            .foregroundStyle(.primary)
+                            .font(.cassetteCellTitle)
+                            .lineLimit(2)
+                        if let year = ReleaseDateFormatting.yearOnly(from: album.releaseDate ?? album.originalReleaseDate) ?? album.year {
+                            Text(verbatim: "\(year)")
+                                .font(.cassetteCaption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(CassetteCountLabel.songs(album.songCount))
+                            .font(.cassetteCaption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 32)
+            }
+            .buttonStyle(.plain)
+            .albumLongPressMenu(album)
+        }
+    }
+
+    private func topSongsSection(vm: ArtistDetailViewModel) -> some View {
+        VStack(alignment: .leading, spacing: CassetteSpacing.s) {
+            Text("Top Songs")
+                .font(.cassetteSectionTitle)
+                .padding(.horizontal, 32)
+            VStack(spacing: 0) {
+                ForEach(Array(vm.topSongs.prefix(5).enumerated()), id: \.element.id) { index, song in
+                    Button {
+                        Task { try? await container?.playerService.play(tracks: vm.topSongs, startIndex: index) }
+                    } label: {
+                        SongRow(
+                            song: song,
+                            index: index + 1,
+                            showCoverArt: true,
+                            showArtist: false
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 32)
+                }
+            }
+        }
+    }
+
+    private var topSongsSkeleton: some View {
+        VStack(alignment: .leading, spacing: CassetteSpacing.s) {
+            Text("Top Songs")
+                .font(.cassetteSectionTitle)
+                .padding(.horizontal, 32)
+            VStack(spacing: CassetteSpacing.m) {
+                ForEach(0..<5, id: \.self) { _ in
+                    HStack(spacing: CassetteSpacing.m) {
+                        SkeletonBlock(width: 44, height: 44, cornerRadius: 8)
+                        VStack(alignment: .leading, spacing: 6) {
+                            SkeletonBlock(width: 180, height: 13, cornerRadius: 4)
+                            SkeletonBlock(width: 120, height: 11, cornerRadius: 4)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 32)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    // MARK: - Albums grid
+
+    /// Two fixed rows — the album grid scrolls horizontally (2×N).
+    private var albumGridRows: [GridItem] {
+        [GridItem(.fixed(230), spacing: 24),
+         GridItem(.fixed(230), spacing: 24)]
+    }
+
+    private var albumGridColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 24)]
+    }
+
+    @ViewBuilder
+    private func albumsGridSection(_ albums: [AlbumID3]) -> some View {
+        // Show originals only — reissues / remasters / special editions surface in the
+        // album detail "Other Versions" tab instead of this discography.
+        let displayed = ArtistAlbumCategorizer.originalsOnly(albums)
+        VStack(alignment: .leading, spacing: CassetteSpacing.s) {
+            HStack {
+                Text("Albums")
+                    .font(.cassetteSectionTitle)
+                Spacer()
+                AlbumSortMenu(sort: $albumSort)
+                Button {
+                    artistAlbumsGrid.toggle()
+                } label: {
+                    Image(systemName: artistAlbumsGrid ? "rectangle.grid.1x2" : "square.grid.2x2")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(artistAlbumsGrid ? "Horizontal view" : "Grid view")
+            }
+            .padding(.horizontal, 32)
+
+            if artistAlbumsGrid {
+                LazyVGrid(columns: albumGridColumns, spacing: 24) {
+                    ForEach(albumSort.sorted(displayed)) { album in
+                        NavigationLink(value: HomeDestination.album(album)) {
+                            AlbumGridCell(album: album)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 32)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHGrid(rows: albumGridRows, alignment: .top, spacing: 24) {
+                        ForEach(albumSort.sorted(displayed)) { album in
+                            NavigationLink(value: HomeDestination.album(album)) {
+                                AlbumGridCell(album: album)
+                                    .frame(width: 180)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 32)
+                }
+            }
+        }
+        .padding(.bottom, 16)
     }
 
     // MARK: - Similar Artists
@@ -156,6 +340,7 @@ struct ArtistDetailMacOS: View {
         CoverArtView(
             id: effectiveCoverArtId ?? artistId,
             size: 480,
+            tier: .hero,
             placeholderSystemImage: "person.fill"
         )
         .frame(width: 240, height: 240)
@@ -172,7 +357,7 @@ struct ArtistDetailMacOS: View {
 
                 let count = vm.artist?.albumCount ?? vm.artist?.album?.count
                 if let count {
-                    Text("\(count) album\(count == 1 ? "" : "s")")
+                    Text("\(count) albums")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                 }
@@ -242,6 +427,71 @@ struct ArtistDetailMacOS: View {
             }
             .cassetteSharedBackgroundVisibility(.hidden)
         }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                Task {
+                    if isArtistFavorite {
+                        try? await container?.favoritesService.unstar(itemType: .artist, itemId: artistId)
+                    } else {
+                        try? await container?.favoritesService.star(itemType: .artist, itemId: artistId)
+                    }
+                }
+            } label: {
+                Image(systemName: isArtistFavorite ? "star.fill" : "star")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isArtistFavorite ? Color.cassetteAccent : .primary)
+                    .cassetteGlassButton(size: 28)
+            }
+            .buttonStyle(.borderless)
+            .disabled(container?.serverState.isOnline != true)
+            .help(isArtistFavorite ? "Remove from Favorites" : "Add to Favorites")
+        }
+        .cassetteSharedBackgroundVisibility(.hidden)
+
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                if isArtistPinned {
+                    Button {
+                        container?.pinService.unpin(itemType: .artist, itemId: artistId)
+                    } label: {
+                        Label(String(localized: "Unpin from Home", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "pin.slash")
+                    }
+                } else {
+                    Button {
+                        pinCurrentArtist()
+                    } label: {
+                        Label(String(localized: "Pin to Home", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "pin")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 13, weight: .semibold))
+                    .cassetteGlassButton(size: 28)
+            }
+            .menuOrder(.fixed)
+            .buttonStyle(.borderless)
+            .help(String(localized: "More options", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        }
+        .cassetteSharedBackgroundVisibility(.hidden)
+    }
+
+    private func pinCurrentArtist() {
+        guard let serverId = container?.serverState.activeServer?.id,
+              let pin = container?.pinService else { return }
+        do {
+            try pin.pin(
+                itemType: .artist,
+                itemId: artistId,
+                displayName: vm?.artist?.name ?? artistName,
+                displaySubtitle: "",
+                coverArtId: effectiveCoverArtId,
+                serverId: serverId
+            )
+            container?.toastService.showConfirmation(String(localized: "Pinned to Home", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        } catch PinError.limitReached {
+            showPinLimitAlert = true
+        } catch {}
     }
 }
 #endif

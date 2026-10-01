@@ -10,6 +10,15 @@ import SwiftSonic
 struct ArtistListView: View {
     @Environment(\.appContainer) private var container
     @State private var viewModel: ArtistListViewModel?
+    @State private var searchText = ""
+    @State private var artistFilter: ArtistLibraryFilter
+    @AppStorage("cassette.artistSort") private var artistSort: ArtistSort = .name
+    @Query private var favorites: [FavoriteRecord]
+    @Query private var downloadedTracks: [DownloadedTrack]
+
+    init(initialFilter: ArtistLibraryFilter = .all) {
+        _artistFilter = State(initialValue: initialFilter)
+    }
 
     var body: some View {
         Group {
@@ -20,7 +29,32 @@ struct ArtistListView: View {
             }
         }
         .cassetteContentWidth()
-        .navigationTitle("Artists")
+        .navigationTitle(String(localized: "Artists", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        .navigationBarTitleDisplayModeLarge()
+        .cassetteLibrarySearch(
+            text: $searchText,
+            prompt: String(localized: "Search Artists", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        )
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Picker("Artists", selection: $artistFilter) {
+                        ForEach(ArtistLibraryFilter.allCases, id: \.self) { filter in
+                            Label(filter.label, systemImage: filter.systemImage).tag(filter)
+                        }
+                    }
+                    Divider()
+                    Picker("Sort By", selection: $artistSort) {
+                        ForEach(ArtistSort.allCases, id: \.self) { option in
+                            Label(option.label, systemImage: option.systemImage).tag(option)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease")
+                }
+                .accessibilityLabel("Sort artists")
+            }
+        }
         .task(id: container?.serverState.isOnline) {
             guard let svc = container?.libraryService else { return }
             if viewModel == nil { viewModel = ArtistListViewModel(libraryService: svc) }
@@ -57,26 +91,33 @@ struct ArtistListView: View {
                 subtitle: "Your library appears to be empty."
             )
         } else {
+            let sections = displayedSections(from: vm.indexes)
             ScrollViewReader { proxy in
                 List {
-                    ForEach(vm.indexes, id: \.name) { index in
-                        Section(index.name) {
-                            ForEach(index.artist) { artist in
+                    if sections.isEmpty {
+                        ContentUnavailableView.search(text: searchText)
+                            .listRowSeparator(.hidden)
+                    }
+
+                    ForEach(sections) { section in
+                        Section(section.title) {
+                            ForEach(section.artists) { artist in
                                 NavigationLink(value: HomeDestination.artist(artist)) {
                                     ArtistRow(artist: artist)
                                 }
+                                .artistLongPressMenu(artist)
                             }
                         }
-                        .id(index.name)
+                        .id(section.id)
                     }
                 }
                 .listStyle(.plain)
                 .refreshable { await vm.load() }
-                #if os(iOS)
+                .miniPlayerBottomMargin()
                 .safeAreaInset(edge: .trailing, spacing: 0) {
-                    if vm.indexes.count >= 5 {
+                    if sections.count >= 5 && artistSort == .name {
                         AlphabetJumpBar(
-                            availableLetters: Set(vm.indexes.map(\.name)),
+                            availableLetters: Set(sections.map(\.title)),
                             onLetterTap: { letter in
                                 withAnimation(.easeInOut(duration: 0.2)) {
                                     proxy.scrollTo(letter, anchor: .top)
@@ -86,10 +127,82 @@ struct ArtistListView: View {
                         .padding(.trailing, 4)
                     }
                 }
-                #endif
             }
         }
     }
+
+    private func displayedSections(from indexes: [ArtistIndex]) -> [ArtistDisplaySection] {
+        let allArtists = indexes.flatMap(\.artist)
+        let sourceIds: Set<String>? = {
+            guard let serverId = container?.serverState.activeServer?.id else { return nil }
+            switch artistFilter {
+            case .all:
+                return nil
+            case .favorites:
+                return Set(favorites.lazy.filter {
+                    $0.serverId == serverId && $0.itemType == FavoriteType.artist.rawValue
+                }.map(\.itemId))
+            case .downloads:
+                return Set(downloadedTracks.lazy.filter { $0.serverId == serverId }.compactMap(\.artistId))
+            }
+        }()
+        let downloadedNames: Set<String> = {
+            guard artistFilter == .downloads,
+                  let serverId = container?.serverState.activeServer?.id else { return [] }
+            return Set(downloadedTracks.lazy.filter { $0.serverId == serverId }.compactMap(\.artist))
+        }()
+        let scoped = sourceIds.map { ids in
+            allArtists.filter { ids.contains($0.id) || downloadedNames.contains($0.name) }
+        } ?? allArtists
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filtered = query.isEmpty ? scoped : scoped.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+        }
+        let sorted = artistSort.sorted(filtered)
+
+        guard artistSort == .name else {
+            return sorted.isEmpty ? [] : [ArtistDisplaySection(id: "all", title: "Artists", artists: sorted)]
+        }
+
+        let grouped = Dictionary(grouping: sorted) { artist -> String in
+            guard let first = (artist.sortName ?? artist.name).trimmingCharacters(in: .whitespacesAndNewlines).first else { return "#" }
+            let letter = String(first).uppercased()
+            return letter.rangeOfCharacter(from: .letters) == nil ? "#" : letter
+        }
+        return grouped.keys.sorted { lhs, rhs in
+            if lhs == "#" { return false }
+            if rhs == "#" { return true }
+            return lhs.localizedStandardCompare(rhs) == .orderedAscending
+        }.map { ArtistDisplaySection(id: $0, title: $0, artists: grouped[$0] ?? []) }
+    }
+}
+
+enum ArtistLibraryFilter: String, CaseIterable {
+    case all
+    case favorites
+    case downloads
+
+    var label: String {
+        switch self {
+        case .all: return "All Artists"
+        case .favorites: return "Favorites"
+        case .downloads: return "Downloaded"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .all: return "music.mic"
+        case .favorites: return "star"
+        case .downloads: return "arrow.down.circle"
+        }
+    }
+}
+
+private struct ArtistDisplaySection: Identifiable {
+    let id: String
+    let title: String
+    let artists: [ArtistID3]
 }
 
 // MARK: - Offline Browse
@@ -111,7 +224,7 @@ nonisolated struct OfflineArtistSummary: Sendable, Identifiable, Hashable {
 
 /// Derives the offline artist/album hierarchy from DownloadedTrack — the single source of truth
 /// for all offline content, regardless of whether it came from an album or a playlist download.
-private struct OfflineBrowseContent: View {
+struct OfflineBrowseContent: View {
     let serverId: UUID
     @Query private var tracks: [DownloadedTrack]
 
@@ -168,7 +281,7 @@ private struct OfflineBrowseContent: View {
                                     Text(artist.name)
                                         .font(.cassetteCellTitle)
                                         .lineLimit(1)
-                                    Text("\(artist.albums.count) album\(artist.albums.count == 1 ? "" : "s")")
+                                    Text(CassetteCountLabel.albums(artist.albums.count))
                                         .font(.cassetteCaption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -202,6 +315,7 @@ struct OfflineArtistAlbumsView: View {
             }
         }
         .listStyle(.plain)
+        .miniPlayerBottomMargin()
         .navigationTitle(artist.name)
         .navigationBarTitleDisplayModeInline()
         .cassetteContentWidth()

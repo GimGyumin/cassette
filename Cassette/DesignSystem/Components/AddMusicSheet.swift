@@ -122,7 +122,7 @@ struct AddMusicSheet: View {
                 AddMusicLibraryRow(title: "Playlists", systemImage: "music.note.list", route: .allPlaylists)
                 AddMusicLibraryRow(title: "Albums", systemImage: "square.stack", route: .allAlbums)
                 AddMusicLibraryRow(title: "Artists", systemImage: "music.mic", route: .allArtists)
-                AddMusicLibraryRow(title: "Favorites", systemImage: "heart.fill", route: .favorites)
+                AddMusicLibraryRow(title: "Favorites", systemImage: "star.fill", route: .favorites)
                 AddMusicLibraryRow(title: "Downloads", systemImage: "arrow.down.circle.fill", route: .downloads)
             } header: {
                 Text("Library").font(.cassetteSectionTitle).textCase(nil).foregroundStyle(.primary)
@@ -452,7 +452,7 @@ private struct AddMusicPlaylistList: View {
                     NavigationLink(value: AddMusicRoute.playlistSongs(id: playlist.id, name: playlist.name)) {
                         AddMusicCoverRow(coverArtId: playlist.coverArt ?? playlist.id,
                                          title: playlist.name,
-                                         subtitle: "\(playlist.songCount) song\(playlist.songCount == 1 ? "" : "s")")
+                                         subtitle: CassetteCountLabel.songs(playlist.songCount))
                     }
                 }
             }

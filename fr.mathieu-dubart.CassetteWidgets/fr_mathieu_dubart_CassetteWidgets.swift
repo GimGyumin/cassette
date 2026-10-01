@@ -6,7 +6,6 @@
 import WidgetKit
 import SwiftUI
 
-#if os(iOS)
 struct NowPlayingWidget: Widget {
     let kind = WidgetKind.nowPlaying
 
@@ -14,8 +13,8 @@ struct NowPlayingWidget: Widget {
         StaticConfiguration(kind: kind, provider: NowPlayingProvider()) { entry in
             NowPlayingWidgetView(entry: entry)
         }
-        .configurationDisplayName("À l'écoute")
-        .description("Affiche le morceau en cours de lecture.")
+        .configurationDisplayName("Now Playing")
+        .description("See what’s playing in Cassette and control playback.")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }
@@ -33,4 +32,3 @@ struct NowPlayingWidgetView: View {
         }
     }
 }
-#endif

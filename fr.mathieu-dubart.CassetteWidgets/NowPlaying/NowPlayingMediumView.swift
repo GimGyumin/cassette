@@ -3,68 +3,52 @@
 // Licensed under the Mozilla Public License 2.0.
 // See LICENSE file in the project root for full license information.
 
-#if os(iOS)
 import SwiftUI
 import WidgetKit
 
+/// Apple Music–style medium Now Playing: blurred art backdrop, lifted square cover, clean type, round control.
 struct NowPlayingMediumView: View {
     let entry: NowPlayingEntry
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            WidgetCoverArtView(image: entry.coverImage, cornerRadius: 10)
-                .frame(width: 128, height: 128)
+        HStack(spacing: 14) {
+            WidgetCoverArtView(image: entry.coverImage, cornerRadius: 12)
+                .frame(width: 108, height: 108)
+                .shadow(color: .black.opacity(0.4), radius: 14, y: 8)
 
-            VStack(alignment: .leading, spacing: 0) {
-
-                Text("À L'ÉCOUTE")
-                    .font(.system(.caption2, design: .rounded, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .tracking(0.5)
-                    .padding(.bottom, 4)
-
+            VStack(alignment: .leading, spacing: 3) {
                 if let track = entry.track {
                     Text(track.title)
-                        .font(.system(.title3, design: .rounded, weight: .bold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
+                        .lineLimit(2)
                     Text(track.artist)
-                        .font(.system(.subheadline, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.8))
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.78))
                         .lineLimit(1)
-                        .truncationMode(.tail)
-                        .padding(.top, 2)
                 } else {
-                    Text("Ouvre Cassette pour commencer")
-                        .font(.system(.subheadline, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    Text("Not Playing")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("Open Cassette to play")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.7))
                 }
 
-                Spacer(minLength: 4)
+                Spacer(minLength: 0)
 
-                WidgetPlayButton(isPlaying: entry.isPlaying)
+                HStack {
+                    Spacer(minLength: 0)
+                    WidgetPlayButton(isPlaying: entry.isPlaying)
+                        .environment(\.colorScheme, .dark)
+                }
             }
 
             Spacer(minLength: 0)
-
-            HStack(alignment: .top, spacing: 0) {
-                VStack {
-                    Image(systemName: "music.note")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.9))
-                        .padding(.top, 2)
-
-                    Spacer()
-                }
-            }
         }
+        .padding(.leading, 4)
         .containerBackground(for: .widget) {
-            WidgetReadableBackground(dominantColor: entry.dominantColor)
+            WidgetReadableBackground(dominantColor: entry.dominantColor, image: entry.coverImage)
         }
     }
 }
-#endif

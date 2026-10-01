@@ -5,10 +5,12 @@
 
 import SwiftUI
 import SwiftSonic
+import AppIntents
 
 /// List cell for an artist. Avatar uses the artist's initials on an accent-tinted circle
 /// (Subsonic rarely provides artist artwork, so a generic placeholder is the baseline).
 struct ArtistRow: View {
+    @Environment(\.appContainer) private var container
     let artist: ArtistID3
 
     var body: some View {
@@ -27,7 +29,7 @@ struct ArtistRow: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 if let count = artist.albumCount {
-                    Text("\(count) album\(count == 1 ? "" : "s")")
+                    Text(CassetteCountLabel.albums(count))
                         .font(.cassetteCaption)
                         .foregroundStyle(.secondary)
                 }
@@ -37,5 +39,15 @@ struct ArtistRow: View {
         }
         .padding(.vertical, CassetteSpacing.xs)
         .contentShape(Rectangle())
+        .appEntityIdentifier(entityIdentifier)
+    }
+
+    private var entityIdentifier: EntityIdentifier? {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return nil }
+        return OnscreenEntityAnnotation.artistIdentifier(
+            id: artist.id,
+            name: artist.name,
+            serverId: container?.serverState.activeServer?.id
+        )
     }
 }

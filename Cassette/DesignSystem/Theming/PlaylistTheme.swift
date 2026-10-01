@@ -18,7 +18,21 @@ struct PlaylistTheme: Equatable, Sendable {
     }
 
     var isThemed: Bool { dominantColor != .clear }
-    var isLight: Bool { isThemed && dominantColor.luminance > 0.6 }
+    var isLight: Bool { isThemed && !CassetteColors.prefersLightControl(on: dominantColor) }
+
+    /// Force Liquid Glass / system chrome to match cover luminance (not the global dark/light setting).
+    /// Without this, dark-mode glass controls render as muddy gray over a dark themed hero.
+    var preferredColorScheme: ColorScheme? {
+        guard isThemed else { return nil }
+        return isLight ? .light : .dark
+    }
+
+    /// Frost for circular glass controls (shuffle / download) over the hero.
+    var controlGlassTint: Color {
+        guard isThemed else { return Color.primary.opacity(0.18) }
+        // Stronger frost than 0.14/0.18 — weak white tint collapses to system gray under Liquid Glass.
+        return isLight ? Color.black.opacity(0.12) : Color.white.opacity(0.28)
+    }
 
     // Adaptive foreground over the themed background. `isLight` uses the app-wide PERCEIVED (BT.601) luminance
     // (`Color.luminance > 0.6`) — the same light/dark convention as the full player, and the Apple-Music-correct
@@ -26,6 +40,8 @@ struct PlaylistTheme: Equatable, Sendable {
     // until the theme color resolves.
     var contentColor: Color { isThemed ? (isLight ? .black : .white) : .primary }
     var secondaryContentColor: Color {
-        isThemed ? (isLight ? Color.black.opacity(0.7) : Color.white.opacity(0.7)) : .secondary
+        // 0.78 keeps artist/duration readable on saturated cover themes; 0.7 + extra
+        // row opacities was washing track lists out.
+        isThemed ? (isLight ? Color.black.opacity(0.78) : Color.white.opacity(0.78)) : .secondary
     }
 }

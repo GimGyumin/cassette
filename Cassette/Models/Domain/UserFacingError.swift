@@ -58,8 +58,15 @@ nonisolated enum UserFacingError: LocalizedError, Identifiable, Sendable {
         [errorDescription, recoverySuggestion].compactMap { $0 }.joined(separator: " ")
     }
 
+    static func isCancellation(_ error: any Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
+    }
+
     static func from(_ error: any Error) -> UserFacingError {
-        if error is CancellationError { return .unexpected }
+        // Cancellation is not a user-facing failure — callers should ignore it when possible.
+        if isCancellation(error) { return .unexpected }
         if let urlError = error as? URLError {
             switch urlError.code {
             case .notConnectedToInternet, .networkConnectionLost:
@@ -77,6 +84,8 @@ nonisolated enum UserFacingError: LocalizedError, Identifiable, Sendable {
             case .downloadFailed:
                 return .downloadFailed
             case .connectionFailed, .serverNotConfigured, .serverNotFound:
+                return .serverUnreachable
+            case .credentialsMissing:
                 return .serverUnreachable
             default:
                 return .unexpected

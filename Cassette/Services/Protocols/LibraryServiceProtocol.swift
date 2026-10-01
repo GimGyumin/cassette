@@ -10,6 +10,7 @@ protocol LibraryServiceProtocol: AnyObject, Sendable {
     func artists() async throws -> [ArtistIndex]
     func artist(id: String) async throws -> ArtistID3
     func album(id: String) async throws -> AlbumID3
+    func albumInfo(id: String) async throws -> AlbumInfo
 
     /// Fetches every track from every album of the given artist.
     /// Albums are ordered most-recent first (by year); albums without a year come last (alphabetical).
@@ -20,6 +21,11 @@ protocol LibraryServiceProtocol: AnyObject, Sendable {
     func playlists() async throws -> [Playlist]
     func playlist(id: String) async throws -> PlaylistWithSongs
     func search(_ query: String) async throws -> SearchResult3
+    func search(_ query: String, page: SearchPageRequest) async throws -> SearchResult3
+    /// Enumerates song metadata without downloading audio (OpenSubsonic empty-query search).
+    func librarySongs(offset: Int, count: Int) async throws -> [Song]
+    /// Fetches a single song's full metadata by id (OpenSubsonic `getSong`).
+    func song(id: String) async throws -> Song
     func coverArtURL(id: String, size: Int?) async -> URL?
     func streamURL(songId: String) async -> URL?
 
@@ -46,9 +52,16 @@ protocol LibraryServiceProtocol: AnyObject, Sendable {
     /// Most played albums (Subsonic `getAlbumList2?type=frequent`).
     func mostPlayedAlbums(size: Int) async throws -> [AlbumID3]
 
+    /// Suggested / random albums (Subsonic `getAlbumList2?type=random`).
+    func randomAlbums(size: Int) async throws -> [AlbumID3]
+
     /// Random songs from the user's library. Used as the source pool for Smart Shuffle (phase 3).
     /// Server has no "exclude recently played" filter — filtering is done client-side by the consumer.
     func randomSongs(size: Int) async throws -> [Song]
+
+    /// Songs tagged with the given genre (Subsonic `getSongsByGenre`).
+    /// Empty when the server has no matches or omits genre tags.
+    func songsByGenre(_ genre: String, count: Int) async throws -> [DisplayableSong]
 
     /// Builds a queue of tracks for Smart Shuffle ("Rediscover Your Library").
     ///
@@ -63,8 +76,9 @@ protocol LibraryServiceProtocol: AnyObject, Sendable {
 
     /// Builds the queue auto-extend backfill: tracks SIMILAR to the last 20 played
     /// (≥30s listens), via an artist/genre heuristic that works on any self-hosted
-    /// server — artist discographies (getArtist→albums) + getSongsByGenre, never
-    /// popularity-backed endpoints.
+    /// server — `getSongsByGenre` plus a small sample of newest albums per seed
+    /// artist (never full discographies mid-playback), never popularity-backed
+    /// endpoints.
     ///
     /// `excludedIds` (current queue) and the recent-20 track ids are never returned.
     /// Degrades to pure random with no listening history or a thin pool; offline
@@ -94,4 +108,32 @@ protocol LibraryServiceProtocol: AnyObject, Sendable {
     /// The artist's top (most-played) songs via Subsonic `getTopSongs` (popularity/Last.fm-backed — may be
     /// empty on bare self-hosted servers, in which case callers hide the section).
     func topSongs(artist: String, count: Int) async throws -> [DisplayableSong]
+
+    /// Drops the cached SwiftSonic client so the next call picks up new credentials.
+    func invalidateClientCache() async
+}
+
+extension LibraryServiceProtocol {
+    /// Compatibility for services without paging. Production LibraryService supplies all offsets.
+    func search(_ query: String, page: SearchPageRequest) async throws -> SearchResult3 {
+        guard page.artistOffset == 0, page.albumOffset == 0, page.songOffset == 0 else {
+            return SearchResult3(artist: [], album: [], song: [])
+        }
+        return try await search(query)
+    }
+
+    func librarySongs(offset: Int, count: Int) async throws -> [Song] {
+        guard offset == 0 else { return [] }
+        return Array((try await search("").song ?? []).prefix(count))
+    }
+    /// Default stub for test doubles — `AlbumInfo` has no public memberwise init in SwiftSonic.
+    func albumInfo(id: String) async throws -> AlbumInfo {
+        try JSONDecoder().decode(AlbumInfo.self, from: Data(#"{}"#.utf8))
+    }
+
+    func randomAlbums(size: Int) async throws -> [AlbumID3] { [] }
+
+    func songsByGenre(_ genre: String, count: Int) async throws -> [DisplayableSong] { [] }
+
+    func invalidateClientCache() async {}
 }

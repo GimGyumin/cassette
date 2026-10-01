@@ -13,14 +13,14 @@ struct AlbumGridCell: View {
     var zoomSourceId: String? = nil
     var zoomNamespace: Namespace.ID? = nil
 
-    @Environment(\.appContainer) private var container
     @State private var isHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: CassetteSpacing.s) {
             GeometryReader { geo in
-                CoverArtView(id: album.coverArt ?? album.id, size: Int(geo.size.width * 2))
-                    .frame(width: geo.size.width, height: geo.size.width)
+                let width = max(geo.size.width, 1)
+                CoverArtView(id: album.coverArt ?? album.id, size: Int(width * 2))
+                    .frame(width: width, height: width)
                     .cassetteCoverStyle(cornerRadius: CassetteCornerRadius.standard)
             }
             .aspectRatio(1, contentMode: .fit)
@@ -32,6 +32,7 @@ struct AlbumGridCell: View {
             #endif
 
             Text(album.name)
+                .foregroundStyle(.primary)
                 .font(.cassetteCellTitle)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -44,18 +45,6 @@ struct AlbumGridCell: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .lazyCollectionContextMenu(
-            itemType: .album,
-            itemId: album.id,
-            displayName: album.name,
-            displaySubtitle: album.artist ?? "",
-            coverArtId: album.coverArt,
-            favoriteType: .album,
-            songLoader: {
-                guard let c = container else { return [] }
-                let loaded = try await c.libraryService.album(id: album.id)
-                return (loaded.song ?? []).map { DisplayableSong(from: $0, isDownloaded: false) }
-            }
-        )
+        .albumLongPressMenu(album)
     }
 }

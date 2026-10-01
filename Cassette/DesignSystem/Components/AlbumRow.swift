@@ -4,18 +4,18 @@
 // See LICENSE file in the project root for full license information.
 
 import SwiftUI
+import SwiftSonic
+import AppIntents
 
 /// Flat list cell for an album — cover 60pt, name, artist, year.
 /// Used in search results and any flat album list (not grids; see ArtistDetailView).
 struct AlbumRow: View {
+    @Environment(\.appContainer) private var container
     let albumId: String
     let name: String
     let artist: String?
     let year: Int?
     let coverArtId: String?
-
-    @Environment(ArtworkImageCache.self) private var artworkImageCache
-    @State private var coverImage: PlatformImage?
 
     var body: some View {
         HStack(spacing: CassetteSpacing.m) {
@@ -43,26 +43,34 @@ struct AlbumRow: View {
         }
         .padding(.vertical, CassetteSpacing.xs)
         .contentShape(Rectangle())
-        .task(id: albumId) {
-            coverImage = await artworkImageCache.load(coverArtId: coverArtId ?? albumId)
-        }
-        .collectionContextMenu(
-            itemType: .album,
-            itemId: albumId,
-            displayName: name,
-            displaySubtitle: artist ?? "",
-            coverArtId: coverArtId,
-            coverImage: coverImage,
-            favoriteType: .album
+        .albumLongPressMenu(
+            id: albumId,
+            name: name,
+            artist: artist,
+            coverArtId: coverArtId
+        )
+        .appEntityIdentifier(entityIdentifier)
+    }
+
+    private var entityIdentifier: EntityIdentifier? {
+        guard #available(iOS 27.0, macOS 27.0, *) else { return nil }
+        return OnscreenEntityAnnotation.albumIdentifier(
+            id: albumId,
+            title: name,
+            artist: artist,
+            serverId: container?.serverState.activeServer?.id
         )
     }
 }
 
-#Preview {
-    List {
-        AlbumRow(albumId: "1", name: "Golden Hour", artist: "JVKE", year: 2022, coverArtId: nil)
-        AlbumRow(albumId: "2", name: "Short n' Sweet", artist: "Sabrina Carpenter", year: 2024, coverArtId: nil)
-        AlbumRow(albumId: "3", name: "Radical Optimism", artist: nil, year: nil, coverArtId: nil)
+extension AlbumRow {
+    init(album: AlbumID3) {
+        self.init(
+            albumId: album.id,
+            name: album.name,
+            artist: album.artist,
+            year: album.year,
+            coverArtId: album.coverArt
+        )
     }
-    .listStyle(.plain)
 }
