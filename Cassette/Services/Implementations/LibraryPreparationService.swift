@@ -13,10 +13,9 @@ typealias Phase = LibraryPreparationPhase
 
 /// Runs the "preparing your library" pass when the server reports that music was added or removed.
 ///
-/// Order matters: the local index is rebuilt first (search and AI context depend on it), then album
-/// artwork is reconciled — including every cover whose id changed — and finally the caches that
-/// were built from the old catalog are dropped. The whole pass is driven from `RootView` so the
-/// user sees progress instead of a Home screen that is quietly stale.
+/// Order matters: the local index is rebuilt first (search and AI context depend on it), then
+/// opt-in full-library artwork is reconciled, and finally caches built from the old catalog are
+/// dropped. Progress is visible in Account while the rest of the app stays usable.
 @MainActor
 @Observable
 final class LibraryPreparationService {
@@ -63,7 +62,7 @@ final class LibraryPreparationService {
         while phase == .covers, !Task.isCancelled {
             try? await Task.sleep(for: .seconds(1))
         }
-        guard !phase.isBusy else { return }
+        guard !phase.isBusy, !Task.isCancelled else { return }
         guard let serverId = serverService.state.activeServer?.id else { return }
         phase = .checking
         publish(.init(phase: .checking))
@@ -100,28 +99,38 @@ final class LibraryPreparationService {
 
         phase = .indexing
         publish(.init(phase: .indexing))
-        await indexService.rebuildAndWait(using: libraryService)
+        let indexReady = await indexService.rebuildAndWait(using: libraryService)
         guard !Task.isCancelled else {
             finish(phase: .idle)
             return
         }
-
-        phase = .covers
-        publish(.init(phase: .covers, coversTotal: coverPreload.state.total, indexFraction: 1))
-        await coverPreload.downloadAllCovers(resumeDeferred: false) { [weak self] completed, total, coverId in
-            guard let self else { return }
-            self.publish(.init(
-                phase: .covers,
-                coversCompleted: completed,
-                coversTotal: total,
-                indexFraction: 1,
-                activeCoverArtId: coverId
-            ))
-
-        }
-        guard !Task.isCancelled else {
-            finish(phase: .idle)
+        guard indexReady else {
+            finish(phase: .failed)
             return
+        }
+
+        if BulkArtworkPreference.isEnabled {
+            phase = .covers
+            publish(.init(phase: .covers, coversTotal: coverPreload.state.total, indexFraction: 1))
+            await coverPreload.downloadAllCovers(resumeDeferred: false) { [weak self] completed, total, coverId in
+                guard let self else { return }
+                self.publish(.init(
+                    phase: .covers,
+                    coversCompleted: completed,
+                    coversTotal: total,
+                    indexFraction: 1,
+                    activeCoverArtId: coverId
+                ))
+            }
+            guard !Task.isCancelled else {
+                finish(phase: .idle)
+                return
+            }
+            guard coverPreload.state.isComplete else {
+                requestBackgroundContinuation()
+                finish(phase: .failed)
+                return
+            }
         }
 
         phase = .syncing

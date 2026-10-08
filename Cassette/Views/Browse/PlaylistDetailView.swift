@@ -317,9 +317,10 @@ struct PlaylistDetailView: View {
         .chromeAppearance(atmosphere.preferredColorScheme)
         .navigationTitle("")
         .navigationBarTitleDisplayModeInline()
-        .navigationBarBackButtonHidden(true)
         #if os(iOS)
-        .enableSwipeBack()
+        .navigationBarBackButtonHidden(isEditing)
+        #else
+        .navigationBarBackButtonHidden(true)
         #endif
         .toolbar { toolbarContent }
         // Transparent nav bar so the cover floats under it; adapt status-bar style to cover

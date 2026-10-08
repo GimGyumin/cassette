@@ -20,7 +20,7 @@ struct AlbumsListView: View {
     @Query private var downloadedAlbums: [DownloadedAlbum]
     @Query private var downloadedTracks: [DownloadedTrack]
 
-    init(initialFilter: AlbumLibraryFilter = .all) {
+    init(initialFilter: AlbumLibraryFilter = .albums) {
         _albumFilter = State(initialValue: initialFilter)
     }
 
@@ -140,7 +140,7 @@ struct AlbumsListView: View {
                 VStack(spacing: CassetteSpacing.m) {
                     playShuffleHeader(albums: albums)
                     if albums.isEmpty {
-                        ContentUnavailableView.search(text: searchText)
+                        emptyFilteredAlbums
                             .padding(.top, CassetteSpacing.xl)
                     } else {
                         LazyVGrid(columns: columns, spacing: 24) {
@@ -173,7 +173,7 @@ struct AlbumsListView: View {
                 .listRowBackground(Color.clear)
 
                 if albums.isEmpty {
-                    ContentUnavailableView.search(text: searchText)
+                    emptyFilteredAlbums
                         .listRowSeparator(.hidden)
                 }
 
@@ -216,7 +216,7 @@ struct AlbumsListView: View {
         let sourceIds: Set<String>? = {
             guard let serverId = container?.serverState.activeServer?.id else { return nil }
             switch albumFilter {
-            case .all:
+            case .albums, .compilations, .all:
                 return nil
             case .favorites:
                 return Set(favorites.lazy.filter { $0.serverId == serverId && $0.itemType == FavoriteType.album.rawValue }.map(\.itemId))
@@ -227,11 +227,27 @@ struct AlbumsListView: View {
             }
         }()
         let scoped = sourceIds.map { ids in albums.filter { ids.contains($0.id) } } ?? albums
-        let filtered = query.isEmpty ? scoped : scoped.filter {
+        let categorized = scoped.filter(albumFilter.includes)
+        let filtered = query.isEmpty ? categorized : categorized.filter {
             $0.name.localizedCaseInsensitiveContains(query)
                 || ($0.artist?.localizedCaseInsensitiveContains(query) == true)
         }
         return albumSort.sorted(filtered)
+    }
+
+    @ViewBuilder
+    private var emptyFilteredAlbums: some View {
+        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ContentUnavailableView.search(text: searchText)
+        } else if albumFilter == .compilations {
+            ContentUnavailableView {
+                Label("Compilations", systemImage: "square.stack.3d.up")
+            } description: {
+                Text("No compilations in the library.")
+            }
+        } else {
+            ContentUnavailableView("No Albums", systemImage: "square.stack")
+        }
     }
 
     @ViewBuilder
@@ -291,12 +307,24 @@ struct AlbumsListView: View {
 }
 
 enum AlbumLibraryFilter: String, CaseIterable {
+    case albums
+    case compilations
     case all
     case favorites
     case downloads
 
+    func includes(_ album: AlbumID3) -> Bool {
+        switch self {
+        case .albums: return ArtistAlbumCategorizer.classify(album) != .compilations
+        case .compilations: return ArtistAlbumCategorizer.classify(album) == .compilations
+        case .all, .favorites, .downloads: return true
+        }
+    }
+
     var label: String {
         switch self {
+        case .albums: return "Albums"
+        case .compilations: return "Compilations"
         case .all: return "All Albums"
         case .favorites: return "Favorites"
         case .downloads: return "Downloaded"
@@ -305,6 +333,8 @@ enum AlbumLibraryFilter: String, CaseIterable {
 
     var systemImage: String {
         switch self {
+        case .albums: return "square.stack"
+        case .compilations: return "square.stack.3d.up"
         case .all: return "square.stack"
         case .favorites: return "star"
         case .downloads: return "arrow.down.circle"

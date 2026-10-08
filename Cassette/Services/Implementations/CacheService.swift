@@ -97,7 +97,34 @@ actor CacheService: CacheServiceProtocol {
         try data.write(to: fileURL, options: .atomic)
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int64) ?? Int64(data.count)
 
-        await MainActor.run {
+        try await registerFile(fileURL, size: fileSize, songId: songId, serverId: serverId, mimeType: mimeType)
+        return fileURL
+    }
+
+    func store(fileAt sourceURL: URL, forSongId songId: String, serverId: UUID, mimeType: String) async throws -> URL {
+        try Task.checkCancellation()
+        let fileURL = cacheDirectory.appendingPathComponent("\(serverId.uuidString)-\(songId).\(audioExtension(mimeType: mimeType))")
+        let stagingURL = cacheDirectory.appendingPathComponent(".import-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: stagingURL) }
+        // Copy into the destination filesystem before atomically publishing it. A failed copy
+        // or cancelled download must never replace a complete, playable cache entry.
+        try FileManager.default.copyItem(at: sourceURL, to: stagingURL)
+        let size = (try FileManager.default.attributesOfItem(atPath: stagingURL.path)[.size] as? Int64) ?? 0
+        guard size > 0 else { throw CocoaError(.fileReadCorruptFile) }
+        try Task.checkCancellation()
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: stagingURL)
+        } else {
+            try FileManager.default.moveItem(at: stagingURL, to: fileURL)
+        }
+        try await registerFile(fileURL, size: size, songId: songId, serverId: serverId, mimeType: mimeType)
+        return fileURL
+    }
+
+    private func registerFile(_ fileURL: URL, size fileSize: Int64, songId: String, serverId: UUID, mimeType: String) async throws {
+        let relativePath = fileURL.lastPathComponent
+
+        try await MainActor.run {
             let context = ModelContext(modelContainer)
             let sid = serverId
             let existing = (try? context.fetch(FetchDescriptor<CachedTrack>(predicate: #Predicate {
@@ -117,16 +144,11 @@ actor CacheService: CacheServiceProtocol {
                     mimeType: mimeType
                 ))
             }
-            do {
-                try context.save()
-            } catch {
-                Logger.cache.debug("CacheService: store save failed — \(error)")
-            }
+            try context.save()
         }
 
         await evictToFitLimit()
         Logger.cache.info("Cached '\(songId, privacy: .public)' (\(fileSize) bytes, \(mimeType, privacy: .public))")
-        return fileURL
     }
 
     private func audioExtension(mimeType: String) -> String {

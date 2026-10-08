@@ -7,6 +7,17 @@ import Foundation
 import Security
 import OSLog
 
+/// Updates an existing item before adding a missing one, without deleting a good credential.
+nonisolated enum KeychainUpsert {
+    static func perform(update: () -> OSStatus, add: () -> OSStatus) -> OSStatus {
+        let updated = update()
+        if updated != errSecItemNotFound { return updated }
+        let added = add()
+        // A second writer may have inserted the item between the update and add.
+        return added == errSecDuplicateItem ? update() : added
+    }
+}
+
 actor KeychainService: KeychainServiceProtocol {
     // kSecAttrService groups all Cassette credentials for bulk queries and cleanup.
     private let service = "app.cassette.server-credentials"
@@ -14,26 +25,24 @@ actor KeychainService: KeychainServiceProtocol {
     func store<T: Codable & Sendable>(_ value: T, forKey key: String) async throws {
         let data = try JSONEncoder().encode(value)
 
-        // Delete query omits kSecAttrAccessible so it matches any existing item
-        // regardless of its accessibility attribute (handles migration from WhenUnlocked).
-        let deleteQuery: [String: Any] = [
+        let itemQuery: [String: Any] = [
             kSecClass as String:       kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key
         ]
-        SecItemDelete(deleteQuery as CFDictionary)
 
-        let addQuery: [String: Any] = [
-            kSecClass as String:          kSecClassGenericPassword,
-            kSecAttrService as String:    service,
-            kSecAttrAccount as String:    key,
+        let attributes: [String: Any] = [
             kSecValueData as String:      data,
             // AfterFirstUnlock allows Keychain reads while the screen is locked,
-            // required for auto-next playback transitions triggered in lock screen.
+            // required for auto-next playback transitions triggered on the lock screen.
+            // Updating this attribute also migrates existing WhenUnlocked items in place.
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
-
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        let addQuery = itemQuery.merging(attributes) { _, new in new }
+        let status = KeychainUpsert.perform(
+            update: { SecItemUpdate(itemQuery as CFDictionary, attributes as CFDictionary) },
+            add: { SecItemAdd(addQuery as CFDictionary, nil) }
+        )
         guard status == errSecSuccess else {
             // Never log `data` — it may contain credentials.
             Logger.keychain.error("Keychain write failed for key '\(key, privacy: .public)' — OSStatus \(status)")

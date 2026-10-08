@@ -26,11 +26,16 @@ enum ShareService {
             allowDownloads: options.allowDownloads,
             originalFormat: options.shareOriginal
         )
-        guard let urlString = shares.first?.url,
-              !urlString.isEmpty,
-              let url = URL(string: urlString) else {
+        guard let url = validatedPublicURL(shares.first?.url) else {
             throw ShareError.invalidShareURL
         }
+        return url
+    }
+
+    static func validatedPublicURL(_ value: String?) -> URL? {
+        guard let value, let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+              ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
+              let host = url.host, !host.isEmpty else { return nil }
         return url
     }
 }

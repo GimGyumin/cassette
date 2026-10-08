@@ -61,6 +61,7 @@ final class AlbumDetailViewModel {
     }
 
     func load() async {
+        guard !Task.isCancelled else { return }
         let generation = loadGeneration + 1
         loadGeneration = generation
         isLoading = true
@@ -90,7 +91,10 @@ final class AlbumDetailViewModel {
             loadedAlbum = apiAlbum
             guard let serverId = serverState.activeServer?.id else { return }
             let downloadedIds = await downloadService.downloadedSongIds(serverId: serverId)
-            guard generation == loadGeneration else { return }
+            let prepared = try await DisplayableSong.prepare(
+                apiAlbum.song ?? [], downloadedIDs: downloadedIds, sortedBy: Self.albumTrackOrder
+            )
+            guard generation == loadGeneration, serverState.activeServer?.id == serverId else { return }
             albumName = apiAlbum.name
             artistName = apiAlbum.artist
             year = apiAlbum.year
@@ -102,9 +106,7 @@ final class AlbumDetailViewModel {
             songCount = apiAlbum.songCount
             coverArtId = apiAlbum.coverArt
             artistId = apiAlbum.artistId
-            songs = (apiAlbum.song ?? [])
-                .map { DisplayableSong(from: $0, isDownloaded: downloadedIds.contains($0.id)) }
-                .sorted(by: Self.albumTrackOrder)
+            songs = prepared
             isOffline = false
             isPrimaryContentReady = true
 
@@ -112,7 +114,7 @@ final class AlbumDetailViewModel {
             async let moreByTask: Void = loadMoreAlbumsByArtist(generation: generation)
 
             let albumInfo = try? await libraryService.albumInfo(id: albumId)
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             albumDescription = Self.resolveAlbumDescription(
                 infoNotes: albumInfo?.notes,
                 songs: apiAlbum.song ?? []
@@ -229,6 +231,8 @@ final class AlbumDetailViewModel {
         return lowered.hasPrefix("copyright")
             || lowered.hasPrefix("(p)")
             || lowered.hasPrefix("p ")
+            || lowered.hasPrefix("(c)")
+            || lowered.hasPrefix("c ")
     }
 
     /// Joins a copyright block, preserving original newlines exactly as carried in the tag.
@@ -263,7 +267,7 @@ final class AlbumDetailViewModel {
     /// Server returned no `recordLabels` → fetch the label from MusicBrainz (free, no key)
     /// when metadata enrichment is enabled. Supplies the "℗" footer line.
     private func enrichRecordLabelIfNeeded(generation: Int) async {
-        guard recordLabels.isEmpty else { return }
+        guard recordLabels.isEmpty, !Task.isCancelled else { return }
         let enrich = UserDefaults.standard.object(forKey: AppleMusicSettings.enrichKey) as? Bool ?? true
         guard enrich else { return }
         let name = albumName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -279,6 +283,7 @@ final class AlbumDetailViewModel {
 
     /// Disk cache (with TTL refresh) → Apple Music editorialNotes → Wikipedia / MusicBrainz.
     private func enrichDescriptionIfNeeded(musicBrainzId: String?, generation: Int) async {
+        guard !Task.isCancelled else { return }
         let enrich = UserDefaults.standard.object(forKey: AppleMusicSettings.enrichKey) as? Bool ?? true
         guard enrich else { return }
         let existing = albumDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

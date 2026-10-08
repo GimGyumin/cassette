@@ -17,7 +17,7 @@ final class AudioStreamingDelegate: AudioPlayerDelegate, @unchecked Sendable {
     weak var service: PlayerService?
 
     func audioPlayerDidStartPlaying(player: AudioPlayer, with entryId: AudioEntryId) {
-        // The engine tells us which entry it actually started: the end-of-track watchdog needs
+        // The engine tells us which entry it selected: the end-of-track watchdog needs
         // this to distinguish a completed gapless transition from a stalled one.
         guard let service else { return }
         let identifier = entryId.id

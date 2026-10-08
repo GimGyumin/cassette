@@ -71,4 +71,6 @@ final class ServerState {
     var isSigningOut = false
     /// True when an active server exists but its Keychain password is missing.
     var needsCredentialReentry: Bool = false
+    /// Quick Connect works, but native Subsonic requires password verification.
+    var needsSubsonicVerification: Bool = false
 }

@@ -205,6 +205,8 @@ private struct SearchHomeDestinationRegistrar: ViewModifier {
         if enabled {
             content.navigationDestination(for: HomeDestination.self) { destination in
                 switch destination {
+                case .albumPush(let id, let name, let coverArtId, _):
+                    AlbumDetailView(albumId: id, albumName: name, coverArtId: coverArtId)
                 case .album(let album):
                     AlbumDetailView(
                         album: album,

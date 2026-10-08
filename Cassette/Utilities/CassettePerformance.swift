@@ -30,9 +30,7 @@ nonisolated enum CassettePerformance {
 
     // MARK: - Chrome
 
-    /// Skip `glassEffect` — use flat fills. Liquid Glass compositing competing with audio
-    /// streaming was measured to cause underruns, so flat chrome is the shipping default and glass
-    /// is reserved for design QA (`cassette.forceLiquidGlass`) on a cool device.
+    /// Skip `glassEffect` only when the runtime budget detects a constrained device.
     static var preferCheapChrome: Bool { budget.prefersCheapChrome }
 
     // MARK: - Motion

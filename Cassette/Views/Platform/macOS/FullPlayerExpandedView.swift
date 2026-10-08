@@ -47,7 +47,7 @@ struct FullPlayerExpandedView: View {
     private var playerState: PlayerState? { container?.playerState }
     private var currentTrack: DisplayableSong? { playerState?.currentTrack }
     private var isPlaying: Bool { playerState?.playbackState == .playing }
-    private var isLoading: Bool { playerState?.playbackState == .loading }
+    private var isLoading: Bool { playerState?.playbackState.isAwaitingAudio == true }
     private var isLiveStream: Bool { playerState?.isLiveStream == true }
     private var noTrack: Bool { currentTrack == nil }
     private var queue: [DisplayableSong] { playerState?.queue ?? [] }

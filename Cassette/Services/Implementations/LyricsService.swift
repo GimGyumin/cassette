@@ -13,21 +13,29 @@ import OSLog
 /// All persistence uses a private ModelContext created per operation.
 /// No UIKit or SwiftUI imports — this actor is platform-agnostic.
 actor LyricsService {
+    nonisolated enum FetchPolicy: Sendable, Equatable {
+        case interactive
+        /// Backfill favors complete server results over a fast external fallback.
+        case libraryGeneration
+    }
     private let serverService: any ServerServiceProtocol
     private let modelContainer: ModelContainer
     private let externalProvider: any ExternalLyricsProviding
     private let mediaIdentityService: MediaIdentityService?
+    private let rawLyricsSession: URLSession
 
     init(
         serverService: any ServerServiceProtocol,
         modelContainer: ModelContainer,
         externalProvider: any ExternalLyricsProviding = CompositeExternalLyricsClient(),
-        mediaIdentityService: MediaIdentityService? = nil
+        mediaIdentityService: MediaIdentityService? = nil,
+        rawLyricsSession: URLSession = .shared
     ) {
         self.serverService = serverService
         self.modelContainer = modelContainer
         self.externalProvider = externalProvider
         self.mediaIdentityService = mediaIdentityService
+        self.rawLyricsSession = rawLyricsSession
     }
 
     // MARK: - Fetch
@@ -37,14 +45,15 @@ actor LyricsService {
     func fetchLyrics(
         forSongId songId: String,
         serverId: UUID,
-        match: LyricsMatchInfo? = nil
+        match: LyricsMatchInfo? = nil,
+        policy: FetchPolicy = .interactive
     ) async throws -> LyricsList {
         let preference = LyricsSourcePreference.current()
         let cached = await cachedLyrics(songId: songId, serverId: serverId)
 
         switch preference {
         case .embedded:
-            if let cached, await shouldReturnCached(cached) {
+            if let cached, policy == .interactive, await shouldReturnCached(cached) {
                 return cached.list
             }
             do {
@@ -75,7 +84,7 @@ actor LyricsService {
             throw LyricsError.notFound
 
         case .embeddedWithFallback:
-            if let cached, await shouldReturnCached(cached) {
+            if let cached, policy == .interactive, await shouldReturnCached(cached) {
                 return cached.list
             }
 
@@ -84,7 +93,7 @@ actor LyricsService {
             // (usually far faster) is already on the wire. Previously the external provider was not
             // even asked until the server had answered, so a track whose server has no lyrics kept
             // the lyrics screen waiting for the server's full timeout (~8 s in the field).
-            let resolution = await resolveEmbeddedWithFallback(songId: songId, serverId: serverId, match: match)
+            let resolution = await resolveEmbeddedWithFallback(songId: songId, serverId: serverId, match: match, policy: policy)
             switch resolution {
             case .lyrics(let list):
                 return list
@@ -125,7 +134,8 @@ actor LyricsService {
     private func resolveEmbeddedWithFallback(
         songId: String,
         serverId: UUID,
-        match: LyricsMatchInfo?
+        match: LyricsMatchInfo?,
+        policy: FetchPolicy
     ) async -> EmbeddedResolution {
         let externalMatch: LyricsMatchInfo? = (match?.canQueryExternal == true) ? match : nil
         let provider = externalProvider
@@ -141,9 +151,11 @@ actor LyricsService {
                     .external(await Self.fetchExternal(provider: provider, match: match))
                 }
             }
-            group.addTask {
-                try? await Task.sleep(for: Self.serverHeadStart)
-                return .headStartElapsed
+            if policy == .interactive {
+                group.addTask {
+                    try? await Task.sleep(for: Self.serverHeadStart)
+                    return .headStartElapsed
+                }
             }
 
             var serverResult: Result<LyricsList, any Error>?
@@ -172,7 +184,8 @@ actor LyricsService {
                     embeddedSettled: serverResult != nil,
                     external: externalList,
                     externalSettled: externalSettled,
-                    serverHeadStartElapsed: headStartElapsed
+                    serverHeadStartElapsed: headStartElapsed,
+                    waitForServer: policy == .libraryGeneration
                 )
                 guard let choice else { continue }
                 group.cancelAll()
@@ -202,8 +215,12 @@ actor LyricsService {
         embeddedSettled: Bool,
         external: LyricsList?,
         externalSettled: Bool,
-        serverHeadStartElapsed: Bool
+        serverHeadStartElapsed: Bool,
+        waitForServer: Bool = false
     ) -> LyricsChoice? {
+        // A whole-library pass must not cancel a slow enhanced server response
+        // just because LRCLIB already returned line-synced text.
+        if waitForServer, !embeddedSettled { return nil }
         // 1. Karaoke wins, wherever it came from.
         if let embedded, Self.hasKaraoke(embedded) { return .server(embedded) }
         if let external, Self.hasKaraoke(external) { return .external(external) }
@@ -408,15 +425,23 @@ actor LyricsService {
             guard let streamRequest = client.coverArtURL(id: resolvedSongID) else { return nil }
             // Extract the base and auth from the coverArt URL, swap path/params.
             var comps = URLComponents(url: streamRequest, resolvingAgainstBaseURL: false)
-            comps?.path = "/rest/getLyricsBySongId.view"
+            if let path = comps?.path {
+                comps?.path = (path as NSString).deletingLastPathComponent + "/getLyricsBySongId.view"
+            }
             var items = comps?.queryItems ?? []
-            items.removeAll { $0.name == "id" || $0.name == "size" }
+            items.removeAll { $0.name == "id" || $0.name == "size" || $0.name == "enhanced" }
             items.append(URLQueryItem(name: "id", value: resolvedSongID))
+            items.append(URLQueryItem(name: "enhanced", value: "true"))
             comps?.queryItems = items
             guard let requestURL = comps?.url else { return nil }
             var request = URLRequest(url: requestURL)
             request.timeoutInterval = 15
-            let (data, response) = try await URLSession.shared.data(for: request)
+            if let credentials = try? await serverService.activeCredentials() {
+                for (key, value) in credentials.customHeaders {
+                    request.setValue(value, forHTTPHeaderField: key)
+                }
+            }
+            let (data, response) = try await rawLyricsSession.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 return nil
             }
@@ -448,6 +473,7 @@ actor LyricsService {
             }
             // Also try to fetch raw TTML for embedded translations.
             let rawData = await fetchRawTTMLFromServer(songId: resolvedSongID)
+            try Task.checkCancellation()
             await persistLyrics(list, songId: resolvedSongID, serverId: serverId, fetchedWithEnhanced: enhanced, rawTTML: rawData)
             return list
         } catch let error as LyricsError {
@@ -499,6 +525,7 @@ actor LyricsService {
         var found = 0
         var skipped = 0
         var missing = 0
+        var failed = 0
     }
 
     /// A single song's outcome during a whole-library backfill pass.
@@ -507,6 +534,7 @@ actor LyricsService {
             case found(LyricKind)
             case skipped
             case missing
+            case failed(String)
         }
 
         let songTitle: String
@@ -515,9 +543,15 @@ actor LyricsService {
         let progress: LibraryLyricsProgress
     }
 
+    enum LibraryGenerationMode: Sendable {
+        case appCache
+        /// Always contact the server: its lyrics plugin owns sidecar file writing.
+        case serverFiles
+    }
+
     /// Fetches and caches lyrics for every song in the library, streaming a per-song
-    /// progress event as it goes. Songs that already have cached lyrics are reported as
-    /// `.skipped` without touching the network.
+    /// progress event as it goes. Rich cached lyrics are skipped; LRC/text caches
+    /// are rechecked for a server karaoke upgrade.
     ///
     /// Reuses the per-song fetch path (server `getLyricsBySongId` / nd-lyrics + LRCLIB
     /// fallback), so the cached results match what the player renders. Cancellation is
@@ -525,38 +559,70 @@ actor LyricsService {
     /// halt the backfill.
     func generateLibraryLyrics(
         library: any LibraryServiceProtocol,
-        serverId: UUID
+        serverId: UUID,
+        mode: LibraryGenerationMode = .appCache
     ) -> AsyncThrowingStream<LibraryLyricsEvent, Error> {
         let (stream, continuation) = AsyncThrowingStream<LibraryLyricsEvent, Error>.makeStream()
 
         let task = Task {
             do {
+                if mode == .serverFiles {
+                    guard await MainActor.run(body: { self.serverService.state.activeServer?.id }) == serverId else {
+                        throw CancellationError()
+                    }
+                }
+                let generationClient = mode == .serverFiles
+                    ? try await self.serverService.makeLyricsGenerationClient() : nil
                 let songs = try await self.allLibrarySongs(library: library)
+                let preference = LyricsSourcePreference.current()
                 var progress = LibraryLyricsProgress(total: songs.count)
 
                 for song in songs {
                     try Task.checkCancellation()
+                    if mode == .serverFiles {
+                        guard await MainActor.run(body: { self.serverService.state.activeServer?.id }) == serverId else {
+                            throw CancellationError()
+                        }
+                    }
                     progress.processed += 1
 
                     let outcome: LibraryLyricsEvent.Outcome
-                    if await self.cachedLyrics(songId: song.id, serverId: serverId) != nil {
+                    if mode == .appCache,
+                       let cached = await self.cachedLyrics(songId: song.id, serverId: serverId),
+                       Self.shouldSkipLibraryCache(cached.list, preference: preference) {
                         progress.skipped += 1
                         outcome = .skipped
                     } else {
                         let match = LyricsMatchInfo(song: DisplayableSong(from: song))
                         do {
-                            let list = try await self.fetchLyrics(
-                                forSongId: song.id,
-                                serverId: serverId,
-                                match: match
-                            )
+                            let list: LyricsList
+                            if let generationClient {
+                                // One enhanced request per track. Never substitute local or external
+                                // lyrics: only a server request can trigger nd-lyrics file writing.
+                                list = try await generationClient.getLyricsBySongId(id: song.id, enhanced: true)
+                                try Task.checkCancellation()
+                                guard await MainActor.run(body: { self.serverService.state.activeServer?.id }) == serverId else {
+                                    throw CancellationError()
+                                }
+                                guard !list.structuredLyrics.isEmpty else { throw LyricsError.notFound }
+                            } else {
+                                list = try await self.fetchLyrics(
+                                    forSongId: song.id, serverId: serverId, match: match, policy: .libraryGeneration
+                                )
+                            }
                             progress.found += 1
                             outcome = .found(Self.kind(of: list))
                         } catch is CancellationError {
                             throw CancellationError()
                         } catch {
-                            progress.missing += 1
-                            outcome = .missing
+                            try Task.checkCancellation()
+                            if mode == .serverFiles, !(error is LyricsError && (error as? LyricsError) == .notFound) {
+                                progress.failed += 1
+                                outcome = .failed(error.localizedDescription)
+                            } else {
+                                progress.missing += 1
+                                outcome = .missing
+                            }
                             Logger.lyrics.debug(
                                 "Library lyrics generation missed \(song.title, privacy: .public): \(error.localizedDescription, privacy: .public)"
                             )
@@ -587,6 +653,10 @@ actor LyricsService {
     }
 
     /// Classifies a fetched `LyricsList` by the richest timing available.
+    nonisolated static func shouldSkipLibraryCache(_ list: LyricsList, preference: LyricsSourcePreference) -> Bool {
+        preference == .external ? Self.hasSynced(list) : Self.hasKaraoke(list)
+    }
+
     nonisolated static func kind(of list: LyricsList) -> LyricKind {
         if list.structuredLyrics.contains(where: \.hasKaraokeCues) {
             return .karaoke
@@ -663,6 +733,12 @@ actor LyricsService {
             predicate: #Predicate { $0.compositeKey == key }
         )
         if let existing = (try? context.fetch(descriptor))?.first {
+            // A foreground lookup may have completed while a bulk lookup was
+            // awaiting the network. A late LRC response must not overwrite its cues.
+            if let previous = try? Self.decodeCachedPayload(existing.jsonPayload),
+               Self.hasKaraoke(previous.list), !Self.hasKaraoke(list) {
+                return
+            }
             context.delete(existing)
         }
         context.insert(CachedLyrics(songId: resolvedSongID, serverId: serverId, jsonPayload: data))

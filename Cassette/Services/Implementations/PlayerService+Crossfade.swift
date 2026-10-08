@@ -59,10 +59,15 @@ extension PlayerService {
 
         prefetchScheduled = true
         Logger.player.debug("[PREFETCH] scheduling prefetch for '\(resolved.nextSong.title, privacy: .public)'")
-        await prefetchNextTrack(nextSong: resolved.nextSong, serverId: resolved.serverId)
+        // The progress ticker must not wait for a network resolve or a full-file transfer.
+        prefetchTask = Task(priority: .utility) { [weak self] in
+            await self?.prefetchNextTrack(nextSong: resolved.nextSong, serverId: resolved.serverId)
+        }
     }
 
     private func prefetchNextTrack(nextSong: DisplayableSong, serverId: UUID) async {
+        guard !Task.isCancelled else { return }
+        let epoch = playbackEpoch
         let songId = nextSong.id
 
         if await cacheService.cachedURL(forSongId: songId, serverId: serverId) != nil {
@@ -82,37 +87,23 @@ extension PlayerService {
             return
         }
 
-        guard let streamURL = (try? await serverService.makeSwiftSonicClient())?.streamURL(
-            id: songId,
-            maxBitRate: 0,
-            format: nil
-        ) else {
-            Logger.player.debug("[PREFETCH] '\(songId, privacy: .public)' no stream URL")
-            return
-        }
+        // Use the same server/authentication/quality policy as foreground playback. A raw
+        // Subsonic URL bypassed Jellyfin sessions and the listener's quality preference.
+        guard let source = try? await mediaResolver.resolve(songId: songId, serverId: serverId, song: nextSong),
+              epoch == playbackEpoch, !Task.isCancelled, !source.isLocal, !source.isLiveStream,
+              source.url.pathExtension.lowercased() != "m3u8" else { return }
 
-        let customHeaders: [String: String]
         do {
-            customHeaders = try await serverService.activeCredentials().customHeaders
+            try await downloadAndCache(
+                songId: songId,
+                serverId: serverId,
+                streamURL: source.url,
+                customHeaders: source.customHeaders,
+                using: prefetchSession
+            )
+            Logger.player.info("[PREFETCH] '\(songId, privacy: .public)' prefetch complete")
         } catch {
-            Logger.player.debug("[PREFETCH] '\(songId, privacy: .public)' credentials unavailable")
-            return
-        }
-
-        prefetchTask = Task { [prefetchSession, weak self] in
-            guard !Task.isCancelled else { return }
-            do {
-                try await self?.downloadAndCache(
-                    songId: songId,
-                    serverId: serverId,
-                    streamURL: streamURL,
-                    customHeaders: customHeaders,
-                    using: prefetchSession
-                )
-                Logger.player.info("[PREFETCH] '\(songId, privacy: .public)' prefetch complete")
-            } catch {
-                Logger.player.debug("[PREFETCH] '\(songId, privacy: .public)' prefetch failed: \(error, privacy: .public)")
-            }
+            Logger.player.debug("[PREFETCH] '\(songId, privacy: .public)' prefetch failed: \(error, privacy: .public)")
         }
     }
 

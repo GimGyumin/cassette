@@ -322,7 +322,7 @@ private struct IntegrationsSettingsTab: View {
 
                 Button { showProviders = true } label: {
                     HStack {
-                        Label("Open Releases In", systemImage: "arrow.up.right.square")
+                        Label("External Apps", systemImage: "arrow.up.right.square")
                             .foregroundStyle(.primary)
                         Spacer()
                         Image(systemName: "chevron.right")

@@ -186,17 +186,20 @@ struct SettingsChoiceList<Item: SettingsChoiceItem>: View {
     var footer: LocalizedStringKey?
     let items: [Item]
     @Binding var selection: Item
+    var subtitle: ((Item) -> String?)?
 
     init(
         navigationTitle: LocalizedStringKey,
         footer: LocalizedStringKey? = nil,
         items: [Item],
-        selection: Binding<Item>
+        selection: Binding<Item>,
+        subtitle: ((Item) -> String?)? = nil
     ) {
         self.navigationTitle = navigationTitle
         self.footer = footer
         self.items = items
         self._selection = selection
+        self.subtitle = subtitle
     }
 
     var body: some View {
@@ -208,7 +211,7 @@ struct SettingsChoiceList<Item: SettingsChoiceItem>: View {
                     } label: {
                         SettingsChoiceRow(
                             title: item.choiceTitle,
-                            subtitle: item.choiceSubtitle,
+                            subtitle: subtitle?(item) ?? item.choiceSubtitle,
                             isSelected: item == selection
                         )
                     }

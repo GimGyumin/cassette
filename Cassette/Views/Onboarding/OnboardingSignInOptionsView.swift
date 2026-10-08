@@ -88,8 +88,7 @@ struct OnboardingSignInOptionsView: View {
                     Button { dismiss() } label: {
                         Image(systemName: "xmark").font(.body.weight(.semibold))
                             .foregroundStyle(.secondary)
-                            .frame(width: 36, height: 36)
-                            .background(.quaternary.opacity(0.5), in: Circle())
+                            .cassetteGlassButton(size: 36)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(text("Close"))

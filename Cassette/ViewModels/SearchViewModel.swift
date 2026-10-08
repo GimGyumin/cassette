@@ -12,25 +12,29 @@ final class SearchViewModel {
 
     var searchResults: SearchResult3?
     var isSearching = false
-    var isIndexing: Bool { !downloadsOnly && (libraryIndex?.isIndexing ?? false) }
+    var isIndexing: Bool { !downloadsOnly && (libraryIndex?.isPreparing ?? false) }
     var searchError: UserFacingError?
     private(set) var isLoadingMore = false
     private(set) var localHits: LibraryIndexService.LocalHits = .init(artists: [], albums: [], playlists: [])
     private(set) var localSongs: [DisplayableSong] = []
     private(set) var isLocalOnly = false
+    private(set) var rankedItems: [SearchResultItem] = []
+    private var presentationGeneration: UInt64 = 0
 
     private let libraryService: any LibraryServiceProtocol
     private weak var libraryIndex: LibraryIndexService?
-    private let downloads: (@MainActor (String) -> [DisplayableSong])?
+    private let downloads: (@MainActor (String) async -> [DisplayableSong])?
     private var requestID: UInt64 = 0
     private var activeQuery = ""
     private var downloadsOnly = false
     private var nextPage = SearchPageRequest()
+    private var localResultLimit = 80
+    private var usingRemoteSearch = false
 
     init(
         libraryService: any LibraryServiceProtocol,
         libraryIndex: LibraryIndexService? = nil,
-        downloads: (@MainActor (String) -> [DisplayableSong])? = nil
+        downloads: (@MainActor (String) async -> [DisplayableSong])? = nil
     ) {
         self.libraryService = libraryService
         self.libraryIndex = libraryIndex
@@ -39,6 +43,11 @@ final class SearchViewModel {
 
     func prepareLocalIndex() {
         libraryIndex?.ensureIndexed(using: libraryService)
+    }
+
+    func retryLocalIndexIfNeeded() async {
+        guard let libraryIndex, libraryIndex.lastError != nil else { return }
+        await libraryIndex.rebuildAndWait(using: libraryService)
     }
 
     func search(query: String, serverReachable: Bool = true, downloadsOnly: Bool = false) async {
@@ -52,8 +61,11 @@ final class SearchViewModel {
         isSearching = !trimmed.isEmpty
         isLoadingMore = false
         nextPage = SearchPageRequest()
+        localResultLimit = 80
+        usingRemoteSearch = false
         localHits = .init(artists: [], albums: [], playlists: [])
         localSongs = []
+        rankedItems = []
         isLocalOnly = !serverReachable || downloadsOnly
         guard !trimmed.isEmpty else {
             isLocalOnly = false
@@ -65,19 +77,29 @@ final class SearchViewModel {
             // Debounce local metadata work as well as network requests.
             try await Task.sleep(for: Self.searchDebounce)
             guard token == requestID else { return }
-            refreshLocalResults()
-            // An indexed library is the default search source. Typing never performs catalog requests.
+            await refreshLocalResults()
+            try Task.checkCancellation()
+            guard token == requestID else { return }
+            // A healthy local index serves ordinary typing. While the first build runs, its
+            // progress is shown; after a failure, online search falls back to the server.
             if let libraryIndex, !downloadsOnly {
-                libraryIndex.ensureIndexed(using: libraryService)
-                return
+                if libraryIndex.lastError == nil {
+                    if libraryIndex.hasUsableIndex { return }
+                    libraryIndex.ensureIndexed(using: libraryService)
+                    return
+                }
+                if isLocalOnly {
+                    searchError = .searchIndexUnavailable
+                    return
+                }
             }
             guard !isLocalOnly else { return }
-            libraryIndex?.ensureIndexed(using: libraryService)
+            usingRemoteSearch = true
             let results = try await libraryService.search(trimmed, page: nextPage)
             try Task.checkCancellation()
             guard token == requestID else { return }
             append(results, request: nextPage)
-            refreshLocalResults(includeDownloads: false)
+            await refreshLocalResults(includeDownloads: false)
         } catch where Self.isCancellation(error) {
         } catch {
             guard token == requestID else { return }
@@ -86,16 +108,49 @@ final class SearchViewModel {
     }
 
     /// Index completion refreshes only local hits, without restarting the server request.
-    func refreshLocalResults(includeDownloads: Bool = true) {
+    func refreshLocalResults(includeDownloads: Bool = true) async {
         guard !activeQuery.isEmpty else { return }
-        if includeDownloads { localSongs = downloads?(activeQuery) ?? [] }
-        localHits = downloadsOnly ? .init(artists: [], albums: [], playlists: [])
-            : libraryIndex?.search(query: activeQuery, limit: .max)
-                ?? .init(artists: [], albums: [], playlists: [])
+        let token = requestID
+        let query = activeQuery
+        let downloaded = includeDownloads ? await downloads?(query) : nil
+        guard token == requestID, !Task.isCancelled else { return }
+        let hits = downloadsOnly ? nil : await libraryIndex?.searchInBackground(query: query, limit: localResultLimit)
+        guard token == requestID, !Task.isCancelled else { return }
+        if let downloaded { localSongs = downloaded }
+        localHits = hits ?? .init(artists: [], albums: [], playlists: [])
+        await updateResultOrder()
+    }
+
+    private func updateResultOrder() async {
+        presentationGeneration &+= 1
+        let generation = presentationGeneration
+        let token = requestID
+        let items = songs.map(SearchResultItem.song) + artists.map(SearchResultItem.artist)
+            + albums.map(SearchResultItem.album) + localHits.playlists.map(SearchResultItem.playlist)
+        let query = activeQuery
+        let locale = AppUILanguage.locale
+        let worker = Task.detached(priority: .userInitiated) {
+            SearchResultItem.ranked(items, query: query, locale: locale)
+        }
+        let rows = await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: { worker.cancel() }
+        guard token == requestID, generation == presentationGeneration, !Task.isCancelled else { return }
+        rankedItems = rows
     }
 
     func canLoadMore(_ category: SearchCategory) -> Bool {
-        guard libraryIndex == nil, !isLocalOnly, searchResults != nil else { return false }
+        if !usingRemoteSearch, libraryIndex?.hasUsableIndex == true, !downloadsOnly {
+            switch category {
+            case .all: return [localHits.artists.count, localHits.albums.count,
+                               localHits.playlists.count, localHits.songs.count].contains(localResultLimit)
+            case .artists: return localHits.artists.count == localResultLimit
+            case .albums: return localHits.albums.count == localResultLimit
+            case .songs: return localHits.songs.count == localResultLimit
+            case .playlists: return localHits.playlists.count == localResultLimit
+            }
+        }
+        guard usingRemoteSearch, !isLocalOnly, searchResults != nil else { return false }
         switch category {
         case .all: return nextPage.artistCount > 0 || nextPage.albumCount > 0 || nextPage.songCount > 0
         case .artists: return nextPage.artistCount > 0
@@ -107,6 +162,13 @@ final class SearchViewModel {
 
     func loadMore(category: SearchCategory = .all) async {
         guard !isSearching, !isLoadingMore, canLoadMore(category) else { return }
+        if !usingRemoteSearch {
+            isLoadingMore = true
+            defer { isLoadingMore = false }
+            localResultLimit += 80
+            await refreshLocalResults()
+            return
+        }
         let token = requestID
         var request = nextPage
         if category != .all {
@@ -122,6 +184,7 @@ final class SearchViewModel {
             try Task.checkCancellation()
             guard token == requestID else { return }
             append(page, request: request)
+            await updateResultOrder()
         } catch where Self.isCancellation(error) {
         } catch {
             guard token == requestID else { return }
@@ -184,9 +247,14 @@ final class SearchViewModel {
     }
 
     var suggestions: [String] {
-        let names = songs.map(\.title) + artists.map(\.name) + albums.map(\.name)
-        let matches = names.filter { $0.localizedStandardContains(activeQuery) }
-        return Array(Self.unique([activeQuery] + matches, excluding: [], id: \.self).prefix(3))
+        guard !activeQuery.isEmpty else { return [] }
+        var result = [activeQuery]
+        for item in rankedItems {
+            let name = item.title
+            if !result.contains(name), name.localizedStandardContains(activeQuery) { result.append(name) }
+            if result.count == 3 { break }
+        }
+        return result
     }
 
     private static func unique<T>(_ values: [T], excluding ids: [String], id: KeyPath<T, String>) -> [T] {

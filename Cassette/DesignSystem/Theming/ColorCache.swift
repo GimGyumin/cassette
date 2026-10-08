@@ -13,8 +13,13 @@ nonisolated enum ColorCache {
     private static let defaultsKey = "cassette.artworkPalette.cache.v7"
     private static let lock = NSLock()
     private static var memory: [String: CachedPalette] = [:]
+    /// Hydrate once, including misses. Reading UserDefaults' entire dictionary per
+    /// uncached cover made scrolling cost grow with the size of the music library.
+    private static var stored: [String: Data]?
+    private static let persistenceQueue = DispatchQueue(label: "app.cassette.palette-persistence", qos: .utility)
+    private static var pendingWrite: DispatchWorkItem?
 
-    struct CachedPalette: Codable, Sendable {
+    struct CachedPalette: Codable, Sendable, Equatable {
         let packedBackground: Int
         let packedText1: Int
         let packedText2: Int
@@ -51,8 +56,8 @@ nonisolated enum ColorCache {
         lock.lock()
         defer { lock.unlock() }
         if let cached = memory[id] { return cached.asArtworkPalette() }
-        guard let dict = UserDefaults.standard.dictionary(forKey: defaultsKey),
-              let data = dict[id] as? Data,
+        hydrateLocked()
+        guard let data = stored?[id],
               let cached = try? JSONDecoder().decode(CachedPalette.self, from: data) else {
             return nil
         }
@@ -63,20 +68,39 @@ nonisolated enum ColorCache {
     static func store(_ palette: ArtworkPalette, for id: String) {
         guard !id.isEmpty, let cached = CachedPalette.from(palette) else { return }
         lock.lock()
+        defer { lock.unlock() }
+        guard memory[id] != cached else { return }
+        hydrateLocked()
         memory[id] = cached
-        lock.unlock()
-        var dict = UserDefaults.standard.dictionary(forKey: defaultsKey) ?? [:]
         if let data = try? JSONEncoder().encode(cached) {
-            dict[id] = data
-            UserDefaults.standard.set(dict, forKey: defaultsKey)
+            guard stored?[id] != data else { return }
+            stored?[id] = data
+            schedulePersistenceLocked()
         }
     }
 
     static func clear() {
         lock.lock()
+        defer { lock.unlock() }
         memory.removeAll()
-        lock.unlock()
-        UserDefaults.standard.removeObject(forKey: defaultsKey)
+        stored = [:]
+        schedulePersistenceLocked()
+    }
+
+    private static func hydrateLocked() {
+        if stored == nil {
+            stored = UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: Data] ?? [:]
+        }
+    }
+
+    private static func schedulePersistenceLocked() {
+        pendingWrite?.cancel()
+        let work = DispatchWorkItem {
+            let snapshot = lock.withLock { stored ?? [:] }
+            UserDefaults.standard.set(snapshot, forKey: defaultsKey)
+        }
+        pendingWrite = work
+        persistenceQueue.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     private static func unpack(_ packed: Int) -> Color {

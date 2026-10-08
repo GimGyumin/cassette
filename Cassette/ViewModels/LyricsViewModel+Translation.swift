@@ -22,9 +22,10 @@ extension LyricsViewModel {
             LyricsTranslationSettings.shared.targetLanguage
         )
         let source = LyricsLanguage.resolvedSourceLanguage(from: structured.lang)
-        let lines = structured.line.map(\.value)
+        let lines = displayRows.map(\.text)
         let anyForeign = LyricsLanguage.needsTranslation(lines: lines, targetCode: target)
-        // Same overall language and no foreign lines → hide translate control.
+        // Trust the actual displayed text over server metadata. Some TTML providers label
+        // mixed-language or English lyrics with the user's locale.
         if source == target && !anyForeign { return false }
         return anyForeign
     }
@@ -57,7 +58,7 @@ extension LyricsViewModel {
         // Prefer the user’s target; only rewrite when Apple would hang on identical codes.
         let finalTarget: String = {
             if preferredTarget == resolvedSource,
-               LyricsLanguage.needsTranslation(lines: structured.line.map(\.value), targetCode: preferredTarget) {
+               LyricsLanguage.needsTranslation(lines: displayRows.map(\.text), targetCode: preferredTarget) {
                 // Mixed-script lyrics with a matching metadata lang — keep user target.
                 return preferredTarget
             }
@@ -70,13 +71,34 @@ extension LyricsViewModel {
         let originalLines = displayRows.map(\.text)
 
         // 1. Device cache — never re-call the provider when we already have a match.
-        if let cached = TranslationCache.shared.get(
-            songID: songId,
-            sourceLang: resolvedSource,
-            targetLang: finalTarget,
-            provider: provider,
-            originalLines: originalLines
-        ) {
+        let cachedTranslation: [TranslatedLyric]? = if provider == .apple {
+            LyricsTranslationService.shared.cachedTranslation(
+                songID: songId,
+                sourceLanguage: resolvedSource,
+                targetLanguage: finalTarget,
+                originalLines: originalLines,
+                strategyPreference: settings.strategyPreference
+            )
+        } else {
+            TranslationCache.shared.get(
+                songID: songId,
+                sourceLang: resolvedSource,
+                targetLang: finalTarget,
+                provider: provider,
+                originalLines: originalLines
+            )
+        }
+        if let cached = cachedTranslation {
+            if provider == .apple {
+                LyricsTranslationService.shared.debugStart(
+                    trackID: songId,
+                    sourceLanguage: resolvedSource,
+                    targetLanguage: finalTarget,
+                    strategy: .standard,
+                    lineCount: originalLines.count,
+                    cacheHit: true
+                )
+            }
             replaceTranslatedLyrics(cached, reveal: true)
             translationErrorMessage = nil
             isTranslating = false
@@ -195,9 +217,17 @@ extension LyricsViewModel {
         return true
     }
 
-    func applyAppleTranslation(_ translatedTexts: [String]) async {
+    func applyAppleTranslation(
+        _ translatedTexts: [String],
+        chorusTexts: [String],
+        requestID: Int,
+        trackID: String
+    ) async {
         appleTranslationTimeoutTask?.cancel()
         appleTranslationTimeoutTask = nil
+        guard requestID == appleTranslationRequestID,
+              trackID == songId,
+              !Task.isCancelled else { return }
         guard case .loaded(let structured) = state else {
             isTranslating = false
             return
@@ -210,36 +240,39 @@ extension LyricsViewModel {
             ? preferredTarget
             : LyricsTranslationSettings.resolvedTargetLanguage(preferred: preferredTarget, source: sourceLang)
 
-        let sourceTranslations: [String] = (0..<structured.line.count).map { index in
-            index < translatedTexts.count ? translatedTexts[index] : ""
-        }
-
         let results = displayRows.enumerated().map { displayIndex, row in
             let translated = row.isSecondaryAgent
                 ? ""
-                : (row.sourceLineIndex < sourceTranslations.count
-                    ? sourceTranslations[row.sourceLineIndex]
+                : (displayIndex < translatedTexts.count
+                    ? translatedTexts[displayIndex]
+                    : "")
+            let chorusTranslation = row.isSecondaryAgent
+                ? ""
+                : (displayIndex < chorusTexts.count
+                    ? Self.normalizedChorusTranslation(chorusTexts[displayIndex])
                     : "")
             return makeTranslatedLyric(
                 at: displayIndex,
                 text: row.text,
                 startMs: row.startMs,
                 translatedText: translated,
+                backgroundTranslation: chorusTranslation,
                 translationSource: .appleAPI
             )
         }
 
         let hasMeaningfulTranslation = results.contains {
-            !$0.translatedText.isEmpty && $0.translatedText != $0.originalText
+            (!$0.translatedText.isEmpty && $0.translatedText != $0.originalText)
+                || !$0.backgroundTranslation.isEmpty
         }
 
         if hasMeaningfulTranslation {
-            TranslationCache.shared.set(
+            LyricsTranslationService.shared.storeTranslation(
                 results,
                 songID: songId,
-                sourceLang: sourceLang,
-                targetLang: finalTarget,
-                provider: .apple
+                sourceLanguage: sourceLang,
+                targetLanguage: finalTarget,
+                strategyPreference: settings.strategyPreference
             )
             replaceTranslatedLyrics(results, reveal: true)
             translationErrorMessage = nil
@@ -400,7 +433,7 @@ extension LyricsViewModel {
     }
 
     func clearCache() async {
-        TranslationCache.shared.clear()
+        LyricsTranslationService.shared.clearCache()
 
         if case .loaded(let structured) = state {
             await seedOriginalLyrics(from: structured, hideTranslations: true)

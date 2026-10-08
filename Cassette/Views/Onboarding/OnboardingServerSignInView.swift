@@ -29,23 +29,28 @@ struct OnboardingServerSignInView: View {
             VStack(spacing: 0) {
                 navigationHeader
                 GeometryReader { geometry in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 28) {
-                            brandHeader
-                            stageContent
-                            Spacer(minLength: 24)
-                            privacyNote
+                    if stage == .quickConnect {
+                        quickConnectContent
+                            .frame(minHeight: geometry.size.height, alignment: .top)
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 28) {
+                                brandHeader
+                                stageContent
+                                Spacer(minLength: 24)
+                                privacyNote
+                            }
+                            .padding(.horizontal, 32)
+                            .padding(.top, 16)
+                            .padding(.bottom, 20)
+                            .frame(maxWidth: 540)
+                            .frame(minHeight: geometry.size.height, alignment: .top)
+                            .frame(maxWidth: .infinity)
                         }
-                        .padding(.horizontal, 32)
-                        .padding(.top, 16)
-                        .padding(.bottom, 20)
-                        .frame(maxWidth: 540)
-                        .frame(minHeight: geometry.size.height, alignment: .top)
-                        .frame(maxWidth: .infinity)
+                        #if os(iOS)
+                        .scrollDismissesKeyboard(.interactively)
+                        #endif
                     }
-                    #if os(iOS)
-                    .scrollDismissesKeyboard(.interactively)
-                    #endif
                 }
             }
             .background { SetupBackground() }
@@ -53,12 +58,18 @@ struct OnboardingServerSignInView: View {
             #if os(iOS)
             .toolbar(.hidden, for: .navigationBar)
             #endif
-            .safeAreaInset(edge: .bottom, spacing: 0) { actions }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if stage != .quickConnect { actions }
+            }
             .sheet(isPresented: $showsOptions) {
                 OnboardingSignInOptionsView(viewModel: viewModel) {
                     showsOptions = false
                     requestQuickConnect()
                 }
+                #if os(iOS)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.hidden)
+                #endif
             }
             .task { await viewModel.discoverLANServers() }
             .task(id: viewModel.jellyfinProbeKey) { await viewModel.probeJellyfin() }
@@ -82,20 +93,29 @@ struct OnboardingServerSignInView: View {
     }
 
     private var navigationHeader: some View {
-        HStack {
-            Button(action: goBack) {
-                Image(systemName: "chevron.left")
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .frame(width: 48, height: 48)
-                    .background(.quaternary.opacity(0.3), in: Circle())
-                    .overlay(Circle().strokeBorder(.quaternary, lineWidth: 0.5))
+        ZStack {
+            HStack {
+                Button(action: goBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .cassetteGlassButton(size: 48)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(text("Back"))
+                .accessibilityIdentifier("onboarding.server.back")
+                .disabled(isConnecting)
+                Spacer()
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(text("Back"))
-            .accessibilityIdentifier("onboarding.server.back")
-            .disabled(isConnecting)
-            Spacer()
+
+            if stage == .quickConnect {
+                Text(viewModel.derivedDisplayName)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.horizontal, 72)
+                    .accessibilityAddTraits(.isHeader)
+            }
         }
         .padding(.horizontal, 24)
         .padding(.top, 8)
@@ -193,10 +213,7 @@ struct OnboardingServerSignInView: View {
                 }
             }
         case .quickConnect:
-            VStack(alignment: .leading, spacing: 22) {
-                serverLabel
-                quickConnectControls
-            }
+            EmptyView()
         }
     }
 
@@ -226,12 +243,12 @@ struct OnboardingServerSignInView: View {
                 switch stage {
                 case .server: continueFromServer()
                 case .credentials: requestConnect()
-                case .quickConnect: cancelQuickConnect(); stage = .credentials
+                case .quickConnect: break
                 }
             } label: {
                 HStack(spacing: 10) {
                     if isConnecting || (viewModel.isLoading && stage == .credentials) { ProgressView().tint(.white) }
-                    Text(stage == .quickConnect ? text("Use Password Instead") : isBusy ? text("Signing In…") : text("Continue"))
+                    Text(isBusy ? text("Signing In…") : text("Continue"))
                         .font(.body.weight(.semibold))
                 }
                 .frame(maxWidth: .infinity, minHeight: 54)
@@ -245,8 +262,7 @@ struct OnboardingServerSignInView: View {
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, minHeight: 52)
-                .background(.quaternary.opacity(0.12), in: Capsule())
-                .overlay(Capsule().strokeBorder(.quaternary, lineWidth: 1))
+                .cassetteGlassCapsule()
                 .buttonStyle(.plain)
                 .disabled(isBusy)
                 .accessibilityIdentifier("onboarding.server.options")
@@ -257,43 +273,76 @@ struct OnboardingServerSignInView: View {
     }
 
     private var primaryEnabled: Bool {
-        if stage == .quickConnect { return !isConnecting }
+        if stage == .quickConnect { return false }
         return !isBusy && (stage == .server ? viewModel.hasEnteredServerURL : viewModel.canSubmit)
     }
 
-    @ViewBuilder private var quickConnectControls: some View {
-        switch viewModel.quickConnectState {
-        case .idle, .starting:
-            HStack(spacing: 10) { ProgressView(); Text(text("Preparing Quick Connect…")) }
-        case .completing:
-            HStack(spacing: 10) { ProgressView(); Text(text("Finishing Sign-In…")) }
-        case .awaitingApproval(let code):
-            VStack(spacing: 32) {
+    private var quickConnectContent: some View {
+        ScrollView {
+            VStack(spacing: 0) {
                 Text(text("Open your server in a browser, choose Quick Connect, and approve this code."))
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(code)
-                    .font(.system(size: 56, weight: .light, design: .monospaced))
-                    .tracking(10)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, minHeight: 100)
-                    .accessibilityLabel(text("Quick Connect code"))
-                    .accessibilityValue(code)
-                HStack(spacing: 10) { ProgressView(); Text(text("Waiting for approval…")).font(.footnote) }
+                    .padding(.top, 56)
+
+                Spacer(minLength: 72)
+
+                switch viewModel.quickConnectState {
+                case .idle, .starting:
+                    VStack(spacing: 18) {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text(text("Preparing Quick Connect…"))
+                            .foregroundStyle(.secondary)
+                    }
+                case .completing:
+                    VStack(spacing: 18) {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text(text("Finishing Sign-In…"))
+                            .foregroundStyle(.secondary)
+                    }
+                case .awaitingApproval(let code):
+                    VStack(spacing: 36) {
+                        Text(code)
+                            .font(.system(size: 72, weight: .light, design: .monospaced))
+                            .tracking(14)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.45)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, minHeight: 112)
+                            .accessibilityLabel(text("Quick Connect code"))
+                            .accessibilityValue(code)
+
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text(text("Waiting for approval…"))
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    }
+                case .failed(let message):
+                    VStack(spacing: 20) {
+                        Label(message, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(text("Try Quick Connect Again")) { requestQuickConnect() }
+                            .buttonStyle(SetupPrimaryButtonStyle())
+                            .disabled(isBusy)
+                    }
+                    .frame(maxWidth: 420)
+                }
+
+                Spacer(minLength: 80)
             }
-            .padding(.vertical, 24)
-        case .failed(let message):
-            VStack(alignment: .leading, spacing: 16) {
-                Label(message, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
-                Button(text("Try Quick Connect Again")) { requestQuickConnect() }
-                    .disabled(isBusy)
-            }
+            .padding(.horizontal, 32)
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
         }
+        .accessibilityIdentifier("onboarding.server.quickConnectCode")
     }
 
     private func continueFromServer() {
@@ -305,6 +354,12 @@ struct OnboardingServerSignInView: View {
 
     private func goBack() {
         focusedField = nil
+        if stage == .quickConnect {
+            cancelQuickConnect()
+            stage = .credentials
+            showsOptions = true
+            return
+        }
         cancelQuickConnect()
         if stage != .server { stage = .server }
         else if let onBack { onBack() }

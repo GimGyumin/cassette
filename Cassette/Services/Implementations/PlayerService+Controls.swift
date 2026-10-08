@@ -20,6 +20,8 @@ extension PlayerService {
 
     func pause() async {
         playbackRequestTask?.cancel()
+        playbackAcquisitionTask?.cancel()
+        playbackAcquisitionTask = nil
         if isTrackTransitionPending {
             playbackEpoch &+= 1
             isTrackTransitionPending = false
@@ -77,7 +79,7 @@ extension PlayerService {
         }
         guard currentTrack != nil else { return }
         #if os(iOS)
-        configureAudioSessionIfNeeded(preferMultichannel: usingSystemPlayer)
+        configureAudioSessionIfNeeded(preferMultichannel: systemPlayback.isActive)
         #endif
         if trackPlayStartDate == nil { trackPlayStartDate = Date() }
         if currentPlaySegmentStart == nil { currentPlaySegmentStart = Date() }
@@ -103,7 +105,7 @@ extension PlayerService {
         // holding the track any more) is a *start*, not a resume: it stays `.loading` until an
         // engine confirms audio, exactly like a fresh play.
         var startsFromColdSource = false
-        if usingSystemPlayer {
+        if systemPlayback.isActive {
             if !systemEngine.hasCurrentItem, let source = currentSource {
                 startsFromColdSource = true
                 if let info = pendingRestoreInfo, info.pause {
@@ -131,11 +133,11 @@ extension PlayerService {
             // like the AVPlayer branch above, falling back to the in-memory source on failure.
             let freshSource = await refreshedColdStartSource() ?? source
             currentSource = freshSource
-            engine.play(url: freshSource.url, headers: freshSource.customHeaders)
+            startEnginePlayback(url: freshSource.url, headers: freshSource.customHeaders, useSystemPlayer: false)
             Task { @MainActor in PlaybackBeatMeter.shared.setEnabled(true) }
         } else {
             engine.resume()
-            if !usingSystemPlayer {
+            if !systemPlayback.isActive {
                 Task { @MainActor in PlaybackBeatMeter.shared.setEnabled(true) }
             }
         }
@@ -145,14 +147,34 @@ extension PlayerService {
         // `.playing` for it is what made the transport show its pause/stop control while the stream
         // was still loading. A resume that lands on top of a start that is still in flight
         // (`.loading`) keeps waiting for the same reason.
-        let isReopeningStream = startsFromColdSource || publishedState == .loading
+        let isReopeningStream = startsFromColdSource || publishedState.isAwaitingAudio
+        let reopensSource = startsFromColdSource
         if publishedState != .playing {
             await MainActor.run {
-                state.playbackState = isReopeningStream ? .loading : .playing
+                state.playbackState = state.playbackState.resuming(
+                    reopensSource: reopensSource, position: state.position
+                )
             }
+        }
+        if await MainActor.run(body: { state.playbackState.isAwaitingAudio }) {
+            finalizePlaySegment()
         }
         await pushPositionSnapshot(rate: 1.0)
         startProgressTimer()
+        if isReopeningStream,
+           let recoveryTrack = currentTrack,
+           let serverId = await MainActor.run(body: { serverService.state.activeServer?.id }) {
+            let recoveryPosition = await MainActor.run { state.position }
+            if startsFromColdSource, recoveryPosition > 0 {
+                scheduleStallRecoveryCompletion(
+                    songID: recoveryTrack.id, epoch: playbackEpoch, position: recoveryPosition
+                )
+            } else {
+                schedulePlaybackAcquisitionRecovery(
+                    song: recoveryTrack, serverId: serverId, epoch: playbackEpoch
+                )
+            }
+        }
         startPositionSaveTimer()
         let resumeTrack = await MainActor.run { state.currentTrack }
         if let ws = widgetSyncService {
@@ -180,14 +202,18 @@ extension PlayerService {
     }
 
     func togglePlayPause() async {
-        let isPlaying = await MainActor.run { state.playbackState == .playing }
-        if isPlaying { await pause() } else { await resume() }
+        let hasPlayIntent = await MainActor.run {
+            state.playbackState.hasPlaybackIntent
+        }
+        if hasPlayIntent { await pause() } else { await resume() }
     }
 
     // MARK: - Stop
 
     func stop() async {
         playbackRequestTask?.cancel()
+        playbackAcquisitionTask?.cancel()
+        playbackAcquisitionTask = nil
         cancelGaplessBridge()
         // Invalidate pending URL resolution and recovery before any suspension.
         playbackEpoch &+= 1
@@ -226,13 +252,11 @@ extension PlayerService {
         let stoppedJellyfinContext = currentSource?.jellyfinPlaybackContext
         currentSource = nil
         pendingRestoreInfo = nil
-        pendingSeekTarget = nil
-        pendingSeekDeadline = .distantPast
+        seekState = .idle
         isRestoringSession = false
         let stoppedId = await MainActor.run { state.currentTrack?.id }
         let stoppedPos = await MainActor.run { state.position }
-        gaplessBridgeNext = nil
-        gaplessBridgeSource = nil
+        gaplessBridge.clearPreparedSource()
         await MainActor.run {
             state.playbackState = .idle
             state.currentTrack = nil
@@ -260,6 +284,7 @@ extension PlayerService {
     // MARK: - Seek
 
     func seek(to position: TimeInterval) async {
+        let epoch = playbackEpoch
         guard position.isFinite else {
             Logger.player.warning("seek ignored — non-finite target")
             return
@@ -268,8 +293,10 @@ extension PlayerService {
             (isLiveStream: state.isLiveStream,
              hasTrack: state.currentTrack != nil,
              duration: state.duration,
-             previousPosition: state.position)
+             previousPosition: state.position,
+             intendsToPlay: state.playbackState.hasPlaybackIntent)
         }
+        guard epoch == playbackEpoch, !isTrackTransitionPending else { return }
         guard !playback.isLiveStream else {
             Logger.player.debug("seek ignored — live stream mode")
             return
@@ -305,14 +332,25 @@ extension PlayerService {
 
         // Arm settling before the MainActor hop below. Actor reentrancy would otherwise let
         // the progress task publish one stale pre-seek sample in between.
-        pendingSeekTarget = target
-        pendingSeekDeadline = Date().addingTimeInterval(8)
+        seekState = .settling(target: target, deadline: Date().addingTimeInterval(8))
         // Give the refetch from the new offset room to finish before the stall watchdogs may fire.
-        seekSettleDeadline = Date().addingTimeInterval(10)
+        systemPlayback.seekSettleDeadline = Date().addingTimeInterval(10)
         // The next end-of-track sample must be compared with the requested position, not the
         // pre-seek position; otherwise a legitimate backward seek looks like an EOF wrap.
         lastObservedEngineProgress = target
-        seekEngine(to: target)
+        if let source = currentSource, source.supportsTranscodeOffset {
+            // Open a fresh encoder at the requested media time instead of issuing Range against
+            // an unfinished file. Preserve an explicit pause and fence obsolete acquisition work.
+            playbackAcquisitionTask?.cancel()
+            playbackAcquisitionTask = nil
+            cancelPendingCacheDownload()
+            cancelPendingPrefetch()
+            pendingRestoreInfo = (seekTime: target, pause: !playback.intendsToPlay)
+            startEnginePlayback(url: source.url, headers: source.customHeaders,
+                                useSystemPlayer: systemPlayback.isActive || !playback.intendsToPlay)
+        } else {
+            seekEngine(to: target)
+        }
         await MainActor.run {
             state.position = target
             state.isSeekable = true

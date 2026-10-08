@@ -8,7 +8,7 @@ import SwiftUI
 struct OnboardingCacheStepView: View {
     let onSkip: () -> Void
     let onContinue: () -> Void
-    var totalSteps = 4
+    var totalSteps = 3
 
     @Environment(\.appContainer) private var container
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

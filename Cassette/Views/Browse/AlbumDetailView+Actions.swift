@@ -50,10 +50,15 @@ extension AlbumDetailContentView {
                 Button {
                     HapticFeedback.light.trigger()
                     Task {
-                        if isAlbumFavorite {
-                            try? await container?.favoritesService.unstar(itemType: .album, itemId: albumId)
-                        } else {
-                            try? await container?.favoritesService.star(itemType: .album, itemId: albumId)
+                        guard let container else { return }
+                        do {
+                            if isAlbumFavorite {
+                                try await container.favoritesService.unstar(itemType: .album, itemId: albumId)
+                            } else {
+                                try await container.favoritesService.star(itemType: .album, itemId: albumId)
+                            }
+                        } catch {
+                            container.toastService.showError(error.localizedDescription)
                         }
                     }
                 } label: {
@@ -62,7 +67,7 @@ extension AlbumDetailContentView {
                         systemImage: isAlbumFavorite ? "star.fill" : "star"
                     )
                 }
-                .disabled(!isOnline)
+                .disabled(container?.serverState.activeServer == nil)
             }
 
             if isAlbumPinned {

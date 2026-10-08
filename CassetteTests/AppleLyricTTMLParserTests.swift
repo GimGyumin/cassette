@@ -165,6 +165,23 @@ struct AppleLyricTTMLParserTests {
         #expect(abs((translation.backgroundEnd ?? 0) - expectedEnd) < 0.001)
     }
 
+    @Test func ignoresPrettyPrintingWhitespaceWhenXMLSpaceIsPreserved() throws {
+        let ttml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <tt xmlns="http://www.w3.org/ns/ttml" xmlns:itunes="http://music.apple.com/lyric-ttml-internal"
+            itunes:timing="Word" xml:lang="en" xml:space="preserve">
+          <body><div><p begin="1" end="2">
+            <span begin="1.0" end="1.5">heart</span>
+            <span begin="1.5" end="2.0">breaker</span>
+          </p></div></body>
+        </tt>
+        """
+        let doc = try AppleLyricTTMLParser.parse(string: ttml)
+        let line = try #require(doc.allLines.first)
+        #expect(line.displayText == "heartbreaker")
+        #expect(line.words.map(\.text) == ["heart", "breaker"])
+    }
+
     @Test func keepsGluedSyllableSpansWithoutInventingSpace() throws {
         let ttml = """
         <?xml version="1.0" encoding="UTF-8"?>

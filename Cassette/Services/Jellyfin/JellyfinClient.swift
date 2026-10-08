@@ -80,6 +80,7 @@ nonisolated struct JellyfinItem: Codable, Sendable, Identifiable, Equatable {
     let album: String?
     let albumId: String?
     let albumArtist: String?
+    let isCompilation: Bool?
     let albumArtists: [JellyfinNameIDPair]?
     let artists: [String]?
     let artistItems: [JellyfinNameIDPair]?
@@ -110,6 +111,7 @@ nonisolated struct JellyfinItem: Codable, Sendable, Identifiable, Equatable {
         case album = "Album"
         case albumId = "AlbumId"
         case albumArtist = "AlbumArtist"
+        case isCompilation = "IsCompilation"
         case albumArtists = "AlbumArtists"
         case artists = "Artists"
         case artistItems = "ArtistItems"
@@ -827,10 +829,37 @@ nonisolated final class JellyfinClient: @unchecked Sendable {
         mediaSourceID: String? = nil,
         playSessionID: String? = nil
     ) -> URL? {
-        var query = [URLQueryItem(name: "DeviceId", value: deviceID)]
+        var query = [URLQueryItem(name: "DeviceId", value: deviceID),
+                     URLQueryItem(name: "Static", value: "true")]
         if let mediaSourceID { query.append(URLQueryItem(name: "MediaSourceId", value: mediaSourceID)) }
         if let playSessionID { query.append(URLQueryItem(name: "PlaySessionId", value: playSessionID)) }
         return authenticatedURL("Audio/\(itemID)/stream\(container.map { ".\($0)" } ?? "")", query: query)
+    }
+
+    /// Explicit progressive encoding: Universal can choose a different container or direct-play
+    /// a matching original, which does not apply the requested time offset consistently.
+    func progressiveAudioURL(
+        itemID: String,
+        container: String,
+        audioCodec: String,
+        audioBitRate: Int? = nil,
+        mediaSourceID: String? = nil,
+        playSessionID: String? = nil,
+        startTimeTicks: Int64? = nil
+    ) -> URL? {
+        var query = [
+            URLQueryItem(name: "Static", value: "false"),
+            URLQueryItem(name: "DeviceId", value: deviceID),
+            URLQueryItem(name: "AudioCodec", value: audioCodec),
+            URLQueryItem(name: "EnableAutoStreamCopy", value: "false"),
+            URLQueryItem(name: "AllowAudioStreamCopy", value: "false"),
+            URLQueryItem(name: "CopyTimestamps", value: "false"),
+        ]
+        if let audioBitRate { query.append(URLQueryItem(name: "AudioBitRate", value: String(audioBitRate))) }
+        if let mediaSourceID { query.append(URLQueryItem(name: "MediaSourceId", value: mediaSourceID)) }
+        if let playSessionID { query.append(URLQueryItem(name: "PlaySessionId", value: playSessionID)) }
+        if let startTimeTicks { query.append(URLQueryItem(name: "StartTimeTicks", value: String(startTimeTicks))) }
+        return authenticatedURL("Audio/\(itemID)/stream.\(container)", query: query)
     }
 
     func universalAudioURL(
@@ -852,6 +881,31 @@ nonisolated final class JellyfinClient: @unchecked Sendable {
         if let mediaSourceID { query.append(URLQueryItem(name: "MediaSourceId", value: mediaSourceID)) }
         if let playSessionID { query.append(URLQueryItem(name: "PlaySessionId", value: playSessionID)) }
         return authenticatedURL("Audio/\(itemID)/universal", query: query)
+    }
+
+    /// Resolve PlaybackInfo's relative URL against the configured server prefix.
+    /// Never attach credentials to a server-supplied URL on another origin.
+    func transcodingStreamURL(_ path: String) -> URL? {
+        guard var parts = URLComponents(string: path) else { return nil }
+        if parts.scheme != nil || parts.host != nil {
+            guard parts.scheme?.lowercased() == baseURL.scheme?.lowercased(),
+                  parts.host?.lowercased() == baseURL.host?.lowercased(),
+                  parts.port == baseURL.port else { return nil }
+        } else {
+            let prefix = baseURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let relativePath = parts.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            parts.scheme = baseURL.scheme
+            parts.host = baseURL.host
+            parts.port = baseURL.port
+            parts.path = "/" + (prefix.isEmpty || relativePath.hasPrefix(prefix + "/")
+                ? relativePath : prefix + "/" + relativePath)
+        }
+        var query = parts.queryItems ?? []
+        if let accessToken, !query.contains(where: { $0.name.lowercased() == "api_key" }) {
+            query.append(URLQueryItem(name: "api_key", value: accessToken))
+        }
+        parts.queryItems = query
+        return parts.url
     }
 
     func hlsURL(

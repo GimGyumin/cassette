@@ -91,7 +91,7 @@ struct AlbumDetailView: View {
         let preparedImage = suppliedCoverImage
             ?? artworkImageCache.cachedImage(for: themeKey, tier: .thumb)
             ?? artworkImageCache.cachedImage(for: themeKey, tier: .hero)
-        let preparedColor = immediateThemeColor(key: themeKey, image: preparedImage)
+        let preparedColor = immediateThemeColor(key: themeKey)
 
         Group {
             if let album = resolvedAlbum {
@@ -138,14 +138,14 @@ struct AlbumDetailView: View {
         }
     }
 
-    private func immediateThemeColor(key: String, image: PlatformImage?) -> Color {
+    private func immediateThemeColor(key: String) -> Color {
         if let override = colorExtractor.colorOverride(for: key) { return override }
         if let cached = ColorCache.palette(for: key)?.background { return cached }
         if suppliedDominantColor != .clear { return suppliedDominantColor }
         if let cached = colorExtractor.cachedColor(for: key) { return cached }
-        // A 240 px list thumbnail is inexpensive to inspect and, crucially, this runs
-        // before AlbumDetailContentView registers its chrome appearance.
-        return colorExtractor.dominantColor(for: key, image: image)
+        // A cold image can require decoding and palette clustering. The page's task
+        // performs that work off-main; body must remain a cache-only lookup.
+        return .clear
     }
 }
 
@@ -168,9 +168,12 @@ struct AlbumDetailContentView: View {
         self.coverArtId = resolvedCoverArtId
         self.initialDominantColor = resolvedInitialColor
         self.initialCoverImage = initialCoverImage
-        let cid = "album:\(album.id)"
+        let itemId = album.id
+        let type = FavoriteType.album.rawValue
         let aid = album.id
-        _albumFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> { $0.id == cid })
+        _albumFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> {
+            $0.itemId == itemId && $0.itemType == type
+        })
         _downloadedAlbumTracks = Query(filter: #Predicate<DownloadedTrack> { $0.albumId == aid })
         self.zoomSourceId = zoomSourceId
         self.zoomNamespace = zoomNamespace
@@ -186,9 +189,12 @@ struct AlbumDetailContentView: View {
         let resolvedInitialColor = initialDominantColor == .clear ? cachedColor : initialDominantColor
         self.initialDominantColor = resolvedInitialColor
         self.initialCoverImage = initialCoverImage
-        let cid = "album:\(albumId)"
+        let itemId = albumId
+        let type = FavoriteType.album.rawValue
         let aid = albumId
-        _albumFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> { $0.id == cid })
+        _albumFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> {
+            $0.itemId == itemId && $0.itemType == type
+        })
         _downloadedAlbumTracks = Query(filter: #Predicate<DownloadedTrack> { $0.albumId == aid })
         self.zoomSourceId = zoomSourceId
         self.zoomNamespace = zoomNamespace
@@ -221,6 +227,9 @@ struct AlbumDetailContentView: View {
     /// reached *from* this album must still push a fresh entry (otherwise the stack pops to an earlier
     /// artist page and the back button points at a removed entry). One token per album page instance.
     @State var artistRouteToken = UUID()
+    /// Stable, page-local identity for albums pushed from the related releases shelves.
+    /// A detail-to-detail path must not depend on a refreshed AlbumID3 payload.
+    @State var albumRouteToken = UUID()
     /// Identity of this page instance. `album → artist → back` regressions have twice been a page in
     /// the stack being destroyed and re-created; one log line per instance makes that visible instead
     /// of guessed at (the fixes themselves live in the navigation structure).
@@ -232,11 +241,14 @@ struct AlbumDetailContentView: View {
     @Query private var albumFavoriteMatches: [FavoriteRecord]
     @Query var downloadedAlbumTracks: [DownloadedTrack]
 
-    private var usesDesktopDetail: Bool {
+    var usesDesktopDetail: Bool {
         CassetteWideLayout.usesDesktopDetail(horizontalSizeClass: horizontalSizeClass)
     }
 
-    var isAlbumFavorite: Bool { !albumFavoriteMatches.isEmpty }
+    var isAlbumFavorite: Bool {
+        guard let serverId = container?.serverState.activeServer?.id else { return false }
+        return albumFavoriteMatches.contains { $0.serverId == serverId }
+    }
     var downloadedCount: Int { downloadedAlbumTracks.count }
     var isOnline: Bool { container?.serverState.isOnline == true }
     /// Cover id the album theme is keyed on.
@@ -254,10 +266,10 @@ struct AlbumDetailContentView: View {
         return usesWhiteAlbumInk ? .dark : .light
     }
     var headerTextColor: Color {
-        atmosphere.isThemed ? (usesWhiteAlbumInk ? .white : .black) : .primary
+        return atmosphere.isThemed ? (usesWhiteAlbumInk ? .white : .black) : .primary
     }
     var headerSecondaryColor: Color {
-        atmosphere.isThemed
+        return atmosphere.isThemed
             ? (usesWhiteAlbumInk ? Color.white.opacity(0.80) : Color.black.opacity(0.72))
             : .secondary
     }
@@ -357,7 +369,9 @@ struct AlbumDetailContentView: View {
         .refreshable { await viewModel?.load() }
         // More by reserves its own bottom inset; otherwise use the shared margin.
         .modifier(AlbumMiniPlayerMargin(enabled: !showsMoreByShelf))
-        .modifier(AlbumTopBleedModifier(bleed: !usesDesktopDetail))
+        // Music's album artwork begins below the navigation controls. Full-bleed is
+        // reserved for artist imagery; applying it here pulls the cover under the bar.
+        .modifier(AlbumTopBleedModifier(bleed: false))
         .cassetteHideTopScrollEdgeEffect()
         .cassetteStatusBarScrim(isLightPage: albumChromeColorScheme == .light)
         .cassetteDestructiveAlert(
@@ -393,29 +407,17 @@ struct AlbumDetailContentView: View {
             .presentationDetents([.medium, .large])
             #endif
         }
-        .backgroundPreferenceValue(AlbumShelfBackgroundKey.self) { anchors in
-            GeometryReader { proxy in
-                ZStack(alignment: .topLeading) {
-                    AlbumAtmosphereBackground(atmosphere: atmosphere)
-                    if !usesDesktopDetail,
-                       let shelfTop = anchors.map({ proxy[$0].minY }).min() {
-                        let top = max(0, shelfTop)
-                        atmosphere.recessedSectionColor
-                            .frame(height: max(0, proxy.size.height - top + proxy.safeAreaInsets.bottom))
-                            .offset(y: top)
-                            .allowsHitTesting(false)
-                    }
-                }
-            }
+        .background {
+            AlbumAtmosphereBackground(atmosphere: atmosphere)
         }
         .background {
             GeometryReader { proxy in
                 Color.clear
                     .onAppear {
-                        if !usesDesktopDetail { heroHeight = max(240, proxy.size.width - 120) }
+                        if !usesDesktopDetail { heroHeight = max(180, proxy.size.width - 136) }
                     }
                     .onChange(of: proxy.size.width) { _, w in
-                        if !usesDesktopDetail { heroHeight = max(240, w - 120) }
+                        if !usesDesktopDetail { heroHeight = max(180, w - 136) }
                     }
             }
         }
@@ -428,11 +430,6 @@ struct AlbumDetailContentView: View {
         #if os(iOS)
         .navigationBarBackButtonHidden(false)
         .toolbarColorScheme(albumChromeColorScheme, for: .navigationBar)
-        // A page pushed from another pushed page (an artist page, say) runs under a gesture delegate
-        // that only vouches for the pop it was installed for, so the edge swipe needs arming here —
-        // unless this page *is* a zoom destination, whose dismissal is driven by SwiftUI's own
-        // delegate.
-        .enableSwipeBack(zoomSourceId == nil || zoomNamespace == nil)
         #else
         .navigationBarBackButtonHidden(true)
         #endif
@@ -494,14 +491,30 @@ struct AlbumDetailContentView: View {
             Logger.ui.debug(
                 "[ALBUM-PAGE] task start instance=\(pageInstanceID, privacy: .public) album=\(albumId, privacy: .public) online=\(isOnline, privacy: .public) loaded=\(String(describing: loadedForOnlineState), privacy: .public)"
             )
+            // SwiftUI restarts .task when a pushed page is uncovered. If optional album-info
+            // work was cancelled after tracks appeared, preserve the completed primary load.
+            if loadedForOnlineState == nil,
+               viewModel?.isPrimaryContentReady == true,
+               viewModel?.isOffline == !isOnline {
+                loadedForOnlineState = isOnline
+            }
             guard loadedForOnlineState != isOnline else { return }
-            loadedForOnlineState = isOnline
             await viewModel?.load()
+            if !Task.isCancelled, viewModel?.isPrimaryContentReady == true {
+                loadedForOnlineState = isOnline
+            }
         }
         .task(id: albumCoverId) {
             await resolveDominantColor(coverArtId: albumCoverId)
         }
-        .cassetteZoomTransition(sourceID: zoomSourceId, in: zoomNamespace)
+        .onAppear {
+            Logger.ui.debug("[NAV] album appear instance=\(pageInstanceID, privacy: .public) album=\(albumId, privacy: .public)")
+        }
+        .onDisappear {
+            Logger.ui.debug("[NAV] album disappear instance=\(pageInstanceID, privacy: .public) album=\(albumId, privacy: .public)")
+        }
+        // Use the standard NavigationStack push so iOS owns the interactive edge pop from
+        // every album entry point, including albums opened from an artist page.
     }
 
 }

@@ -6,6 +6,8 @@
 import Testing
 import Foundation
 import SwiftSonic
+import SwiftData
+import Observation
 @testable import Cassette
 
 // MARK: - Counting stub
@@ -44,13 +46,17 @@ final class SearchLibraryStub: LibraryServiceProtocol {
 
     var indexedPlaylists: [Playlist] = []
     var indexedSongs: [Song] = []
+    var indexFailure: (any Error)?
     var songPageCap = 20
     private(set) var songOffsets: [Int] = []
     func librarySongs(offset: Int, count: Int) async throws -> [Song] {
         songOffsets.append(offset)
         return Array(indexedSongs.dropFirst(offset).prefix(min(count, songPageCap)))
     }
-    func artists() async throws -> [ArtistIndex] { [] }
+    func artists() async throws -> [ArtistIndex] {
+        if let indexFailure { throw indexFailure }
+        return []
+    }
     func artist(id: String) async throws -> ArtistID3 { throw URLError(.unknown) }
     func album(id: String) async throws -> AlbumID3 { throw URLError(.unknown) }
     func fetchAllTracks(forArtistID artistID: String) async throws -> [DisplayableSong] { throw URLError(.unknown) }
@@ -87,6 +93,82 @@ final class SearchLibraryStub: LibraryServiceProtocol {
 @Suite("SearchViewModel — debounce & cancellation")
 @MainActor
 struct SearchViewModelDebounceTests {
+    @Test func rankingPreservesRelevanceAndStableTies() {
+        let items: [SearchResultItem] = [
+            .song(DisplayableSong(id: "contains", title: "My café")),
+            .song(DisplayableSong(id: "prefix-1", title: "Cafe One")),
+            .song(DisplayableSong(id: "exact", title: "CAFÉ")),
+            .song(DisplayableSong(id: "prefix-2", title: "Cafe Two"))
+        ]
+        #expect(SearchResultItem.ranked(items, query: "cafe", locale: Locale(identifier: "en_US"))
+            .map(\.id) == ["song:exact", "song:prefix-1", "song:prefix-2", "song:contains"])
+    }
+
+    @Test func rankingFiltersUnrelatedServerResultsAndMatchesSongArtist() {
+        let items: [SearchResultItem] = [
+            .song(DisplayableSong(id: "artist-match", title: "No Surprises", artist: "Radiohead")),
+            .song(DisplayableSong(id: "unrelated", title: "Midnight City", artist: "M83")),
+            .song(DisplayableSong(id: "title-match", title: "Radiohead Live", artist: "Various Artists"))
+        ]
+
+        #expect(SearchResultItem.ranked(items, query: "radiohead", locale: Locale(identifier: "en_US"))
+            .map(\.id) == ["song:title-match", "song:artist-match"])
+    }
+
+    @Test func multiwordQueriesRequireEveryToken() {
+        let items: [SearchResultItem] = [
+            .song(DisplayableSong(id: "match", title: "No Surprises", artist: "Radiohead")),
+            .song(DisplayableSong(id: "partial", title: "No Surprises", artist: "Cover Band"))
+        ]
+
+        #expect(SearchResultItem.ranked(items, query: "radiohead surprises", locale: Locale(identifier: "en_US"))
+            .map(\.id) == ["song:match"])
+    }
+
+    @Test func downloadSearchReturnsSnapshotsFromItsOwnContext() async throws {
+        let container = try ModelContainer(for: DownloadedTrack.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let server = UUID()
+        let context = ModelContext(container)
+        context.insert(DownloadedTrack(songId: "match", serverId: server, filePath: "match.flac",
+            fileSize: 100, mimeType: "audio/flac", title: "Café", durationSeconds: 123, bitRate: 900))
+        context.insert(DownloadedTrack(songId: "other-server", serverId: UUID(), filePath: "other.flac",
+            fileSize: 100, mimeType: "audio/flac", title: "Café"))
+        try context.save()
+        let store = SearchDownloadStore(modelContainer: container)
+        let results = await store.matching("cafe", serverId: server)
+        #expect(results.map(\.id) == ["match"])
+        #expect(results.first?.duration == 123)
+        #expect(results.first?.bitRate == 900)
+        #expect(results.first?.isDownloaded == true)
+    }
+    @Test func lateDownloadSearchCannotReplaceANewerQuery() async {
+        var pending: CheckedContinuation<[DisplayableSong], Never>?
+        let vm = SearchViewModel(libraryService: SearchLibraryStub(), downloads: { _ in
+            await withCheckedContinuation { pending = $0 }
+        })
+        let old = Task { await vm.search(query: "old", downloadsOnly: true) }
+        while pending == nil { await Task.yield() }
+        await vm.search(query: "")
+        pending?.resume(returning: [DisplayableSong(id: "old", title: "Old song")])
+        await old.value
+        #expect(vm.songs.isEmpty)
+        #expect(!vm.isSearching)
+    }
+
+    @Test func backgroundIndexSearchKeepsAllResultsAndHonorsCancellation() async {
+        let stub = SearchLibraryStub()
+        stub.songPageCap = 500
+        stub.indexedSongs = (0..<250).map { DisplayableSong(id: "song-\($0)", title: "Instrumental \($0)").asSong() }
+        let index = LibraryIndexService()
+        await index.rebuildAndWait(using: stub)
+        let results = await index.searchInBackground(query: "instrumental", limit: .max)
+        #expect(results.songs.count == 250)
+        #expect(results.songs.map(\.id) == index.search(query: "instrumental", limit: .max).songs.map(\.id))
+        let cancelled = Task { await index.searchInBackground(query: "instrumental") }
+        cancelled.cancel()
+        #expect(await cancelled.value.songs.isEmpty)
+    }
 
     @Test("rapid query changes call the service once, with the final query")
     func rapidTypingCoalescesToFinalQuery() async throws {
@@ -274,6 +356,55 @@ struct SearchPaginationTests {
 @Suite("Persistent library search index")
 @MainActor
 struct LibrarySearchIndexTests {
+    @Test func unchangedLaunchRestoresSilentlyAndExplicitRebuildStillRefreshes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = UUID()
+        let library = SearchLibraryStub()
+        library.indexedSongs = [DisplayableSong(id: "saved", title: "Saved track").asSong()]
+        let first = LibraryIndexService(serverID: { server }, directory: directory)
+        await first.rebuildAndWait(using: library)
+
+        let nextLaunchLibrary = SearchLibraryStub()
+        nextLaunchLibrary.indexedSongs = [DisplayableSong(id: "new", title: "New track").asSong()]
+        let restored = LibraryIndexService(serverID: { server }, directory: directory)
+        // A relaunch must not briefly publish true even while restoring a large snapshot.
+        withObservationTracking { _ = restored.isIndexing } onChange: {
+            Issue.record("Restoring an existing index must not publish an indexing state")
+        }
+        restored.ensureIndexed(using: nextLaunchLibrary)
+        await restored.ensureIndexedAndWait(using: nextLaunchLibrary)
+        #expect(nextLaunchLibrary.songOffsets.isEmpty)
+        #expect(restored.search(query: "saved").songs.map(\.id) == ["saved"])
+        #expect(restored.lastIndexedAt == first.lastIndexedAt)
+        #expect(!restored.isIndexing)
+
+        // Use another instance so the no-change observation above only covers the launch path.
+        let changed = LibraryIndexService(serverID: { server }, directory: directory)
+        await changed.rebuildAndWait(using: nextLaunchLibrary)
+        #expect(!nextLaunchLibrary.songOffsets.isEmpty)
+        #expect(changed.search(query: "new").songs.map(\.id) == ["new"])
+    }
+
+    @Test func missingOrCorruptIndexStillBuildsAndConcurrentEnsuresShareWork() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for corrupt in [false, true] {
+            let server = UUID()
+            if corrupt { try Data("invalid snapshot".utf8).write(to: directory.appendingPathComponent("\(server).json")) }
+            let library = SearchLibraryStub()
+            library.indexedSongs = [DisplayableSong(id: "new", title: "New track").asSong()]
+            let index = LibraryIndexService(serverID: { server }, directory: directory)
+            index.ensureIndexed(using: library)
+            index.ensureIndexed(using: library)
+            await index.ensureIndexedAndWait(using: library)
+            #expect(library.songOffsets == [0, 1])
+            #expect(index.search(query: "new").songs.map(\.id) == ["new"])
+            #expect(!index.isIndexing)
+        }
+    }
+
     @Test func indexesAllShortPagesAndSearchDoesNotContactServer() async {
         let library = SearchLibraryStub()
         library.indexedSongs = (0..<65).map { DisplayableSong(id: "song-\($0)", title: "Instrumental \($0)").asSong() }
@@ -285,6 +416,48 @@ struct LibrarySearchIndexTests {
         #expect(vm.songs.count == 65)
         #expect(library.searchCalls.isEmpty)
         #expect(!vm.canLoadMore(.songs))
+    }
+
+    @Test func failedIndexFallsBackToServerAndCanBeRetried() async {
+        let library = SearchLibraryStub()
+        library.indexFailure = URLError(.cannotConnectToHost)
+        let index = LibraryIndexService()
+        let built = await index.rebuildAndWait(using: library)
+        #expect(!built)
+        #expect(index.lastError != nil)
+
+        let vm = SearchViewModel(libraryService: library, libraryIndex: index)
+        await vm.search(query: "available")
+        #expect(library.searchCalls == ["available"])
+        #expect(vm.searchError == nil)
+
+        await vm.search(query: "offline", serverReachable: false)
+        #expect(vm.searchError?.id == UserFacingError.searchIndexUnavailable.id)
+
+        library.indexFailure = nil
+        library.indexedSongs = [DisplayableSong(id: "recovered", title: "Recovered").asSong()]
+        await vm.retryLocalIndexIfNeeded()
+        await vm.search(query: "recovered")
+        #expect(vm.songs.map(\.id) == ["recovered"])
+        #expect(library.searchCalls == ["available"])
+    }
+
+    @Test func largeIndexPagesResultsWithoutServerRequests() async {
+        let library = SearchLibraryStub()
+        library.songPageCap = 500
+        library.indexedSongs = (0..<180).map { DisplayableSong(id: "song-\($0)", title: "Instrumental \($0)").asSong() }
+        let index = LibraryIndexService()
+        await index.rebuildAndWait(using: library)
+        let vm = SearchViewModel(libraryService: library, libraryIndex: index)
+        await vm.search(query: "instrumental")
+        #expect(vm.songs.count == 80)
+        #expect(vm.canLoadMore(.songs))
+        await vm.loadMore(category: .songs)
+        #expect(vm.songs.count == 160)
+        await vm.loadMore(category: .songs)
+        #expect(vm.songs.count == 180)
+        #expect(!vm.canLoadMore(.songs))
+        #expect(library.searchCalls.isEmpty)
     }
 
     @Test func persistedIndexLoadsOfflineAndIsIsolatedByServer() async throws {

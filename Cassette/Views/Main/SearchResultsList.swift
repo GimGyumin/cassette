@@ -14,27 +14,16 @@ struct SearchResultsList: View {
     @State private var songToAdd: DisplayableSong?
 
     private var items: [SearchResultItem] {
-        var result: [SearchResultItem] = []
         let filter: SearchCategory = showsSuggestions && !downloadsOnly ? .all : category
-        if filter == .all || filter == .songs { result += viewModel.songs.map(SearchResultItem.song) }
-        if filter == .all || filter == .artists { result += viewModel.artists.map(SearchResultItem.artist) }
-        if filter == .all || filter == .albums { result += viewModel.albums.map(SearchResultItem.album) }
-        if filter == .all || filter == .playlists { result += viewModel.localHits.playlists.map(SearchResultItem.playlist) }
-        // Mix result kinds by title relevance; preserve server order for equal scores.
-        if filter == .all {
-            result = result.enumerated().sorted {
-                let left = relevance($0.element.title)
-                let right = relevance($1.element.title)
-                return left == right ? $0.offset < $1.offset : left > right
-            }.map(\.element)
+        guard filter != .all else { return viewModel.rankedItems }
+        return viewModel.rankedItems.filter {
+            switch $0 {
+            case .song: filter == .songs
+            case .artist: filter == .artists
+            case .album: filter == .albums
+            case .playlist: filter == .playlists
+            }
         }
-        return result
-    }
-
-    private func relevance(_ title: String) -> Int {
-        let name = title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: AppUILanguage.locale)
-        let term = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: AppUILanguage.locale)
-        return name == term ? 3 : name.hasPrefix(term) ? 2 : name.contains(term) ? 1 : 0
     }
 
     var body: some View {

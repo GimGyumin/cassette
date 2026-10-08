@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import AudioStreaming
+import OSLog
 
 /// Owns the native queue, observations, buffering and transport. PlayerService owns queue metadata.
 /// AVFoundation callbacks emit immutable events; only PlayerService decides a track/quality transition.
@@ -29,6 +30,8 @@ nonisolated final class AVPlayerPlaybackEngine: PlaybackEngine, @unchecked Senda
     private var handler: (@Sendable (Event) -> Void)?
     private var storedVolume: Float = 1
     private var intendsToPlay = false
+    private var seekSequence: UInt64 = 0
+    private var forwardBuffer: Double = 0
 
     var eventHandler: (@Sendable (Event) -> Void)? {
         get { lock.withLock { handler } }
@@ -58,7 +61,15 @@ nonisolated final class AVPlayerPlaybackEngine: PlaybackEngine, @unchecked Senda
     var observedItemID: ObjectIdentifier? { lock.withLock { observedID } }
     var timeControlStatus: AVPlayer.TimeControlStatus { lock.withLock { player?.timeControlStatus ?? .paused } }
     var bufferedDuration: Double {
-        lock.withLock { player?.currentItem?.loadedTimeRanges.map { $0.timeRangeValue.duration.seconds }.max() ?? 0 }
+        lock.withLock {
+            guard let item = player?.currentItem else { return 0 }
+            return PlaybackBufferPolicy.bufferedAhead(
+                position: item.currentTime().seconds,
+                ranges: item.loadedTimeRanges.map {
+                    ($0.timeRangeValue.start.seconds, $0.timeRangeValue.duration.seconds)
+                }
+            )
+        }
     }
     var isLikelyToKeepUp: Bool { lock.withLock { player?.currentItem?.isPlaybackLikelyToKeepUp ?? false } }
 
@@ -87,17 +98,8 @@ nonisolated final class AVPlayerPlaybackEngine: PlaybackEngine, @unchecked Senda
             timeObservation = player.observe(\.timeControlStatus, options: [.new]) { player, _ in
                 emit?(.timeControl(generation, player.timeControlStatus.rawValue))
             }
-            if position > 1 {
-                seekDeadline = Date().addingTimeInterval(12)
-                player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self, weak player] _ in
-                    guard let self, let player else { return }
-                    self.lock.withLock {
-                        // A late seek completion must never restart an outgoing player after stop/skip.
-                        guard self.generation == generation, self.player === player else { return }
-                        // Honor play/pause input received while the restore seek was still pending.
-                        if self.intendsToPlay { player.play() } else { player.pause() }
-                    }
-                }
+            if position > 0 {
+                seek(to: position)
             } else if !paused { player.play() }
         }
     }
@@ -134,21 +136,68 @@ nonisolated final class AVPlayerPlaybackEngine: PlaybackEngine, @unchecked Senda
             return true
         }
     }
-    func setForwardBuffer(_ seconds: Double) { lock.withLock { player?.currentItem?.preferredForwardBufferDuration = seconds } }
+
+    /// Manual next uses the already buffered item, just like a natural handover.
+    /// A stale URL must not consume a different queued track.
+    func advanceToPreparedNext(expectedURL: URL) -> Bool {
+        lock.withLock {
+            guard let player, let item = queuedItem, queuedURL == expectedURL,
+                  item.status != .failed else { return false }
+            if player.currentItem !== item {
+                guard player.items().contains(where: { $0 === item }) else { return false }
+                player.advanceToNextItem()
+            }
+            guard player.currentItem === item else { return false }
+            seekSequence &+= 1
+            seekDeadline = .distantPast
+            intendsToPlay = true
+            player.play()
+            return true
+        }
+    }
+    func setForwardBuffer(_ seconds: Double) {
+        lock.withLock {
+            forwardBuffer = seconds
+            player?.currentItem?.preferredForwardBufferDuration = seconds
+        }
+    }
     func pause() { lock.withLock { intendsToPlay = false; stopWatchdogLocked(); player?.pause() } }
     func resume() { lock.withLock { intendsToPlay = true; player?.play() } }
     func seek(to time: Double) {
         lock.withLock {
+            guard time.isFinite, let player, let item = player.currentItem else { return }
+            seekSequence &+= 1
+            let sequence = seekSequence
+            let generation = generation
             seekDeadline = Date().addingTimeInterval(12)
+            item.cancelPendingSeeks()
+            item.preferredForwardBufferDuration = 0
             let local = currentURL?.isFileURL == true
             let tolerance = local ? CMTime.zero : CMTime(seconds: 1, preferredTimescale: 600)
-            player?.seek(to: CMTime(seconds: max(0, time), preferredTimescale: 600), toleranceBefore: tolerance, toleranceAfter: tolerance)
+            player.seek(to: CMTime(seconds: max(0, time), preferredTimescale: 600), toleranceBefore: tolerance, toleranceAfter: tolerance) { [weak self, weak player, weak item] finished in
+                // An unsupported range seek can finish with `false`. The current
+                // request still owns transport intent and must release startup;
+                // sequence/item checks below exclude cancelled, superseded seeks.
+                guard let self, let player, let item else { return }
+                self.lock.withLock {
+                    guard self.generation == generation, self.seekSequence == sequence,
+                          self.player === player, player.currentItem === item else { return }
+                    if !finished {
+                        Logger.player.warning("[SEEK] AVPlayer could not complete the requested seek; restoring transport intent")
+                    }
+                    self.seekDeadline = .distantPast
+                    item.preferredForwardBufferDuration = self.forwardBuffer
+                    if self.intendsToPlay { player.play() } else { player.pause() }
+                }
+            }
         }
     }
     func stop() { lock.withLock { stopLocked() } }
     private func stopLocked() {
         stopWatchdogLocked()
         generation &+= 1
+        seekSequence &+= 1
+        forwardBuffer = 0
         intendsToPlay = false
         currentObservation?.invalidate(); currentObservation = nil
         timeObservation?.invalidate(); timeObservation = nil

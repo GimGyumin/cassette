@@ -21,8 +21,10 @@ final class PreparationArtworkStore {
            FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(previousAsset.id).jpg").path) { return previousAsset }
         guard let directory = SharedStorage.coverArtCacheDirectory,
               let image = await cache.load(coverArtId: coverID, tier: .thumb, allowNetwork: false) else { return nil }
+        let background = ColorCache.palette(for: coverID)?.packedBackground
         let result = await Task.detached(priority: .utility) {
-            (image.resized(maxDimension: 128).jpgData(quality: 0.85), DominantColorExtractor.packedAverageColor(from: image))
+            // Progress updates reuse the prepared palette instead of analyzing the image again.
+            (image.resized(maxDimension: 128).jpgData(quality: 0.85), background)
         }.value
         guard let bytes = result.0, !Task.isCancelled else { return nil }
         let id = "preparation-\(UUID().uuidString)"

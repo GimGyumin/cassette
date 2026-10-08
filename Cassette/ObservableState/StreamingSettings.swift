@@ -26,10 +26,24 @@ final class StreamingSettings {
     /// Session-only, never persisted: the quality ceiling the app fell back to after the engine
     /// re-buffered on a link that could not sustain the Automatic pick. Cleared when a fresh
     /// measurement shows a fast link again, so a new launch always starts optimistic.
-    var adaptiveCeiling: CacheFormat?
-    /// True when `adaptiveCeiling` was learned from *proven* failure (an AVPlayer stream that stopped
-    /// producing audio), not from a mere underrun: the ceiling may then also lower an explicit quality
-    /// choice, because the alternative is silence. It is never persisted and never raises quality.
+    var adaptiveCeiling: CacheFormat? {
+        didSet { adaptiveCeilingLearnedAt = adaptiveCeiling == nil ? nil : Date() }
+    }
+    private var adaptiveCeilingLearnedAt: Date?
+    private var adaptiveNetworkWasLimited: Bool?
+
+    /// A stall on another connection must not pin a recovered connection to AAC indefinitely.
+    func currentAdaptiveCeiling(isLimited: Bool, now: Date = Date()) -> CacheFormat? {
+        defer { adaptiveNetworkWasLimited = isLimited }
+        if let previous = adaptiveNetworkWasLimited, previous != isLimited {
+            adaptiveCeiling = nil
+        }
+        if let learned = adaptiveCeilingLearnedAt, now.timeIntervalSince(learned) >= 120 {
+            adaptiveCeiling = nil
+        }
+        return adaptiveCeiling
+    }
+    /// Compatibility with older recovery callers; explicit quality is no longer lowered by this flag.
     var adaptiveCeilingAppliesToExplicitChoice = false
 
     var wifiFormat: CacheFormat {
@@ -39,6 +53,7 @@ final class StreamingSettings {
         }
         set {
             withMutation(keyPath: \.wifiFormat) { _wifiFormat = newValue }
+            adaptiveCeiling = nil
             UserDefaults.standard.set(newValue.rawValue, forKey: Self.wifiKey)
         }
     }
@@ -50,6 +65,7 @@ final class StreamingSettings {
         }
         set {
             withMutation(keyPath: \.cellularFormat) { _cellularFormat = newValue }
+            adaptiveCeiling = nil
             UserDefaults.standard.set(newValue.rawValue, forKey: Self.cellularKey)
         }
     }
@@ -82,7 +98,7 @@ final class StreamingSettings {
         let wifiRaw = UserDefaults.standard.string(forKey: Self.wifiKey)
         let cellRaw = UserDefaults.standard.string(forKey: Self.cellularKey)
         _wifiFormat = CacheFormat(rawValue: wifiRaw ?? "") ?? .matchStream
-        _cellularFormat = CacheFormat(rawValue: cellRaw ?? "") ?? .aac128
+        _cellularFormat = CacheFormat(rawValue: cellRaw ?? "") ?? .matchStream
         let downloadRaw = UserDefaults.standard.string(forKey: Self.downloadKey)
         _downloadFormat = CacheFormat(rawValue: downloadRaw ?? "") ?? .matchStream
     }
@@ -100,7 +116,7 @@ final class StreamingSettings {
         let wifiRaw = UserDefaults.standard.string(forKey: Self.wifiKey)
         let cellRaw = UserDefaults.standard.string(forKey: Self.cellularKey)
         _wifiFormat = CacheFormat(rawValue: wifiRaw ?? "") ?? .matchStream
-        _cellularFormat = CacheFormat(rawValue: cellRaw ?? "") ?? .aac128
+        _cellularFormat = CacheFormat(rawValue: cellRaw ?? "") ?? .matchStream
         let downloadRaw = UserDefaults.standard.string(forKey: Self.downloadKey)
         _downloadFormat = CacheFormat(rawValue: downloadRaw ?? "") ?? .matchStream
     }

@@ -14,6 +14,23 @@ extension TranslationProvider: SettingsChoiceItem {
     var choiceTitle: String { displayName }
 }
 
+extension TranslationStrategyPreference: SettingsChoiceItem {
+    var choiceTitle: String { displayName }
+
+    var choiceSubtitle: String? {
+        switch self {
+        case .automatic:
+            return String(localized: "Prefer high quality and fall back automatically.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .highFidelity:
+            return String(localized: "Prefer Apple Intelligence when supported.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .lowLatency:
+            return String(localized: "Prioritize faster on-device translation.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .standard:
+            return String(localized: "Use the default Apple Translation strategy.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        }
+    }
+}
+
 /// Lyrics, translation, and the translation cache — one card per concern,
 /// with translation details disclosed only while translation is on.
 /// Standalone screen used by the in-app settings list (and macOS sheets).
@@ -86,6 +103,16 @@ struct LyricsSettingsSections: View {
                         items: TranslationProvider.allCases,
                         selection: $settings.provider
                     )
+                }
+
+                if settings.provider == .apple {
+                    SettingsNavigationRow("Translation Strategy", value: settings.strategyPreference.displayName) {
+                        SettingsChoiceList(
+                            navigationTitle: "Translation Strategy",
+                            items: TranslationStrategyPreference.allCases,
+                            selection: $settings.strategyPreference
+                        )
+                    }
                 }
 
                 SettingsNavigationRow("Translation Language", value: targetLanguageName) {

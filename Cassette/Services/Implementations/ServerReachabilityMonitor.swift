@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 import Foundation
+import Observation
 import OSLog
 
 /// Tracks whether the **active server** answers — a different question from `ServerState.isOnline`.
@@ -17,9 +18,8 @@ import OSLog
 /// 1. declares the server unreachable the instant the device has no route at all,
 /// 2. confirms the outage with one bounded ping (the shared client builds with `retryPolicy: .none`)
 ///    before any content is hidden,
-/// 3. re-pings every `recoveryInterval` while unreachable, so those tabs come back within seconds of
-///    the server answering again,
-/// 4. keeps one cheap check every `healthyInterval` while reachable, so a server that dies
+/// 3. retries outages with bounded backoff, and probes immediately when the network returns,
+/// 4. keeps one check every `healthyInterval` while reachable, so a server that dies
 ///    mid-session is noticed without waiting for the next page load to fail.
 ///
 /// The probe and the recovery hook are injected (`serverService.testConnection()` and
@@ -33,22 +33,37 @@ final class ServerReachabilityMonitor {
     private let healthyInterval: TimeInterval
     private let recoveryInterval: TimeInterval
 
-    private var loop: Task<Void, Never>?
-    private var isProbing = false
-    /// Set while the device itself has no route, so the first tick after connectivity returns probes
-    /// immediately instead of waiting out `healthyInterval`.
-    private var wasOffline = false
-    private var lastProbeAt = Date.distantPast
+    private var scheduledCheck: Task<Void, Never>?
+    private var activeProbe: Task<Void, Never>?
+    private var isStarted = false
+    private var generation = 0
+    private var observationGeneration = 0
+    private var consecutiveFailures = 0
+    private struct Inputs: Equatable {
+        let online: Bool
+        let serverID: UUID?
+        let baseURL: String?
+        let username: String?
+    }
+    private var observedInputs: Inputs?
+    private var inputs: Inputs {
+        Inputs(online: serverState.isOnline, serverID: serverState.activeServer?.id,
+               baseURL: serverState.activeServer?.baseURL, username: serverState.activeServer?.username)
+    }
 
     /// False while the app is in the background. iOS suspends the process anyway, and the flag keeps
     /// a resume from firing a burst of probes.
-    var isAppActive = true
+    var isAppActive = true {
+        didSet {
+            if oldValue != isAppActive, isStarted { reconcileInputs(force: true) }
+        }
+    }
 
     init(
         serverState: ServerState,
         probe: @escaping () async throws -> Void,
         onRecovered: (() async -> Void)? = nil,
-        healthyInterval: TimeInterval = 20,
+        healthyInterval: TimeInterval = 60,
         recoveryInterval: TimeInterval = 3
     ) {
         self.serverState = serverState
@@ -59,70 +74,123 @@ final class ServerReachabilityMonitor {
     }
 
     func start() {
-        guard loop == nil else { return }
-        loop = Task { [weak self] in
-            await self?.run()
-        }
+        guard !isStarted else { return }
+        isStarted = true
+        observationGeneration += 1
+        observeInputs()
+        reconcileInputs(force: true)
         Logger.network.debug("ServerReachabilityMonitor started.")
     }
 
     func stop() {
-        loop?.cancel()
-        loop = nil
+        isStarted = false
+        observationGeneration += 1
+        cancelChecks()
     }
 
     /// One probe right now: app became active, the network path changed, or the user tapped
     /// "Try Again" on the offline state.
     func checkNow() async {
+        guard isAppActive else { return }
+        guard serverState.activeServer != nil else {
+            setReachable(true, reason: "no active server")
+            return
+        }
         guard serverState.isOnline else {
             setReachable(false, reason: "device has no network route")
             return
         }
-        await probeOnce()
+        scheduledCheck?.cancel()
+        scheduledCheck = nil
+        if let activeProbe {
+            await activeProbe.value
+            return
+        }
+        let generation = self.generation
+        let expectedInputs = inputs
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.probeOnce(expectedInputs: expectedInputs, generation: generation)
+        }
+        activeProbe = task
+        await task.value
+        guard generation == self.generation else { return }
+        activeProbe = nil
+        let delay = serverState.isServerReachable ? healthyInterval : Self.retryDelay(
+            failures: consecutiveFailures, initial: recoveryInterval
+        )
+        scheduleCheck(after: delay)
     }
 
     // MARK: - Private
 
-    private func run() async {
-        // A 500 ms tick so losing the device's route is reflected on the spot — that is the case
-        // users notice first — while the ping itself stays on its own (much slower) interval.
-        while !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            guard isAppActive else { continue }
-
-            guard serverState.isOnline else {
-                wasOffline = true
-                setReachable(false, reason: "device has no network route")
-                continue
+    private func observeInputs() {
+        let observation = observationGeneration
+        withObservationTracking {
+            _ = inputs
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.isStarted, observation == self.observationGeneration else { return }
+                self.observeInputs()
+                self.reconcileInputs()
             }
-
-            if wasOffline {
-                wasOffline = false
-                lastProbeAt = .distantPast
-            }
-
-            let interval = serverState.isServerReachable ? healthyInterval : recoveryInterval
-            guard Date().timeIntervalSince(lastProbeAt) >= interval else { continue }
-            lastProbeAt = Date()
-            await probeOnce()
         }
     }
 
-    private func probeOnce() async {
-        guard !isProbing else { return }
-        guard serverState.activeServer != nil else {
-            // No account yet: onboarding owns the UI, and there is nothing to reach.
+    private func cancelChecks() {
+        generation += 1
+        scheduledCheck?.cancel()
+        scheduledCheck = nil
+        activeProbe?.cancel()
+        activeProbe = nil
+    }
+
+    private func reconcileInputs(force: Bool = false) {
+        let current = inputs
+        guard force || current != observedInputs else { return }
+        observedInputs = current
+        cancelChecks()
+        consecutiveFailures = 0
+        guard current.serverID != nil else {
             setReachable(true, reason: "no active server")
             return
         }
-        isProbing = true
-        defer { isProbing = false }
+        guard current.online else {
+            setReachable(false, reason: "device has no network route")
+            return
+        }
+        scheduleCheck(after: 0)
+    }
+
+    private func scheduleCheck(after delay: TimeInterval) {
+        guard isStarted, isAppActive, serverState.isOnline, serverState.activeServer != nil else { return }
+        scheduledCheck?.cancel()
+        scheduledCheck = Task { [weak self] in
+            if delay > 0 {
+                do { try await Task.sleep(for: .seconds(delay), tolerance: .seconds(min(1, delay / 10))) }
+                catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            self?.scheduledCheck = nil
+            await self?.checkNow()
+        }
+    }
+
+    nonisolated static func retryDelay(failures: Int, initial: TimeInterval) -> TimeInterval {
+        min(30, max(0.01, initial) * pow(2, Double(max(0, min(failures - 1, 10)))))
+    }
+
+    private func probeOnce(expectedInputs: Inputs, generation: Int) async {
+        guard generation == self.generation, inputs == expectedInputs, isAppActive, !Task.isCancelled else { return }
 
         do {
             try await probe()
+            guard generation == self.generation, inputs == expectedInputs, isAppActive, !Task.isCancelled else { return }
+            consecutiveFailures = 0
             setReachable(true, reason: "ping succeeded")
         } catch {
+            guard generation == self.generation, inputs == expectedInputs, isAppActive, !Task.isCancelled else { return }
+            consecutiveFailures += 1
             setReachable(false, reason: "ping failed: \(error.localizedDescription)")
         }
     }
@@ -130,7 +198,6 @@ final class ServerReachabilityMonitor {
     private func setReachable(_ reachable: Bool, reason: String) {
         guard serverState.isServerReachable != reachable else { return }
         serverState.isServerReachable = reachable
-        lastProbeAt = Date()
         if reachable {
             Logger.network.info(
                 "Active server answered again (\(reason, privacy: .public)) — server-backed tabs restored"

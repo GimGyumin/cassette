@@ -13,6 +13,7 @@ nonisolated enum UserFacingError: LocalizedError, Identifiable, Sendable {
     case downloadFailed
     case playbackFailed
     case syncFailed
+    case searchIndexUnavailable
     case unexpected
 
     var id: String {
@@ -24,6 +25,7 @@ nonisolated enum UserFacingError: LocalizedError, Identifiable, Sendable {
         case .downloadFailed: "downloadFailed"
         case .playbackFailed: "playbackFailed"
         case .syncFailed: "syncFailed"
+        case .searchIndexUnavailable: "searchIndexUnavailable"
         case .unexpected: "unexpected"
         }
     }
@@ -37,6 +39,9 @@ nonisolated enum UserFacingError: LocalizedError, Identifiable, Sendable {
         case .downloadFailed: "Download failed."
         case .playbackFailed: "Couldn't play this track."
         case .syncFailed: "Couldn't sync with your server."
+        case .searchIndexUnavailable:
+            String(localized: "Couldn't prepare your music search.",
+                   bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         case .unexpected: "Something went wrong."
         }
     }
@@ -50,6 +55,9 @@ nonisolated enum UserFacingError: LocalizedError, Identifiable, Sendable {
         case .downloadFailed: "Check your connection and storage, then try again."
         case .playbackFailed: "Try again or skip to another track."
         case .syncFailed: "Your changes are saved and will sync when your server is reachable."
+        case .searchIndexUnavailable:
+            String(localized: "Reconnect or try rebuilding the search index.",
+                   bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         case .unexpected: nil
         }
     }

@@ -61,7 +61,7 @@ struct FreshReleasesCard: View {
             } else if !isListenBrainzConnected {
                 emptyStatePlaceholder(
                     icon: "waveform.circle",
-                    message: "Connect ListenBrainz in Settings to discover fresh releases based on your listening history."
+                    message: String(localized: "Open ListenBrainz in Account to discover fresh releases based on your listening history.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
                 )
             } else {
                 emptyStatePlaceholder(

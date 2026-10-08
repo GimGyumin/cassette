@@ -61,6 +61,10 @@ struct SettingsView: View {
                 PlaybackSettingsView()
             }
 
+            SettingsNavigationRow("Current Playback") {
+                CurrentPlaybackSettingsView()
+            }
+
             if let streamingSettings = container?.streamingSettings {
                 SettingsNavigationRow("Audio Quality") {
                     AudioQualitySettingsView(settings: streamingSettings)

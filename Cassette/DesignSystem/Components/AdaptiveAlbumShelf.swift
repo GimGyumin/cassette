@@ -34,7 +34,7 @@ struct AdaptiveAlbumShelf: View {
                 .font(.cassetteSectionTitle)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: CassetteSpacing.m) {
+                LazyHStack(spacing: CassetteSpacing.m) {
                     ForEach(albums) { album in
                         NavigationLink(value: destination(album)) {
                             albumCard(album)

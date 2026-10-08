@@ -17,7 +17,7 @@ struct AudioQualitySettingsView: View {
     @AppStorage("cassette.download.automaticOverCellular") private var automaticDownloadsOverCellular = false
 
     private static let qualityFooter: LocalizedStringKey =
-        "Lossless uses much more data. Availability depends on the original files on your server. On cellular, Automatic measures the connection and lowers the quality when the network cannot keep up."
+        "Automatic prefers the original on a capable connection. Lossless plays the original file when available; Jellyfin transcoding and HLS use lossy audio."
 
     var body: some View {
         Form {
@@ -51,7 +51,7 @@ struct AudioQualitySettingsView: View {
     private var downloadsSection: some View {
         Section {
             SettingsNavigationRow("Download Quality", value: settings.downloadFormat.title) {
-                AudioQualitySelectionView(title: "Download Quality", selection: $settings.downloadFormat)
+                AudioQualitySelectionView(title: "Download Quality", selection: $settings.downloadFormat, isStreaming: false)
             }
 
             Toggle(isOn: $automaticDownloadsEnabled) {
@@ -75,13 +75,20 @@ struct AudioQualitySettingsView: View {
 struct AudioQualitySelectionView: View {
     let title: LocalizedStringKey
     @Binding var selection: CacheFormat
+    var isStreaming = true
 
     var body: some View {
         SettingsChoiceList(
             navigationTitle: title,
             footer: "Lossless uses much more data. Availability depends on the original files on your server.",
             items: CacheFormat.selectableCases,
-            selection: $selection
+            selection: $selection,
+            subtitle: { format in
+                if isStreaming, format == .matchStream {
+                    return String(localized: "Adapts to your connection and prefers original quality", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                }
+                return format.subtitle
+            }
         )
     }
 }

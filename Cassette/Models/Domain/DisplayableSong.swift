@@ -12,6 +12,34 @@ import SwiftSonic
 /// PlayerService, SongRow, and all detail ViewModels work exclusively with this type —
 /// SwiftSonic types are DTOs consumed at the API boundary only.
 nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
+    /// Large API lists are value types; prepare them off the UI executor and publish once.
+    /// Queue metadata stays complete, while audio preparation remains limited to the next item.
+    static func prepare(
+        _ entries: [Song],
+        downloadedIDs: Set<String>,
+        sortedBy areInIncreasingOrder: (@Sendable (DisplayableSong, DisplayableSong) -> Bool)? = nil
+    ) async throws -> [DisplayableSong] {
+        try Task.checkCancellation()
+        let worker = Task.detached(priority: .userInitiated) {
+            var result: [DisplayableSong] = []
+            result.reserveCapacity(entries.count)
+            for (index, song) in entries.enumerated() {
+                if index.isMultiple(of: 256) { try Task.checkCancellation() }
+                result.append(DisplayableSong(from: song, isDownloaded: downloadedIDs.contains(song.id)))
+            }
+            if let areInIncreasingOrder { result.sort(by: areInIncreasingOrder) }
+            try Task.checkCancellation()
+            return result
+        }
+        return try await withTaskCancellationHandler {
+            let result = try await worker.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
     let id: String
     let title: String
     let artist: String?
@@ -33,6 +61,9 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
     let channelCount: Int?
     /// OpenSubsonic comment — used to detect Dolby Atmos tags when channelCount is 2 (JOC).
     let comment: String?
+    /// OpenSubsonic content advisory (`explicit`, `notExplicit`, `edited`) or a
+    /// server-provided display value such as `E` / `19`.
+    let explicitStatus: String?
     let replayGainTrackGain: Double?
     let replayGainTrackPeak: Double?
     let replayGainAlbumGain: Double?
@@ -103,6 +134,7 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
         samplingRate: Int? = nil,
         channelCount: Int? = nil,
         comment: String? = nil,
+        explicitStatus: String? = nil,
         replayGainTrackGain: Double? = nil,
         replayGainTrackPeak: Double? = nil,
         replayGainAlbumGain: Double? = nil,
@@ -133,6 +165,7 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
         self.samplingRate = samplingRate
         self.channelCount = channelCount
         self.comment = comment
+        self.explicitStatus = explicitStatus
         self.replayGainTrackGain = replayGainTrackGain
         self.replayGainTrackPeak = replayGainTrackPeak
         self.replayGainAlbumGain = replayGainAlbumGain
@@ -167,6 +200,7 @@ extension DisplayableSong {
         self.samplingRate = song.samplingRate
         self.channelCount = song.channelCount
         self.comment = song.comment
+        self.explicitStatus = song.explicitStatus
         self.replayGainTrackGain = song.replayGain?.trackGain
         self.replayGainTrackPeak = song.replayGain?.trackPeak
         self.replayGainAlbumGain = song.replayGain?.albumGain
@@ -179,7 +213,8 @@ extension DisplayableSong {
         self.movementLabel = song.movements?.first?.displayLabel
     }
 
-    @MainActor
+    /// Read on the owning ModelContext's executor; only the value snapshot crosses actors.
+    nonisolated
     init(from track: DownloadedTrack) {
         self.id = track.songId
         self.title = track.title
@@ -200,6 +235,7 @@ extension DisplayableSong {
         self.samplingRate = track.samplingRate
         self.channelCount = track.channelCount
         self.comment = track.comment
+        self.explicitStatus = track.explicitStatus
         self.replayGainTrackGain = track.replayGainTrackGain
         self.replayGainTrackPeak = track.replayGainTrackPeak
         self.replayGainAlbumGain = track.replayGainAlbumGain
@@ -255,8 +291,26 @@ extension DisplayableSong {
             bitDepth: bitDepth,
             samplingRate: samplingRate,
             channelCount: channelCount,
+            explicitStatus: explicitStatus,
             works: workName.map { [Work(name: $0)] },
             movements: movementLabel.map { [Movement(name: $0)] }
         )
+    }
+
+    /// Apple Music presents explicit content as `19` in Korean and `E` in other locales.
+    /// Literal server values are preserved so a server that already supplies either badge wins.
+    func contentAdvisoryLabel(locale: Locale = .current) -> String? {
+        guard let raw = explicitStatus?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return nil }
+        let normalized = raw.lowercased().replacingOccurrences(of: " ", with: "")
+        if normalized == "notexplicit" || normalized == "edited" || normalized == "clean" {
+            return nil
+        }
+        if normalized.contains("19") { return "19" }
+        if normalized == "e" { return "E" }
+        if normalized == "explicit" || normalized == "adult" {
+            return locale.language.languageCode?.identifier == "ko" ? "19" : "E"
+        }
+        return nil
     }
 }

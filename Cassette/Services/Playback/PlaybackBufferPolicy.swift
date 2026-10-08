@@ -6,6 +6,17 @@ nonisolated enum PlaybackBufferPolicy {
     static func forwardBuffer(isLocal: Bool, isLimited: Bool) -> TimeInterval {
         isLocal ? 0 : (isLimited ? 20 : 10)
     }
+
+    /// Only the range containing the playhead cushions playback after a seek.
+    static func bufferedAhead(position: Double, ranges: [(start: Double, duration: Double)]) -> Double {
+        guard position.isFinite else { return 0 }
+        return ranges.reduce(0) { result, range in
+            let end = range.start + range.duration
+            guard range.start.isFinite, end.isFinite,
+                  range.start <= position, position < end else { return result }
+            return max(result, end - position)
+        }
+    }
 }
 
 /// A persistent wait emits only one KVO event. Sample the media clock using monotonic time

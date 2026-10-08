@@ -22,9 +22,8 @@ extension PlayerService {
         try await play(tracks: tracks, startIndex: startIndex, preservePlayingState: false)
     }
 
-    /// Starts queue playback at `startIndex`. When `preservePlayingState` is true
-    /// (track-to-track transitions such as skip/auto-next), the play/pause control
-    /// keeps its playing appearance instead of briefly flipping to loading.
+    /// Starts queue playback at `startIndex`. Track-to-track transitions reuse preparation
+    /// when possible. Transport state stays loading until the engine confirms playback.
     func play(
         tracks: [DisplayableSong],
         startIndex: Int,
@@ -58,6 +57,8 @@ extension PlayerService {
         tracks: [DisplayableSong], startIndex: Int, preservePlayingState: Bool
     ) async throws {
         try Task.checkCancellation()
+        playbackAcquisitionTask?.cancel()
+        playbackAcquisitionTask = nil
         let previousQueueCount = await MainActor.run { state.queue.count }
         try Task.checkCancellation()
         guard tracks.indices.contains(startIndex) else {
@@ -93,7 +94,7 @@ extension PlayerService {
            alreadyPlaying.trackId == tracks[startIndex].id,
            tracks.map(\.id) == currentQueueIds,
            alreadyPlaying.position > 2,
-           alreadyPlaying.playbackState == .playing || alreadyPlaying.playbackState == .loading {
+           alreadyPlaying.playbackState.hasPlaybackIntent {
             let caller = Thread.callStackSymbols.dropFirst().prefix(6).joined(separator: " ← ")
             Logger.player.warning(
                 "[PLAY] '\(tracks[startIndex].title, privacy: .public)' is already playing at \(alreadyPlaying.position, format: .fixed(precision: 1))s — ignoring the duplicate start request. Caller: \(caller, privacy: .public)"
@@ -101,6 +102,13 @@ extension PlayerService {
             return
         }
         try Task.checkCancellation()
+        if await advancePreparedSystemTrack(tracks: tracks, startIndex: startIndex) { return }
+        try Task.checkCancellation()
+        // The AudioStreaming fallback still needs an engine start for an explicit selection,
+        // but it can reuse the resolved URL/headers instead of negotiating the source again.
+        let preparedSource = gaplessBridge.epoch == playbackEpoch
+            && gaplessBridge.next?.id == tracks[startIndex].id
+            && tracks.map(\.id) == currentQueueIds ? gaplessBridge.source : nil
         stoppedAtEndOfQueue = false
         playbackEpoch &+= 1
         let epoch = playbackEpoch
@@ -141,7 +149,7 @@ extension PlayerService {
         self.transitionStartedAt = transitionStartedAt
         // Kept until audio actually starts, so the log can report the latency the listener perceives
         // (engine hand-over *plus* server transcode warm-up and AVPlayer buffering).
-        self.lastTransitionRequestedAt = transitionStartedAt
+        self.systemPlayback.transitionRequestedAt = transitionStartedAt
         // The listener picked another song: silence the outgoing one *now*, not after the network
         // resolve. A hand-over that kept the previous track audible until the new item started reads as
         // "the old song is still playing", which is worse than a short gap.
@@ -168,14 +176,24 @@ extension PlayerService {
             state.duration = song.duration
             state.position = 0
             state.isSeekable = song.duration > 0
-            if !preservePlayingState {
-                state.playbackState = .loading
-            }
+            state.playbackState = .loading
         }
 
         var source: MediaSource
         do {
-            source = try await mediaResolver.resolve(songId: song.id, serverId: serverId, song: song)
+            if preparedSource != nil,
+               let local = await downloadService.downloadedURL(forSongId: song.id, serverId: serverId) {
+                source = .downloaded(local)
+            } else if preparedSource != nil,
+                      let local = await cacheService.cachedURL(forSongId: song.id, serverId: serverId) {
+                source = .cached(local)
+            } else if let preparedSource,
+               !preparedSource.isLocal || FileManager.default.fileExists(atPath: preparedSource.url.path) {
+                source = preparedSource
+                Logger.player.debug("[PLAY] reusing prepared source for '\(song.id, privacy: .public)'")
+            } else {
+                source = try await mediaResolver.resolve(songId: song.id, serverId: serverId, song: song)
+            }
         } catch is CancellationError {
             throw CancellationError()
         } catch let e as CassetteError {
@@ -209,8 +227,7 @@ extension PlayerService {
         }
 
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
-        gaplessBridgeNext = nil
-        gaplessBridgeSource = nil
+        gaplessBridge.clearPreparedSource()
         Logger.player.info(
             "[TRANSITION-TIMING] resolve finished in \(Int(Date().timeIntervalSince(transitionStartedAt) * 1000), privacy: .public)ms for '\(song.title, privacy: .public)' (id=\(song.id, privacy: .public) queueIndex=\(startIndex, privacy: .public))"
         )
@@ -245,7 +262,8 @@ extension PlayerService {
         // learned from the previous track is remembered on `streamingSettings`, not here.
         underrunCountForCurrentTrack = 0
         didAdaptQualityForCurrentTrack = false
-        didRecoverFromStalledStream = false
+        systemPlayback.resetTrackRecovery()
+        progressStallMonitor = PlaybackStallMonitor()
         // The new track is still preparing; do not count artwork/lyrics loading time as listening.
         resetTrackAccumulator(isPlaying: false)
         #if os(iOS)
@@ -299,26 +317,7 @@ extension PlayerService {
             // its own duration. We already have a finite catalog duration and the engine
             // can queue an early seek request until parsing catches up.
             state.isSeekable = song.duration > 0
-            if !preservePlayingState {
-                state.playbackState = .loading
-            }
-        }
-        guard epoch == playbackEpoch, !Task.isCancelled else { return }
-
-        // Do not put artwork/lyrics network requests on the playback critical path. In a
-        // Siri cold launch (or a background auto-advance) iOS may defer those requests long
-        // enough for the audio intent to time out and report that Cassette cannot play.
-        // NowPlayingService performs its own bounded artwork load, while visible artwork and
-        // lyrics surfaces request their data independently.
-
-        let artworkURL = await resolveArtworkURL(for: song)
-        guard epoch == playbackEpoch, !Task.isCancelled else { return }
-        let artworkHeaders: [String: String]
-        do {
-            artworkHeaders = try await serverService.activeCredentials().customHeaders
-        } catch {
-            Logger.player.warning("[CREDENTIALS] activeCredentials failed, using empty artwork headers: \(error, privacy: .public)")
-            artworkHeaders = [:]
+            state.playbackState = .loading
         }
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
 
@@ -336,6 +335,129 @@ extension PlayerService {
             }
         }
 
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        let useSystemPlayer = shouldUseSystemPlayer(for: song, source: source)
+        Logger.player.info(
+            "[TRANSITION] advancing to '\(song.title, privacy: .public)' (id=\(song.id, privacy: .public)) — engine=\(useSystemPlayer ? "AVPlayer/Spatial" : "AudioStreaming", privacy: .public)"
+        )
+
+        endOfTrackStallStartedAt = nil
+        endOfTrackStallProgress = -1
+        lastObservedEngineProgress = 0
+        seekState = .idle
+        liveStreamStallTask?.cancel()
+        liveStreamStallTask = nil
+        currentSource = source
+        pendingRestoreInfo = nil
+
+        restorePauseTask?.cancel()
+        restorePauseTask = nil
+        if isMutedForRestore {
+            setEngineVolume(restoredVolume)
+            isMutedForRestore = false
+        }
+
+        #if os(iOS)
+        configureAudioSessionIfNeeded(preferMultichannel: useSystemPlayer)
+        #endif
+
+        let fadingInAllowed: Bool
+        #if os(iOS)
+        fadingInAllowed = shouldFadeIn && !useSystemPlayer && !PlayerService.isWirelessSystemRouteActive()
+        #else
+        fadingInAllowed = shouldFadeIn && !useSystemPlayer
+        #endif
+
+        let duration = song.duration
+        resolvedISRCForCurrentTrack = song.isrc
+        resolvedISRCSongId = song.id
+
+        let isTranscoding = AudioQualityClassifier.isLossyTranscodeStream(source)
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        // Publish the incoming track *before* the engine is started: an engine that begins
+        // playing immediately (a downloaded or cached file) must not have its own confirmation
+        // overwritten by this block.
+        await MainActor.run {
+            state.currentTrack = song
+            state.duration = duration
+            state.position = 0
+            state.isSeekable = duration > 0
+            // A fresh track stays `.loading` until an engine confirms real audio: AVPlayer's
+            // time-control status, AudioStreaming's state callback, or measured progress in the
+            // progress ticker. Publishing `.playing` here is what made the transport show its
+            // pause/stop control for a stream that had not produced a single sample yet.
+            state.playbackState = .loading
+            state.isPlaybackAvailable = true
+            state.isDeliveringTranscodedAudio = isTranscoding
+        }
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+
+        if fadingInAllowed {
+            setEngineVolume(0)
+        }
+        isTrackTransitionPending = false
+        resetTrackAccumulator(isPlaying: false)
+        startEnginePlayback(
+            url: source.url,
+            headers: source.customHeaders,
+            useSystemPlayer: useSystemPlayer
+        )
+        if let context = source.jellyfinPlaybackContext {
+            Task { [weak self] in await self?.reportJellyfinStarted(context, position: 0) }
+        }
+        if fadingInAllowed {
+            performFadeIn(duration: crossfadeConfig.duration)
+        }
+        if let started = transitionStartedAt {
+            transitionStartedAt = nil
+            Logger.player.info(
+                "[TRANSITION-TIMING] '\(song.title, privacy: .public)' hand-over completed in \(Int(Date().timeIntervalSince(started) * 1000), privacy: .public)ms (engine=\(useSystemPlayer ? "AVPlayer" : "AudioStreaming", privacy: .public) transcoded=\(isTranscoding, privacy: .public))"
+            )
+        }
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+
+        startProgressTimer()
+        schedulePlaybackAcquisitionRecovery(song: song, serverId: serverId, epoch: epoch)
+
+        // Audio is already starting. Artwork credentials and MediaSession/Siri registration
+        // must not hold up the first frame, including cold starts and cached playback.
+        let artworkURL = await resolveArtworkURL(for: song)
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        let artworkHeaders: [String: String]
+        do {
+            artworkHeaders = try await serverService.activeCredentials().customHeaders
+        } catch {
+            Logger.player.warning("[CREDENTIALS] activeCredentials failed, using empty artwork headers: \(error, privacy: .public)")
+            artworkHeaders = [:]
+        }
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+
+        let nowPlayingState = await MainActor.run {
+            (state.currentIndex, state.queue.count, state.playbackState == .playing)
+        }
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        let snapshot = NowPlayingSnapshot(
+            title: song.title,
+            artist: song.artist,
+            album: song.albumName,
+            duration: duration,
+            position: engineProgress(),
+            playbackRate: nowPlayingState.2 ? 1.0 : 0,
+            artworkURL: artworkURL,
+            artworkHeaders: artworkHeaders,
+            coverArtId: song.effectiveCoverArtId,
+            albumId: song.albumId,
+            isLiveStream: false,
+            radioStationName: nil,
+            isrc: cachedISRC(for: song),
+            trackId: song.id,
+            queueIndex: nowPlayingState.0,
+            queueCount: nowPlayingState.1
+        )
+        await nowPlayingService?.publishTrackChange(snapshot)
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        await nowPlayingService?.update(with: snapshot)
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
         // Never background-cache Dolby/Atmos — lossy cache formats stereo-downmix the bitstream.
         // Also skip competing downloads on wireless system routes where bandwidth/route churn hurts playback.
         let skipEphemeralCache: Bool = {
@@ -346,7 +468,7 @@ extension PlayerService {
             return false
             #endif
         }()
-        if case .stream(let streamURL, let customHeaders, let jellyfinContext) = source,
+        if case .stream(let streamURL, let customHeaders, let jellyfinContext, _) = source,
            jellyfinContext == nil,
            !skipEphemeralCache {
             let cacheFormat = await MainActor.run { cacheSettings.cacheFormat }
@@ -405,159 +527,11 @@ extension PlayerService {
             Logger.player.info("[SPATIAL] Skipping ephemeral cache for Dolby/multichannel '\(songId, privacy: .public)'")
         }
 
-        guard epoch == playbackEpoch, !Task.isCancelled else { return }
-        let useSystemPlayer: Bool = {
-            #if os(macOS)
-            // AVPlayer is the single macOS playback engine. AudioStreaming remains the
-            // iOS stereo path, where its gapless and ReplayGain node are still used.
-            return true
-            #else
-            // HLS manifests must be owned by AVPlayer so segment loading, seeking and
-            // pause/resume use the platform HLS stack rather than the progressive engine.
-            if source.url.pathExtension.lowercased() == "m3u8" { return true }
-            if AudioQualityClassifier.requiresSystemPlayer(song) { return true }
-            // Stereo tracks on wireless system routes use AVPlayer. AudioStreaming can underrun
-            // or crackle on Bluetooth/AirPlay route transitions, and AVPlayer owns those routes better.
-            return PlayerService.isWirelessSystemRouteActive()
-            #endif
-        }()
-        Logger.player.info(
-            "[TRANSITION] advancing to '\(song.title, privacy: .public)' (id=\(song.id, privacy: .public)) — engine=\(useSystemPlayer ? "AVPlayer/Spatial" : "AudioStreaming", privacy: .public)"
-        )
-
-        endOfTrackStallStartedAt = nil
-        endOfTrackStallProgress = -1
-        lastObservedEngineProgress = 0
-        pendingSeekTarget = nil
-        pendingSeekDeadline = .distantPast
-        liveStreamStallTask?.cancel()
-        liveStreamStallTask = nil
-        currentSource = source
-        pendingRestoreInfo = nil
-
-        restorePauseTask?.cancel()
-        restorePauseTask = nil
-        if isMutedForRestore {
-            setEngineVolume(restoredVolume)
-            isMutedForRestore = false
-        }
-
-        #if os(iOS)
-        configureAudioSessionIfNeeded(preferMultichannel: useSystemPlayer)
-        #endif
-
-        let fadingInAllowed: Bool
-        #if os(iOS)
-        fadingInAllowed = shouldFadeIn && !useSystemPlayer && !PlayerService.isWirelessSystemRouteActive()
-        #else
-        fadingInAllowed = shouldFadeIn && !useSystemPlayer
-        #endif
-
-        let duration = song.duration
-        // Publish complete Now Playing metadata before engine start so the lock screen, artwork,
-        // and lyrics UI are ready before the first audio frame.
-        resolvedISRCForCurrentTrack = song.isrc
-        resolvedISRCSongId = song.id
-        let earlyISRC = cachedISRC(for: song)
-        let nowPlayingQueue = await MainActor.run { (state.currentIndex, state.queue.count) }
-        guard epoch == playbackEpoch, !Task.isCancelled else { return }
-        let earlySnapshot = NowPlayingSnapshot(
-            title: song.title,
-            artist: song.artist,
-            album: song.albumName,
-            duration: duration,
-            position: 0,
-            playbackRate: 1.0,
-            artworkURL: artworkURL,
-            artworkHeaders: artworkHeaders,
-            coverArtId: song.effectiveCoverArtId,
-            albumId: song.albumId,
-            isLiveStream: false,
-            radioStationName: nil,
-            isrc: earlyISRC,
-            trackId: song.id,
-            queueIndex: nowPlayingQueue.0,
-            queueCount: nowPlayingQueue.1
-        )
-        await nowPlayingService?.publishTrackChange(earlySnapshot)
-        guard epoch == playbackEpoch, !Task.isCancelled else { return }
-
-        let isTranscoding = AudioQualityClassifier.isLossyTranscodeStream(source)
-        guard epoch == playbackEpoch, !Task.isCancelled else { return }
-        // Publish the incoming track *before* the engine is started: an engine that begins
-        // playing immediately (a downloaded or cached file) must not have its own confirmation
-        // overwritten by this block.
-        await MainActor.run {
-            state.currentTrack = song
-            state.duration = duration
-            state.position = 0
-            state.isSeekable = duration > 0
-            // A fresh track stays `.loading` until an engine confirms real audio: AVPlayer's
-            // time-control status, AudioStreaming's state callback, or measured progress in the
-            // progress ticker. Publishing `.playing` here is what made the transport show its
-            // pause/stop control for a stream that had not produced a single sample yet.
-            // A track-to-track transition is the exception — the outgoing track is still
-            // audible, so `.playing` is the honest state and a loading flash mid-skip would be
-            // the lie the other way round.
-            state.playbackState = preservePlayingState ? .playing : .loading
-            state.isPlaybackAvailable = true
-            state.isDeliveringTranscodedAudio = isTranscoding
-        }
-        guard epoch == playbackEpoch, !Task.isCancelled else { return }
-
-        if fadingInAllowed {
-            setEngineVolume(0)
-        }
-        isTrackTransitionPending = false
-        resetTrackAccumulator(isPlaying: true)
-        startEnginePlayback(
-            url: source.url,
-            headers: source.customHeaders,
-            useSystemPlayer: useSystemPlayer
-        )
-        if let context = source.jellyfinPlaybackContext {
-            Task { [weak self] in await self?.reportJellyfinStarted(context, position: 0) }
-        }
-        if fadingInAllowed {
-            performFadeIn(duration: crossfadeConfig.duration)
-        }
-        if let started = transitionStartedAt {
-            transitionStartedAt = nil
-            Logger.player.info(
-                "[TRANSITION-TIMING] '\(song.title, privacy: .public)' hand-over completed in \(Int(Date().timeIntervalSince(started) * 1000), privacy: .public)ms (engine=\(useSystemPlayer ? "AVPlayer" : "AudioStreaming", privacy: .public) transcoded=\(isTranscoding, privacy: .public))"
-            )
-        }
-        guard epoch == playbackEpoch, !Task.isCancelled else { return }
-
         await scheduleAutomaticDownload(song: song, serverId: serverId)
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
-
         await ensureGaplessPreparation()
-
-        startProgressTimer()
-
-        // Reassert the complete snapshot after the engine is active; catalog lookup may still
-        // refine ISRC independently without delaying audio.
-        let snapshot = NowPlayingSnapshot(
-            title: song.title,
-            artist: song.artist,
-            album: song.albumName,
-            duration: duration,
-            position: 0,
-            playbackRate: 1.0,
-            artworkURL: artworkURL,
-            artworkHeaders: artworkHeaders,
-            coverArtId: song.effectiveCoverArtId,
-            albumId: song.albumId,
-            isLiveStream: false,
-            radioStationName: nil,
-            isrc: cachedISRC(for: song),
-            trackId: song.id,
-            queueIndex: nowPlayingQueue.0,
-            queueCount: nowPlayingQueue.1
-        )
-        await nowPlayingService?.update(with: snapshot)
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
+
         Task.detached { [weak self] in
             await self?.resolveAndPublishISRC(for: song)
         }

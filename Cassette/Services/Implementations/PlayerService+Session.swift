@@ -44,10 +44,10 @@ extension PlayerService {
         let (isPlaying, uiPos, songId) = await MainActor.run {
             (state.playbackState == .playing, state.position, state.currentTrack?.id)
         }
-        if isPlaying && !usingSystemPlayer {
+        if isPlaying && !systemPlayback.isActive {
             mayNeedPlaybackHealthCheck = true
             // Prefer UI scrubber + engine — after suspend `engine.progress` may collapse to ~0.
-            lastForegroundProgress = max(engine.progress, uiPos)
+            lastForegroundProgress = max(engineProgress(), uiPos)
             lastForegroundProgressSongId = songId
             await sessionService.savePosition(lastForegroundProgress)
         }
@@ -134,12 +134,12 @@ extension PlayerService {
         #if os(macOS)
         // A restored macOS session must stay on the platform's single AVPlayer path
         // when the user presses Play after relaunching the app.
-        usingSystemPlayer = true
+        systemPlayback.isActive = true
         #else
         // Match the engine to the restored track so resume() routes a Spatial/multichannel
         // track back through AVPlayer instead of the stereo-only AudioStreaming path.
         // Without this, a restored Atmos track silently fails (or is downmixed) on resume.
-        usingSystemPlayer = AudioQualityClassifier.requiresSystemPlayer(track)
+        systemPlayback.isActive = AudioQualityClassifier.requiresSystemPlayer(track)
             || PlayerService.isWirelessSystemRouteActive()
         #endif
 
@@ -225,8 +225,9 @@ extension PlayerService {
         stopPositionSaveTimer()
         positionSaveTask = Task {
             while !Task.isCancelled {
-                // 5s — not 1s. Each SwiftData save merges into mainContext and can hitch the UI.
-                try? await Task.sleep(for: .seconds(5))
+                // Crash-recovery checkpoint only. Pause, track changes and backgrounding flush
+                // immediately; an unchanged playing session does not need a disk write every 5s.
+                try? await Task.sleep(for: .seconds(30), tolerance: .seconds(3))
                 guard !Task.isCancelled else { break }
                 if isRestoringSession { continue }
                 guard engineIsSeekable() else { continue }

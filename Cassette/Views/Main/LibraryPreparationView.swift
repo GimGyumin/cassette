@@ -8,7 +8,7 @@ import SwiftUI
 /// Shown over the app while the server-reported library change is applied: the local index is
 /// rebuilt, album artwork is reconciled, and catalog-derived caches are dropped.
 ///
-/// Indexing can continue after dismissal; bulk artwork is deferred at the next batch boundary.
+/// Indexing and artwork transfers continue after dismissal.
 struct LibraryPreparationView: View {
     @Environment(\.appContainer) private var container
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

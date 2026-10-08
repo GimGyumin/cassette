@@ -6,6 +6,28 @@
 import Foundation
 import Combine
 
+enum TranslationStrategyPreference: String, CaseIterable, Identifiable {
+    case automatic
+    case highFidelity
+    case lowLatency
+    case standard
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .automatic:
+            return String(localized: "Automatic", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .highFidelity:
+            return String(localized: "High Quality", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .lowLatency:
+            return String(localized: "Fast Translation", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .standard:
+            return String(localized: "Standard", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        }
+    }
+}
+
 enum TranslationProvider: String, CaseIterable, Identifiable {
     case apple = "Apple Translation"
     case openAI = "OpenAI Translation"
@@ -41,6 +63,10 @@ final class LyricsTranslationSettings: ObservableObject {
         didSet { defaults.set(targetLanguage, forKey: "targetLanguage") }
     }
 
+    @Published var strategyPreference: TranslationStrategyPreference {
+        didSet { defaults.set(strategyPreference.rawValue, forKey: "translationStrategyPreference") }
+    }
+
     @Published var openAIAPIKey: String {
         didSet {
             let trimmed = openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -62,7 +88,8 @@ final class LyricsTranslationSettings: ObservableObject {
             "isTranslationEnabled": true,
             "isAutoTranslateEnabled": false,
             "translationProvider": TranslationProvider.apple.rawValue,
-            "targetLanguage": "ko",
+            "targetLanguage": defaultTargetLanguage,
+            "translationStrategyPreference": TranslationStrategyPreference.automatic.rawValue,
             LyricsSourcePreference.userDefaultsKey: LyricsSourcePreference.default.rawValue,
             "cassette.streaming.wifi": "matchStream",
             "cassette.streaming.cellular": "mp3_192",
@@ -76,6 +103,16 @@ final class LyricsTranslationSettings: ObservableObject {
         ])
         ReplayGainSettings.registerDefaults()
         CrossfadeSettings.registerDefaults()
+    }
+
+    /// App-specific language first, then the system's preferred language.
+    /// Apple Translation validates actual pair support before a session starts.
+    nonisolated static var defaultTargetLanguage: String {
+        let appCode = AppUILanguage.locale.language.languageCode?.identifier
+        let systemCode = Locale.preferredLanguages.first.flatMap {
+            Locale(identifier: $0).language.languageCode?.identifier
+        }
+        return normalizedLanguageCode(appCode ?? systemCode ?? "en")
     }
 
     /// Normalize language tags coming from Settings pickers / server metadata.
@@ -100,6 +137,9 @@ final class LyricsTranslationSettings: ObservableObject {
         // Settings toggles write through UserDefaults; refresh in-memory values on foreground.
         self.isTranslationEnabled = defaults.object(forKey: "isTranslationEnabled") as? Bool ?? true
         self.isAutoTranslateEnabled = defaults.bool(forKey: "isAutoTranslateEnabled")
+        self.strategyPreference = TranslationStrategyPreference(
+            rawValue: defaults.string(forKey: "translationStrategyPreference") ?? ""
+        ) ?? .automatic
 
         if let providerString = defaults.string(forKey: "translationProvider"),
            let savedProvider = TranslationProvider(rawValue: providerString) {
@@ -108,13 +148,13 @@ final class LyricsTranslationSettings: ObservableObject {
             self.provider = .apple
         }
 
-        // Prefer Korean for first launch / empty values. One-time migrate "en" when device UI is Korean
+        // Follow the app/system language for first launch / empty values. One-time migrate "en" when device UI is Korean
         // (legacy Settings text field / defaults often left English lyrics translating en→en forever).
         let storedTarget = defaults.string(forKey: "targetLanguage")
         let prefersKorean = Locale.preferredLanguages.first?.lowercased().hasPrefix("ko") == true
         if storedTarget == nil || storedTarget?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
-            self.targetLanguage = "ko"
-            defaults.set("ko", forKey: "targetLanguage")
+            self.targetLanguage = Self.defaultTargetLanguage
+            defaults.set(Self.defaultTargetLanguage, forKey: "targetLanguage")
         } else if prefersKorean,
                   Self.normalizedLanguageCode(storedTarget) == "en",
                   defaults.bool(forKey: "cassette.didMigrateTargetLanguageToKo") == false {
@@ -151,6 +191,11 @@ final class LyricsTranslationSettings: ObservableObject {
 
         let target = Self.normalizedLanguageCode(defaults.string(forKey: "targetLanguage"))
         if targetLanguage != target { targetLanguage = target }
+
+        let strategy = TranslationStrategyPreference(
+            rawValue: defaults.string(forKey: "translationStrategyPreference") ?? ""
+        ) ?? .automatic
+        if strategyPreference != strategy { strategyPreference = strategy }
 
         if let providerString = defaults.string(forKey: "translationProvider"),
            let savedProvider = TranslationProvider(rawValue: providerString),

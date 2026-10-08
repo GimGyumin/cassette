@@ -41,6 +41,32 @@ struct JellyfinMusicTransportTests {
         (200, try JSONSerialization.data(withJSONObject: object))
     }
 
+    @Test func quickConnectAlbumRecoversRepresentativeQualityFromPlaybackInfo() async throws {
+        let client = try musicClient()
+        var playbackRequests = 0
+        JellyfinMusicURLProtocol.handler = { request in
+            let path = request.url!.path
+            if path.hasSuffix("/Users/user/Items/album") {
+                return (200, Data(#"{"Id":"album","Name":"Collection","Type":"MusicAlbum","AlbumArtist":"","AlbumArtists":[{"Name":"Various Artists","Id":"various"}]}"#.utf8))
+            }
+            if path.hasSuffix("/Users/user/Items") {
+                return (200, Data(#"{"Items":[{"Id":"song-1","Name":"First","Type":"Audio","Artists":["Singer A"]},{"Id":"song-2","Name":"Second","Type":"Audio","Artists":["Singer B"]}],"TotalRecordCount":2}"#.utf8))
+            }
+            if path.hasSuffix("/Items/song-1/PlaybackInfo") {
+                playbackRequests += 1
+                return (200, Data(#"{"MediaSources":[{"Container":"flac","Bitrate":937000,"MediaStreams":[{"Type":"Audio","Codec":"flac","SampleRate":44100,"BitDepth":16,"Channels":2}]}]}"#.utf8))
+            }
+            Issue.record("Unexpected route: \(path)")
+            return (404, Data())
+        }
+        let album = try await client.getAlbum(id: "album")
+        #expect(album.artist == "Various Artists")
+        #expect(album.song?.first?.bitRate == 937)
+        #expect(album.song?.first?.samplingRate == 44_100)
+        #expect(album.song?.first?.bitDepth == 16)
+        #expect(playbackRequests == 1)
+    }
+
     @Test func approvedQuickConnectPersistsPasswordlessAccountAndLoadsMusic() async throws {
         let container = try ModelContainer.cassette(inMemory: true)
         let state = ServerState()
@@ -111,9 +137,10 @@ struct JellyfinMusicTransportTests {
         let download = try #require(client.downloadURL(id: id))
         #expect(download.path == "/proxy/jellyfin/Items/\(guid)/Download")
         let transcode = try #require(client.streamURL(id: id, maxBitRate: 192, format: "aac"))
-        #expect(transcode.path == "/proxy/jellyfin/Audio/\(guid)/universal")
-        #expect(transcode.absoluteString.contains("MaxStreamingBitrate=192000"))
+        #expect(transcode.path == "/proxy/jellyfin/Audio/\(guid)/stream.aac")
+        #expect(transcode.absoluteString.contains("AudioBitRate=192000"))
         #expect(transcode.absoluteString.contains("Static=false"))
+        #expect(transcode.absoluteString.contains("CopyTimestamps=false"))
     }
 
     @Test func removingDuplicateTrackUsesOccurrenceID() async throws {

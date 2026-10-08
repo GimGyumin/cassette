@@ -4,20 +4,54 @@ import SwiftSonic
 import Testing
 @testable import Cassette
 
-/// The transport must never show a pause/stop control for a stream that has not produced audio.
-///
-/// Reported from a device: tapping a song flipped the play button to the pause glyph while the
-/// stream was still loading. Two halves are covered here — the appearance rule the controls render
-/// from, and the rule that ends a `.loading` start.
+/// Loading keeps the user's play intent visible without claiming audio has started.
+/// A tap on the active control can cancel the pending request.
 @Suite("Playback control appearance")
 struct PlaybackControlAppearanceTests {
+    @Test func waitsPreserveTheirReasonAndTransportIntent() {
+        for state in [PlaybackState.loading, .buffering, .recovering] {
+            #expect(state.isAwaitingAudio)
+            #expect(state.hasPlaybackIntent)
+            #expect(state.controlAppearance == .loading)
+            #expect(state.waitingForAudio() == state)
+            #expect(state.confirmingPlayback(restoringIntoPause: false) == .playing)
+            #expect(state.confirmingPlayback(restoringIntoPause: true) == nil)
+        }
+        #expect(PlaybackState.playing.waitingForAudio() == .buffering)
+        for state in [PlaybackState.idle, .paused, .error(.timeout)] {
+            #expect(state.waitingForAudio() == nil)
+            #expect(!state.hasPlaybackIntent)
+        }
+    }
+
+    @Test func resumeDistinguishesInitialAcquisitionFromRecovery() {
+        #expect(PlaybackState.paused.resuming(reopensSource: true, position: 0) == .loading)
+        #expect(PlaybackState.paused.resuming(reopensSource: true, position: 42) == .recovering)
+        #expect(PlaybackState.buffering.resuming(reopensSource: false, position: 42) == .buffering)
+        #expect(PlaybackState.recovering.resuming(reopensSource: false, position: 42) == .recovering)
+        #expect(PlaybackState.paused.resuming(reopensSource: false, position: 42) == .playing)
+    }
+
+    @Test func seekKeepsItsTargetThroughTemporaryZeroAndClearsAtomically() {
+        let now = Date(timeIntervalSince1970: 100)
+        var seek = PlaybackSeekState.settling(target: 60, deadline: now.addingTimeInterval(8))
+        #expect(seek.reconcile(progress: 0, now: now) == .waiting(60))
+        #expect(seek.target == 60)
+        #expect(seek.reconcile(progress: 59, now: now.addingTimeInterval(1)) == .finished(target: 60, landed: true))
+        #expect(seek == .idle)
+        #expect(seek.target == nil)
+        #expect(seek.reconcile(progress: 0, now: now) == .inactive)
+        seek = .settling(target: 60, deadline: now)
+        #expect(seek.reconcile(progress: 0, now: now) == .finished(target: 60, landed: false))
+        #expect(seek == .idle)
+    }
 
     // MARK: - What the control renders
 
-    @Test func loadingNeverRendersAsPause() {
-        // The transports draw this as the plain play glyph — no spinner, still inert — because no
-        // audio exists yet. The point of the case is only that it is *not* the pause/stop control.
+    @Test func loadingKeepsActivePlaybackAppearance() {
         #expect(PlaybackState.loading.controlAppearance == .loading)
+        #expect(PlaybackState.loading.controlAppearance.systemImage == "pause.fill")
+        #expect(PlaybackState.loading.hasPlaybackIntent)
     }
 
     @Test func onlyConfirmedPlaybackRendersAsPause() {
@@ -28,6 +62,7 @@ struct PlaybackControlAppearanceTests {
         #expect(PlaybackState.idle.controlAppearance == .play)
         #expect(PlaybackState.paused.controlAppearance == .play)
         #expect(PlaybackState.error(.timeout).controlAppearance == .play)
+        #expect(!PlaybackState.paused.hasPlaybackIntent)
     }
 
     // MARK: - What ends a `.loading` start
@@ -59,6 +94,49 @@ struct PlaybackControlAppearanceTests {
 @MainActor
 @Suite("Resume publishes audio, not optimism", .serialized)
 struct ResumePlaybackStateTests {
+    @Test func engineRebuildPublishesRecoveryAndPreservesPause() async throws {
+        let container = try AppContainer(inMemory: true, engine: FakePlaybackEngine())
+        let service = try #require(container.playerService as? PlayerService)
+        container.playerState.position = 60
+        container.playerState.playbackState = .playing
+        let reopened = await service.publishEngineRecovery()
+        #expect(reopened)
+        #expect(container.playerState.playbackState == .recovering)
+        await service.publishEnginePlaybackConfirmation()
+        #expect(container.playerState.playbackState == .playing)
+        await service.pause()
+        let pausedReopen = await service.publishEngineRecovery()
+        #expect(!pausedReopen)
+        #expect(container.playerState.playbackState == .paused)
+        await service.stop()
+    }
+    @Test func bufferingCallbacksCannotUndoAUserPause() async throws {
+        let engine = FakePlaybackEngine()
+        let container = try AppContainer(inMemory: true, engine: engine)
+        let service = try #require(container.playerService as? PlayerService)
+        container.playerState.playbackState = .loading
+        engine.state = .bufferring
+        await service.handleAudioStateChanged(.bufferring)
+        #expect(container.playerState.playbackState == .loading)
+        engine.state = .playing
+        await service.handleAudioStateChanged(.playing)
+        #expect(container.playerState.playbackState == .playing)
+        await service.startSegmentForTest()
+        engine.state = .bufferring
+        await service.handleAudioStateChanged(.bufferring)
+        #expect(container.playerState.playbackState == .buffering)
+        let segmentWhileWaiting = await service.currentPlaySegmentStart
+        #expect(segmentWhileWaiting == nil)
+        engine.state = .playing
+        await service.handleAudioStateChanged(.playing)
+        let resumedSegment = await service.currentPlaySegmentStart
+        #expect(resumedSegment != nil)
+        await service.pause()
+        engine.state = .playing
+        await service.handleAudioStateChanged(.playing)
+        #expect(container.playerState.playbackState == .paused)
+        await service.stop()
+    }
     @Test func resumeThatHasToReopenTheStreamStaysLoading() async throws {
         let engine = FakePlaybackEngine()
         let container = try AppContainer(inMemory: true, engine: engine)
@@ -76,8 +154,7 @@ struct ResumePlaybackStateTests {
         await service.stopProgressTimer()
         await service.stopPositionSaveTimer()
 
-        // The engine had to open the stream again, so no audio exists yet: the transport keeps its
-        // loading appearance instead of switching to the pause/stop control.
+        // The engine still has to confirm audio; the UI keeps the play request visibly active.
         #expect(engine.calls.contains { if case .play = $0 { return true }; return false })
         #expect(published == .loading)
     }
@@ -105,6 +182,7 @@ struct ResumePlaybackStateTests {
 }
 
 private extension PlayerService {
+    func startSegmentForTest() { currentPlaySegmentStart = Date().addingTimeInterval(-10) }
     /// Test seam: `resume()` chooses between reopening the stream and resuming the engine from
     /// `currentSource`, which normal playback only ever sets during resolve.
     func setTestCurrentSource(_ source: MediaSource) { currentSource = source }

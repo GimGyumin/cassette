@@ -14,13 +14,13 @@ import AudioStreaming
 /// values without touching `PlayerService`.
 nonisolated final class AudioStreamingPlayerEngine: AudioStreamingPlaybackEngine, AudioGraphHosting, @unchecked Sendable {
 
-    /// Start with one second of decoded audio, then continue filling the 30-second reservoir.
+    /// Start with two seconds of decoded audio, then continue filling the 30-second reservoir.
     /// A real underrun requires five seconds before resuming, keeping fast startup separate
     /// from recovery hysteresis. These are decoded durations, not wall-clock latency promises.
     nonisolated static let defaultConfiguration = AudioPlayerConfiguration(
         flushQueueOnSeek: true,
         bufferSizeInSeconds: 30,
-        secondsRequiredToStartPlaying: 1,
+        secondsRequiredToStartPlaying: 2,
         gracePeriodAfterSeekInSeconds: 1,
         secondsRequiredToStartPlayingAfterBufferUnderrun: 5,
         enableLogs: false
@@ -66,6 +66,22 @@ nonisolated final class AudioStreamingPlayerEngine: AudioStreamingPlaybackEngine
     func pause() { player.pause() }
     func resume() { player.resume() }
     func seek(to time: Double) { player.seek(to: time) }
+
+    func recoverQueuedTransitionIfNeeded() {
+        switch player.state {
+        case .paused:
+            player.resume()
+        case .bufferring:
+            // `AudioPlayer.resume()` is deliberately a no-op unless its private state is
+            // `.paused`. A queued hand-off can instead be left in `.waitingForData` (published as
+            // `.bufferring`), so reproduce the transport reset that previously only happened
+            // after the listener touched play/pause.
+            player.pause()
+            player.resume()
+        default:
+            break
+        }
+    }
 
     // MARK: - AudioGraphHosting
 

@@ -30,6 +30,14 @@ nonisolated enum LibraryPreparationPhase: String, Codable, Sendable, Equatable {
         case .checking, .indexing, .covers, .syncing: return true
         }
     }
+
+    /// Checking for changes is silent; only actual preparation should interrupt the UI.
+    var isPreparing: Bool {
+        switch self {
+        case .indexing, .covers, .syncing: return true
+        case .idle, .checking, .complete, .failed: return false
+        }
+    }
 }
 
 /// Platform-neutral snapshot of the pass, published by `LibraryPreparationService`.

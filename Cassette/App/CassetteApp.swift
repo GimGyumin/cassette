@@ -76,13 +76,15 @@ struct CassetteApp: App {
             guard let processingTask = task as? BGProcessingTask,
                   let prepare = CassetteApp._bgLibraryPreparation else {
                 task.setTaskCompleted(success: false)
+                CassetteApp.scheduleLibraryPreparation()
                 return
             }
             // The pass is resumable (covers check the disk first), so an expiring window still
             // leaves the work in a consistent state; the next window picks up where this stopped.
             let workTask = Task {
                 await prepare()
-                processingTask.setTaskCompleted(success: true)
+                processingTask.setTaskCompleted(success: !Task.isCancelled)
+                if Task.isCancelled { CassetteApp.scheduleLibraryPreparation() }
             }
             processingTask.expirationHandler = { workTask.cancel() }
         }
@@ -117,6 +119,7 @@ struct CassetteApp: App {
             Group {
                 if let container {
                     RootView()
+                        .modifier(AccountVerificationLaunchPrompt())
                         .accessibilityIdentifier("cassette.content")
                         // .toastOverlay() must be the INNERMOST modifier: a toast pill now renders a
                         // CoverArtView, which reads @Environment(ArtworkImageCache.self) / appContainer.
@@ -171,7 +174,9 @@ struct CassetteApp: App {
                 Logger.boot.notice("🟡 AppContainer init start")
                 let newContainer: AppContainer
                 do {
-                    newContainer = try AppContainer()
+                    newContainer = try AppContainer(
+                        inMemory: ProcessInfo.processInfo.arguments.contains("--cassette-ui-testing")
+                    )
                 } catch {
                     Logger.boot.error(
                         "AppContainer init failed; stores were preserved: \(error.localizedDescription, privacy: .public)"
@@ -187,6 +192,19 @@ struct CassetteApp: App {
                 // Grants a background window that runs one preparation pass, so a long cover sync
                 // can continue off-screen when iOS allows it.
                 CassetteApp._bgLibraryPreparation = {
+                    guard newContainer.serverState.activeServer != nil else {
+                        if newContainer.serverState.isLoadingPersistedState {
+                            CassetteApp.scheduleLibraryPreparation()
+                        }
+                        return
+                    }
+                    newContainer.libraryIndexService.ensureIndexed(using: newContainer.libraryService)
+                    // Cover completion is independent of the server's track-count change check.
+                    if BulkArtworkPreference.isEnabled,
+                       !newContainer.albumCoverPreloadService.state.isComplete {
+                        await newContainer.albumCoverPreloadService.downloadAllCovers(resumeDeferred: false)
+                    }
+                    guard !Task.isCancelled else { return }
                     await newContainer.libraryPreparationService.prepareIfLibraryChanged(
                         serverService: newContainer.serverService,
                         libraryService: newContainer.libraryService,
@@ -326,6 +344,9 @@ struct CassetteApp: App {
             c.serverReachabilityMonitor.isAppActive = newPhase != .background
             switch newPhase {
             case .active:
+                if c.serverState.activeServer != nil, !c.albumCoverPreloadService.state.isComplete {
+                    c.albumCoverPreloadService.reconcileChangedCovers()
+                }
                 Task(priority: .utility) {
                     await c.serverReachabilityMonitor.checkNow()
                 }

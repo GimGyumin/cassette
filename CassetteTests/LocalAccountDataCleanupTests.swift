@@ -6,6 +6,26 @@ import Testing
 @Suite("Local account cleanup")
 @MainActor
 struct LocalAccountDataCleanupTests {
+    @Test func favoritesUseItemFieldsAndKeepAccountsSeparate() throws {
+        let container = try ModelContainer.cassette(inMemory: true)
+        let context = ModelContext(container)
+        let firstServer = UUID()
+        let secondServer = UUID()
+        context.insert(FavoriteRecord(itemType: .song, itemId: "track", starredDate: Date(), serverId: firstServer))
+        context.insert(FavoriteRecord(itemType: .song, itemId: "track", starredDate: Date(), serverId: secondServer))
+        try context.save()
+
+        let itemId = "track"
+        let type = FavoriteType.song.rawValue
+        let matches = try context.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
+            $0.itemId == itemId && $0.itemType == type
+        }))
+        #expect(matches.count == 2)
+        #expect(matches.contains { $0.serverId == firstServer })
+        #expect(matches.contains { $0.serverId == secondServer })
+        #expect(!matches.contains { $0.id == "song:track" })
+    }
+
     @Test func removesLocalLibraryRecordsWithoutDeletingAccountConfiguration() throws {
         let container = try ModelContainer.cassette(inMemory: true)
         let context = ModelContext(container)

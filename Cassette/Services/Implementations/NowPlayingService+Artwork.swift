@@ -101,13 +101,13 @@ extension NowPlayingService {
         guard isCurrent(snapshot) else { return }
         let generation = artworkGeneration
 
-        // Candidate ids, downloaded cover first: the cover recorded for this album during library
-        // preparation is what a downloaded album stored on disk, and it is not always the song's
-        // own media-file cover id. Trying it first keeps the lock screen on the downloaded artwork
-        // instead of opening a server request for a different image.
+        // A prepared album image must never replace a track's distinct artwork.
         var candidateIds: [String] = []
-        if let prepared = await preparedCoverArtId(for: snapshot) { candidateIds.append(prepared) }
-        if let own = snapshot.effectiveCoverArtId, !candidateIds.contains(own) { candidateIds.append(own) }
+        if let own = snapshot.effectiveCoverArtId {
+            candidateIds.append(own)
+        } else if let prepared = await preparedCoverArtId(for: snapshot) {
+            candidateIds.append(prepared)
+        }
         Logger.nowPlaying.debug(
             "[NOWPLAYING-ARTWORK] candidates for '\(snapshot.title, privacy: .public)': \(candidateIds.joined(separator: ", "), privacy: .public)"
         )

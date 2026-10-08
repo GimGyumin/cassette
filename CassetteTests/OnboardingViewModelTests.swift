@@ -21,6 +21,8 @@ final class MockServerService: ServerServiceProtocol {
     var activatesAddedServer = true
     var lastTestedURL: String?
     var lastAddedBaseURL: String?
+    var musicClient: SwiftSonicClient?
+    var credentials: ServerCredentials?
 
     func testConnection(
         url: String, username: String, password: String,
@@ -70,8 +72,14 @@ final class MockServerService: ServerServiceProtocol {
     func testConnection() async throws {}
     func loadPersistedState() async {}
     func preWarmClient() async {}
-    func makeSwiftSonicClient() async throws -> SwiftSonicClient { throw CassetteError.notImplemented }
-    func activeCredentials() async throws -> ServerCredentials { throw CassetteError.notImplemented }
+    func makeSwiftSonicClient() async throws -> SwiftSonicClient {
+        guard let musicClient else { throw CassetteError.notImplemented }
+        return musicClient
+    }
+    func activeCredentials() async throws -> ServerCredentials {
+        guard let credentials else { throw CassetteError.notImplemented }
+        return credentials
+    }
 }
 
 // MARK: - Suite

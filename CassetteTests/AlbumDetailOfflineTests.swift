@@ -8,9 +8,20 @@ import Foundation
 import SwiftSonic
 import MediaPlayer
 import SwiftUI
+import SwiftData
 @testable import Cassette
 
 // MARK: - Stubs
+
+nonisolated private final class UnexpectedPlaybackRequest: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Issue.record("A playable original must not wait for a network probe or PlaybackInfo")
+        client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
+    }
+    override func stopLoading() {}
+}
 
 /// Every endpoint throws — AlbumDetailViewModel's offline paths must never
 /// reach the server; loadFromAPI's failure is the trigger under test.
@@ -92,6 +103,119 @@ private final class ADDownloadStub: DownloadServiceProtocol {
 @Suite("AlbumDetailViewModel — offline local fallback")
 @MainActor
 struct AlbumDetailOfflineTests {
+    @Test("Uncached Automatic and Lossless request original bytes without negotiation on both networks")
+    func uncachedOriginalRouting() async throws {
+        let settings = StreamingSettings()
+        let oldWiFi = settings.wifiFormat
+        let oldCellular = settings.cellularFormat
+        defer {
+            settings.wifiFormat = oldWiFi
+            settings.cellularFormat = oldCellular
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UnexpectedPlaybackRequest.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let baseURL = try #require(URL(string: "https://music.example.com/proxy"))
+        let jellyfinClient = try JellyfinClient(serverBaseURL: baseURL, accessToken: "test-token",
+                                               deviceID: "test", session: session)
+        let clients = [
+            SwiftSonicClient(configuration: ServerConfiguration(serverURL: baseURL, username: "u", password: "p"),
+                             transport: StubHTTPTransport(outcome: .urlError(.unsupportedURL)), retryPolicy: .none),
+            JellyfinMusicTransport(client: jellyfinClient, user: JellyfinUser(id: "user", name: "User"))
+                .makeMusicClient(serverURL: baseURL),
+        ]
+        let guid = "1234567890abcdef1234567890abcdef"
+        let songID = try #require(NavidromeJellyfinIDCodec.canonicalID(fromJellyfinGUID: guid))
+        let song = DisplayableSong(id: songID, title: "Original", audioFormat: "flac",
+                                  bitRate: 1_411, bitDepth: 16, samplingRate: 44_100, channelCount: 2)
+        let server = MockServerService()
+        server.state.isOnline = true
+        server.state.activeServer = ServerSnapshot(from: ServerConfig(
+            displayName: "Test", baseURL: baseURL.absoluteString, username: "u"))
+        server.credentials = ServerCredentials(password: "p", customHeaders: ["X-Test-Header": "preserved"])
+        let jellyfin = JellyfinService(serverService: server, keychain: MockKeychain(),
+            modelContainer: try ModelContainer.cassette(inMemory: true),
+            deviceIdentity: .init(id: "test", name: "Test", clientName: "Cassette", clientVersion: "1"), session: session)
+        let resolver = MediaResolver(downloadService: ADDownloadStub(), cacheService: MockCacheService(),
+            serverService: server, serverState: server.state, streamingSettings: settings, jellyfinService: jellyfin)
+        for (index, client) in clients.enumerated() {
+            server.musicClient = client
+            for format in [CacheFormat.matchStream, .flacOriginal] {
+                settings.wifiFormat = format
+                settings.cellularFormat = format
+                for cellular in [false, true] {
+                    server.state.isExpensive = cellular
+                    let source = try await resolver.resolve(songId: songID, serverId: UUID(), song: song)
+                    guard case .stream(let url, let headers, let context, _) = source else {
+                        Issue.record("Expected an original network stream")
+                        return
+                    }
+                    let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                    if index == 0 {
+                        #expect(query.first { $0.name == "format" }?.value == "raw")
+                        #expect(!query.contains { $0.name == "maxBitRate" })
+                    } else {
+                        #expect(url.path == "/proxy/jellyfin/Items/\(guid)/File")
+                    }
+                    #expect(headers["X-Test-Header"] == "preserved")
+                    #expect(context == nil)
+                    #expect(!AudioQualityClassifier.isLossyTranscodeStream(source))
+                }
+            }
+            settings.wifiFormat = .aac256
+            settings.cellularFormat = .aac256
+            let incompleteSong = DisplayableSong(id: songID, title: "Incomplete", audioFormat: "flac")
+            let converted = try await resolver.resolve(songId: songID, serverId: UUID(), song: incompleteSong)
+            guard case .stream(let url, _, _, _) = converted else {
+                Issue.record("Expected a converted network stream")
+                return
+            }
+            if index == 0 {
+                let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                #expect(query.first { $0.name == "format" }?.value == "aac")
+            } else {
+                #expect(url.path == "/proxy/jellyfin/Audio/\(guid)/stream.aac")
+                #expect(url.absoluteString.contains("Static=false"))
+            }
+            #expect(AudioQualityClassifier.isLossyTranscodeStream(converted))
+        }
+    }
+
+    @Test("Cached audio wins over lossless quality and bitstream streaming, online or offline")
+    func cachedAudioHasPriority() async throws {
+        let settings = StreamingSettings()
+        let oldWiFi = settings.wifiFormat
+        let oldCellular = settings.cellularFormat
+        defer {
+            settings.wifiFormat = oldWiFi
+            settings.cellularFormat = oldCellular
+        }
+        settings.wifiFormat = .flacOriginal
+        settings.cellularFormat = .flacOriginal
+        let cache = MockCacheService()
+        let cachedURL = FileManager.default.temporaryDirectory.appendingPathComponent("cached-track.aac")
+        cache.cachedFileURL = cachedURL
+        // Network methods throw: a cache hit must never try to construct a streaming client.
+        let server = MockServerService()
+        let resolver = MediaResolver(downloadService: ADDownloadStub(), cacheService: cache,
+                                     serverService: server, serverState: server.state, streamingSettings: settings)
+        for online in [true, false] {
+            for cellular in [true, false] {
+                server.state.isOnline = online
+                server.state.isExpensive = cellular
+                for format in ["FLAC", "EAC3"] {
+                    let track = DisplayableSong(id: "cached", title: "Track", audioFormat: format)
+                    let source = try await resolver.resolve(songId: track.id, serverId: UUID(), song: track)
+                    guard case .cached(let url) = source else {
+                        Issue.record("A cached track must be resolved before streaming quality or routing")
+                        return
+                    }
+                    #expect(url == cachedURL)
+                }
+            }
+        }
+    }
 
     @Test("Album separators retain their width and contrast on light and dark backgrounds")
     func albumSeparatorRendering() throws {
@@ -193,6 +317,20 @@ struct AlbumDetailOfflineTests {
         ]
         #expect(AlbumCoverPreloadService.coverIDs(for: albums) == ["cover"])
         #expect(AlbumCoverPreloadService.coverIDs(for: []) == [])
+        #expect(AlbumCoverPreloadService.coverIDs(for: albums,
+            songCoverIDs: ["song-cover-1", "song-cover-2", "cover", "song-cover-1"]) == ["cover", "song-cover-1", "song-cover-2"])
+    }
+
+    @Test("Album downloads fetch the shared cover once and only distinct track covers additionally")
+    func albumDownloadCoverTargets() {
+        #expect(DownloadService.albumCoverArtIDs(
+            albumCoverArtID: "album-cover",
+            songCoverArtIDs: ["album-cover", "track-cover", "album-cover", "track-cover", nil, " "]
+        ) == ["album-cover", "track-cover"])
+        #expect(DownloadService.albumCoverArtIDs(
+            albumCoverArtID: nil,
+            songCoverArtIDs: ["first", "first", "second"]
+        ) == ["first", "second"])
     }
 
     @Test("Album rows reserve subtitle space independently of artist visibility")
@@ -273,39 +411,87 @@ struct AlbumDetailOfflineTests {
         ) == false)
     }
 
-    @Test("Deferring an active pass preserves progress and blocks automatic restarts")
+    @Test("Leaving preparation keeps the service-owned download alive and joins it")
     func deferCoverPreparation() async {
         let library = ADLibraryStub()
         let cache = ArtworkImageCache(downloadService: ADDownloadStub(), libraryService: library)
         let preload = AlbumCoverPreloadService(libraryService: library, artworkImageCache: cache)
+        var scheduled = 0
+        preload.requestBackgroundContinuation = { scheduled += 1 }
         var pendingAlbums: CheckedContinuation<[AlbumID3], Never>?
         library.allAlbumsOperation = { await withCheckedContinuation { pendingAlbums = $0 } }
-        let pass = Task { await preload.downloadAllCovers() }
+        let screen = Task { await preload.downloadAllCovers() }
         while pendingAlbums == nil { await Task.yield() }
-        preload.state.completed = 3
         preload.deferRemainingDownloads()
-        pendingAlbums?.resume(returning: [])
-        await pass.value
+        screen.cancel()
+        await screen.value
         #expect(preload.isDeferred)
-        #expect(!preload.state.isComplete)
-        #expect(!preload.state.isDownloading)
-        #expect(preload.state.completed == 3)
-        #expect(preload.state.errorMessage == nil)
-        preload.reconcileChangedCovers()
-        await preload.downloadAllCovers(resumeDeferred: false)
+        #expect(preload.state.isDownloading)
         #expect(library.allAlbumsCallCount == 1)
-        library.allAlbumsOperation = nil
-        await preload.downloadAllCovers()
-        #expect(!preload.isDeferred)
-        #expect(library.allAlbumsCallCount == 2)
+        #expect(scheduled >= 1)
+        var backgroundJoined = false
+        let background = Task {
+            backgroundJoined = true
+            await preload.downloadAllCovers(resumeDeferred: false)
+        }
+        while !backgroundJoined { await Task.yield() }
+        pendingAlbums?.resume(returning: [])
+        await background.value
+        #expect(preload.state.isComplete)
+        #expect(!preload.state.isDownloading)
+        #expect(preload.state.errorMessage == nil)
+        #expect(library.allAlbumsCallCount == 1)
 
         let preparation = LibraryPreparationService()
         preparation.deferPresentation()
-        preparation.receiveExternalProgress(.init(phase: .indexing))
-        #expect(preparation.phase == .indexing)
+        preparation.receiveExternalProgress(.init(phase: .covers, coversCompleted: 1, coversTotal: 3))
+        #expect(preparation.phase == .covers)
         #expect(preparation.isPresentationDeferred)
         preparation.reset()
         #expect(preparation.isPresentationDeferred)
+    }
+
+    @Test("Background download policy uses a rolling window without per-file sleeps")
+    func backgroundPreparationPolicy() {
+        var budget = PerformanceBudget.placeholder
+        #expect(PreparationDownloadPolicy.concurrency(budget: budget, isLimited: false, isPlaying: false) == 4)
+        budget = .make(thermalPressure: .nominal, isLowPowerMode: false, isAppActive: false, reduceMotion: false)
+        #expect(PreparationDownloadPolicy.concurrency(budget: budget, isLimited: false, isPlaying: false) == 4)
+        #expect(PreparationDownloadPolicy.concurrency(budget: budget, isLimited: true, isPlaying: true) == 1)
+        budget = .make(thermalPressure: .serious, isLowPowerMode: false, isAppActive: true, reduceMotion: false)
+        #expect(PreparationDownloadPolicy.concurrency(budget: budget, isLimited: false, isPlaying: false) == 1)
+    }
+
+    @Test("Background artwork persistence rejects error pages and accepts image files")
+    func backgroundArtworkValidation() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data("<html>Service unavailable</html>".utf8).write(to: url)
+        #expect(!CassetteBackgroundDownloads.isValidArtwork(at: url))
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVQI12NgAAAAAgAB4iG8MwAAAABJRU5ErkJggg=="))
+        try png.write(to: url)
+        #expect(CassetteBackgroundDownloads.isValidArtwork(at: url))
+    }
+
+    @Test("Resuming preparation reuses originals saved by background transfers")
+    func preparationReusesPersistedOriginals() async throws {
+        let album = try await emptySuccessAlbum()
+        let coverID = try #require(album.coverArt)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVQI12NgAAAAAgAB4iG8MwAAAABJRU5ErkJggg=="))
+        try png.write(to: directory.appendingPathComponent(OriginalArtwork.storageID(coverID)))
+        let library = ADLibraryStub()
+        library.allAlbumsOperation = { [album] }
+        // This cache cannot fetch artwork; success must come from the persisted original.
+        let cache = ArtworkImageCache(downloadService: ADDownloadStub(), libraryService: library)
+        let preload = AlbumCoverPreloadService(libraryService: library, artworkImageCache: cache, coversDirectory: directory)
+        await preload.downloadAllCovers()
+        #expect(preload.state.isComplete)
+        #expect(preload.state.alreadyPrepared == 1)
+        #expect(preload.state.total == 0)
+        #expect(preload.state.failed == 0)
     }
 
     @Test("Cover preload exposes library errors and permits retry")

@@ -25,15 +25,15 @@ enum CassetteAnimation {
     /// Compact interactive feedback (toggles, pills).
     static let interactive = Animation.snappy(duration: 0.22)
 
-    /// Lyric line become-current emphasis (Apple Music–style soft scale/opacity).
-    static let lyricLine = Animation.spring(response: 0.48, dampingFraction: 0.84)
+    /// Lyric line handoff without spring overshoot, so adjacent rows do not bounce.
+    static let lyricLine = Animation.smooth(duration: 0.30)
 
     /// Word / cue fill within the active lyric line.
     static let lyricKaraoke = Animation.easeOut(duration: 0.16)
 
-    /// Auto-scroll to the playing lyric — fast interactive spring avoids stacking unfinished
-    /// animations that cause stutter when the active line changes rapidly (karaoke 60 Hz).
-    static let lyricScroll = Animation.spring(response: 0.35, dampingFraction: 0.82)
+    /// Auto-scroll to the playing lyric. A non-overshooting curve keeps the viewport
+    /// synchronized with the line-emphasis handoff when consecutive cues are close.
+    static let lyricScroll = Animation.smooth(duration: 0.38)
 
     /// Dynamic Lyric Insertion — chorus block slides in under the translation line.
     /// Matches the Apple Music spec: 0.00s appear → translation shift @0.05s → settle @0.25s.

@@ -16,6 +16,7 @@ actor ServerService: ServerServiceProtocol {
     private let modelContainer: ModelContainer
     private let cacheService: any CacheServiceProtocol
     /// Joins concurrent Keychain+URLSession client builds — cold start used to stampede this.
+    private var clientGeneration: UInt64 = 0
     private var clientInFlight: Task<SwiftSonicClient, Error>?
     /// Reused client for the current active server, so playback state transitions and
     /// periodic reports do not rebuild Keychain + URLSession every time.
@@ -118,6 +119,7 @@ actor ServerService: ServerServiceProtocol {
             try? await keychain.delete(forKey: credKey)
             throw error
         }
+        await refreshCredentialAvailability()
     }
 
     func removeServer(id: UUID) async throws {
@@ -140,6 +142,8 @@ actor ServerService: ServerServiceProtocol {
             }
         }
 
+        await refreshCredentialAvailability()
+
         // Best-effort: an orphaned Keychain entry is harmless if this fails.
         try? await keychain.delete(forKey: credKey)
     }
@@ -159,6 +163,8 @@ actor ServerService: ServerServiceProtocol {
             return all.map(\.id)
         }
 
+        await refreshCredentialAvailability()
+
         // Best-effort: clear the audio cache for every server that is no longer active.
         let othersToClean = allServerIds.filter { $0 != id }
         guard !othersToClean.isEmpty else {
@@ -172,6 +178,9 @@ actor ServerService: ServerServiceProtocol {
     }
 
     func updateCustomHeaders(_ headers: [String: String], forServer id: UUID) async throws {
+        clientGeneration &+= 1
+        clientInFlight?.cancel()
+        clientInFlight = nil
         cachedClient = nil
         cachedClientServerID = nil
         try validateHeaders(headers)
@@ -195,6 +204,9 @@ actor ServerService: ServerServiceProtocol {
         password: String,
         customHeaders: [String: String]
     ) async throws {
+        clientGeneration &+= 1
+        clientInFlight?.cancel()
+        clientInFlight = nil
         cachedClient = nil
         cachedClientServerID = nil
         try validateHeaders(customHeaders)
@@ -225,7 +237,13 @@ actor ServerService: ServerServiceProtocol {
                     state.activeServer = snapshot
                 }
                 state.needsCredentialReentry = false
+                if state.activeServer?.id == id { state.needsSubsonicVerification = false }
             }
+            clientGeneration &+= 1
+            clientInFlight?.cancel()
+            clientInFlight = nil
+            cachedClient = nil
+            cachedClientServerID = nil
             await MainActor.run {
                 NotificationCenter.default.post(name: .cassetteServerCredentialsChanged, object: nil)
             }
@@ -266,7 +284,10 @@ actor ServerService: ServerServiceProtocol {
     func refreshCredentialAvailability() async {
         let activeID = await MainActor.run { state.activeServer?.id }
         guard let activeID else {
-            await MainActor.run { state.needsCredentialReentry = false }
+            await MainActor.run {
+                state.needsCredentialReentry = false
+                state.needsSubsonicVerification = false
+            }
             return
         }
         let key = ServerCredentials.keychainKey(for: activeID)
@@ -275,7 +296,11 @@ actor ServerService: ServerServiceProtocol {
             let missing = creds == nil || (
                 creds?.password.isEmpty == true && creds?.jellyfinAccessToken?.isEmpty != false
             )
-            await MainActor.run { state.needsCredentialReentry = missing }
+            await MainActor.run {
+                guard state.activeServer?.id == activeID else { return }
+                state.needsCredentialReentry = missing
+                state.needsSubsonicVerification = creds?.password.isEmpty == true && creds?.jellyfinAccessToken?.isEmpty == false
+            }
             if missing {
                 Logger.server.error(
                     "Active server \(activeID, privacy: .public) has no Keychain password — needsCredentialReentry=true"
@@ -348,20 +373,49 @@ actor ServerService: ServerServiceProtocol {
         if let clientInFlight {
             return try await clientInFlight.value
         }
+        let generation = clientGeneration
+        let serverID = await MainActor.run { state.activeServer?.id }
         let task = Task {
             try await self.buildSwiftSonicClient()
         }
         clientInFlight = task
         do {
             let client = try await task.value
+            guard generation == clientGeneration,
+                  await MainActor.run(body: { state.activeServer?.id }) == serverID else {
+                throw CancellationError()
+            }
             clientInFlight = nil
             cachedClient = client
-            cachedClientServerID = await MainActor.run(body: { state.activeServer?.id })
+            cachedClientServerID = serverID
             return client
         } catch {
-            clientInFlight = nil
+            if generation == clientGeneration { clientInFlight = nil }
             throw error
         }
+    }
+
+    func makeLyricsGenerationClient() async throws -> SwiftSonicClient {
+        guard let snapshot = await MainActor.run(body: { state.activeServer }),
+              let url = URL(string: snapshot.baseURL) else {
+            throw CassetteError.serverNotConfigured
+        }
+        let credentials = try await activeCredentials()
+        guard !credentials.password.isEmpty else { throw CassetteError.credentialsMissing }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 90
+        configuration.timeoutIntervalForResource = 120
+        configuration.httpMaximumConnectionsPerHost = 1
+        let transport = CustomHeadersTransport(
+            base: URLSessionTransport(configuration: configuration), headers: credentials.customHeaders
+        )
+        return SwiftSonicClient(
+            configuration: ServerConfiguration(
+                serverURL: url,
+                auth: .tokenAuth(username: snapshot.username, password: credentials.password, reusesSalt: false),
+                clientName: "Cassette", requestTimeout: 90, resourceTimeout: 120
+            ), transport: transport, retryPolicy: .none
+        )
     }
 
     /// Warms Keychain + client construction so the first Home `getAlbumList2` isn't blocked on it.

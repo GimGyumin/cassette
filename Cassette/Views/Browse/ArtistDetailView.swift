@@ -25,18 +25,26 @@ struct ArtistDetailView: View {
     /// Identity of this page instance: a repeated `[ARTIST-PAGE] task start` with a new id means the
     /// page was destroyed and re-created while it was on top (the back-gesture regression signature).
     @State private var pageInstanceID = UUID()
+    @State private var albumRouteToken = UUID()
+    @State private var similarArtistRouteToken = UUID()
 
     init(artist: ArtistID3) {
         self.artist = artist
-        let cid = "artist:\(artist.id)"
-        _artistFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> { $0.id == cid })
+        let itemId = artist.id
+        let type = FavoriteType.artist.rawValue
+        _artistFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> {
+            $0.itemId == itemId && $0.itemType == type
+        })
     }
 
     init(artistId: String, artistName: String, coverArtId: String?) {
         self.init(artist: ArtistID3(id: artistId, name: artistName, coverArt: coverArtId))
     }
 
-    private var isArtistFavorite: Bool { !artistFavoriteMatches.isEmpty }
+    private var isArtistFavorite: Bool {
+        guard let serverId = container?.serverState.activeServer?.id else { return false }
+        return artistFavoriteMatches.contains { $0.serverId == serverId }
+    }
     private var isOnline: Bool { container?.serverState.isOnline == true }
 
     // MARK: Theming — cover extract → refined Apple Music atmosphere.
@@ -98,9 +106,9 @@ struct ArtistDetailView: View {
                         )
                     } else {
                         ScrollView {
-                            VStack(spacing: 0) {
+                            LazyVStack(spacing: 0) {
                                 artistHero(vm: vm)
-                                VStack(alignment: .leading, spacing: CassetteSpacing.xl) {
+                                LazyVStack(alignment: .leading, spacing: CassetteSpacing.xl) {
                                     if let featured = latestRelease(vm) {
                                         featuredReleaseSection(featured)
                                     }
@@ -109,7 +117,7 @@ struct ArtistDetailView: View {
                                     } else if !vm.topSongs.isEmpty {
                                         topSongsSection(vm: vm)
                                     }
-                                    albumsSections(albums)
+                                    albumsSections
                                     if vm.isLoadingSimilarArtists || !vm.similarArtists.isEmpty {
                                         similarArtistsSection(vm: vm)
                                     }
@@ -152,11 +160,8 @@ struct ArtistDetailView: View {
         #if os(iOS)
         .cassetteImmersiveStatusBar(colorScheme: atmosphere.preferredColorScheme)
         .toolbarColorScheme(atmosphere.preferredColorScheme, for: .navigationBar)
-        // Keep UIKit's back button, and arm the edge swipe explicitly: this page is normally pushed
-        // *from* an album (or another detail) page, where the gesture delegate installed for the
-        // page below refuses a pop it was not set up for, so the swipe back would do nothing.
+        // Let NavigationStack retain its own interactive pop recognizers.
         .navigationBarBackButtonHidden(false)
-        .enableSwipeBack()
         #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -186,6 +191,12 @@ struct ArtistDetailView: View {
             await viewModel?.load()
             await viewModel?.loadTopSongs()
             await viewModel?.loadSimilarArtists()
+        }
+        .onAppear {
+            Logger.ui.debug("[NAV] artist appear instance=\(pageInstanceID, privacy: .public) artist=\(artist.id, privacy: .public)")
+        }
+        .onDisappear {
+            Logger.ui.debug("[NAV] artist disappear instance=\(pageInstanceID, privacy: .public) artist=\(artist.id, privacy: .public)")
         }
         .sheet(item: $selectedOutOfLibraryArtist) { rec in
             OutOfLibraryArtistSheet(
@@ -249,9 +260,7 @@ struct ArtistDetailView: View {
                         Image(systemName: "info")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(headerTextColor)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Circle())
-                            .background(.ultraThinMaterial, in: Circle())
+                            .cassetteGlassButton(size: 44)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(String(localized: "About", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
@@ -281,23 +290,30 @@ struct ArtistDetailView: View {
                     // Smaller favorite star.
                     Button {
                         HapticFeedback.light.trigger()
+                        let wasFavorite = isArtistFavorite
                         Task {
-                            if isArtistFavorite {
-                                try? await container?.favoritesService.unstar(itemType: .artist, itemId: artist.id)
-                            } else {
-                                try? await container?.favoritesService.star(itemType: .artist, itemId: artist.id)
+                            guard let container else { return }
+                            do {
+                                if wasFavorite {
+                                    try await container.favoritesService.unstar(itemType: .artist, itemId: artist.id)
+                                } else {
+                                    try await container.favoritesService.star(itemType: .artist, itemId: artist.id)
+                                }
+                            } catch {
+                                container.toastService.showError(error.localizedDescription)
                             }
                         }
                     } label: {
                         Image(systemName: isArtistFavorite ? "star.fill" : "star")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(isArtistFavorite ? .white : headerTextColor)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Circle())
-                            .background(.ultraThinMaterial, in: Circle())
+                            .cassetteGlassButton(
+                                size: 44,
+                                tint: isArtistFavorite ? Color.cassetteAccent.opacity(0.78) : nil
+                            )
                     }
                     .buttonStyle(.plain)
-                    .disabled(!isOnline)
+                    .disabled(container?.serverState.activeServer == nil)
                     .accessibilityLabel(
                         isArtistFavorite
                             ? String(localized: "Remove from Favorites", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
@@ -318,7 +334,7 @@ struct ArtistDetailView: View {
         let analysis = await Task.detached(priority: .utility) {
             AlbumColorAnalyzer.analyze(from: image, bottomStrip: true)?.raw
         }.value
-        guard let analysis else { return }
+        guard let analysis, !Task.isCancelled else { return }
         _ = colorExtractor.storeColor(packed: analysis.packedBackground, for: coverArtId)
         _ = colorExtractor.storeBottomStripColor(packed: analysis.packedBackground, for: coverArtId)
         withAnimation(CassetteAnimation.theme) {
@@ -330,11 +346,11 @@ struct ArtistDetailView: View {
 
     /// The most recent release — featured + the hero fallback cover.
     private func latestRelease(_ vm: ArtistDetailViewModel) -> AlbumID3? {
-        ArtistAlbumCategorizer.sortedByNewest(vm.artist?.album ?? []).first
+        vm.latestRelease
     }
 
     private func sectionHeader(_ title: String) -> some View {
-        Text(title)
+        Text(String(localized: String.LocalizationValue(title), bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             .font(.cassetteSectionTitle)
             .foregroundStyle(headerTextColor)
             .padding(.horizontal, CassetteSpacing.l)
@@ -344,9 +360,10 @@ struct ArtistDetailView: View {
     private func featuredReleaseSection(_ album: AlbumID3) -> some View {
         VStack(alignment: .leading, spacing: CassetteSpacing.s) {
             sectionHeader("Latest Release")
-            NavigationLink(value: HomeDestination.album(album)) {
+            DetailNavigationLink(destination: HomeDestination.albumPush(id: album.id, name: album.name,
+                                                             coverArtId: album.coverArt, token: albumRouteToken)) {
                 HStack(spacing: CassetteSpacing.m) {
-                    CoverArtView(id: album.coverArt ?? album.id, size: 200, tier: .hero)
+                    CoverArtView(id: album.coverArt ?? album.id, size: 200, tier: .thumb)
                         .frame(width: 88, height: 88)
                         .clipShape(RoundedRectangle(cornerRadius: CassetteCornerRadius.standard, style: .continuous))
                     VStack(alignment: .leading, spacing: 4) {
@@ -423,14 +440,22 @@ struct ArtistDetailView: View {
     }
 
     /// Albums grouped by release type (Albums, Singles & EPs, Compilations, Live Album).
-    private func albumsSections(_ albums: [AlbumID3]) -> some View {
-        ForEach(ArtistAlbumCategorizer.sections(from: albums), id: \.0) { section, items in
+    private var albumsSections: some View {
+        ForEach(viewModel?.albumSections ?? [], id: \.0) { section, items in
             VStack(alignment: .leading, spacing: CassetteSpacing.s) {
                 sectionHeader(section.rawValue)
+                if items.isEmpty {
+                    Text(String(localized: "No compilations in the library.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        .font(.subheadline)
+                        .foregroundStyle(headerSecondaryColor)
+                        .padding(.horizontal, CassetteSpacing.l)
+                        .padding(.vertical, CassetteSpacing.s)
+                }
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: CassetteSpacing.m) {
                         ForEach(items) { album in
-                            NavigationLink(value: HomeDestination.album(album)) {
+                            DetailNavigationLink(destination: HomeDestination.albumPush(id: album.id, name: album.name,
+                                                                             coverArtId: album.coverArt, token: albumRouteToken)) {
                                 VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
                                     CoverArtView(id: album.coverArt ?? album.id, size: 480, tier: .hero, contentMode: .fit)
                                         .frame(width: 160, height: 160)
@@ -466,7 +491,8 @@ struct ArtistDetailView: View {
                 LazyHStack(alignment: .top, spacing: CassetteSpacing.m) {
                     // Most recent first (albums without a date sort last).
                     ForEach(ArtistAlbumCategorizer.sortedByNewest(albums)) { album in
-                        NavigationLink(value: HomeDestination.album(album)) {
+                        DetailNavigationLink(destination: HomeDestination.albumPush(id: album.id, name: album.name,
+                                                                         coverArtId: album.coverArt, token: albumRouteToken)) {
                             VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
                                 CoverArtView(id: album.coverArt ?? album.id, size: 480, tier: .hero)
                                     .frame(width: 160, height: 160)
@@ -603,7 +629,8 @@ struct ArtistDetailView: View {
                         ForEach(vm.similarArtists) { rec in
                             Group {
                                 if rec.inLibrary {
-                                    NavigationLink(value: HomeDestination.artist(ArtistID3(id: rec.id, name: rec.name))) {
+                                    DetailNavigationLink(destination: HomeDestination.artistPush(id: rec.id, name: rec.name,
+                                                                                     coverArtId: nil, token: similarArtistRouteToken)) {
                                         SimilarArtistCell(
                                             recommendation: rec,
                                             externalImageURL: vm.outOfLibraryArtistImages[rec.id] ?? nil,

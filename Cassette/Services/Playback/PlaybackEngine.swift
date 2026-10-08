@@ -39,6 +39,11 @@ nonisolated protocol AudioStreamingPlaybackEngine: PlaybackEngine {
     /// Engine callbacks (state changes, EOF, errors). Owned by the engine, wired once by
     /// `PlayerService`; a fake engine can drive them to simulate a transition in tests.
     var delegate: AudioPlayerDelegate? { get set }
+
+    /// AudioStreaming announces a queued entry when it selects it, before decoded audio is
+    /// necessarily moving. If that hand-off parks in `waitingForData`, wake the transport without
+    /// replacing the already-buffered entry.
+    func recoverQueuedTransitionIfNeeded()
 }
 
 /// The AVFoundation graph the app inserts nodes into — the ReplayGain EQ unit and the beat tap.

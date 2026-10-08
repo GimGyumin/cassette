@@ -98,37 +98,10 @@ struct CassetteShareButton: View {
     }
 
     private func createShareURL(itemID: String, itemDescription: String) async throws -> URL {
-        guard let server = container?.serverState.activeServer else {
-            logger.error("🔴 No active server")
-            throw ShareError.invalidShareURL
-        }
-        guard let baseURL = URL(string: server.baseURL) else {
-            logger.error("🔴 Invalid baseURL: \(server.baseURL, privacy: .public)")
-            throw ShareError.invalidShareURL
-        }
-        logger.debug("🟡 Server: \(server.baseURL, privacy: .public) user=\(server.username, privacy: .private)")
-
-        let creds = try await container?.serverService.activeCredentials()
-        logger.debug("🟡 Credentials: password=\(creds?.password.isEmpty == false ? "SET" : "MISSING", privacy: .public)")
-        guard let password = creds?.password, !password.isEmpty else {
-            logger.error("🔴 No password in credentials")
-            throw ShareError.invalidShareURL
-        }
-
-        let config = ServerConfiguration(
-            serverURL: baseURL,
-            username: server.username,
-            password: password
-        )
-        let transport = CustomHeadersTransport(headers: creds?.customHeaders ?? [:])
-        let client = SwiftSonicClient(configuration: config, transport: transport)
-
-        let options = shareSettings.makeOptions(trackTitle: itemDescription)
-        logger.debug("🟡 Options: allowDL=\(options.allowDownloads) original=\(options.shareOriginal) expires=\(String(describing: options.expires))")
-        return try await client.createShareURL(
-            id: itemID,
-            options: options
-        )
+        guard let container else { throw ShareError.invalidShareURL }
+        let client = try await container.serverService.makeSwiftSonicClient()
+        return try await client.createShareURL(id: itemID,
+            options: shareSettings.makeOptions(trackTitle: itemDescription))
     }
 }
 
@@ -248,34 +221,9 @@ struct CassetteShareButtonWithOptions: View {
     }
 
     private func createShareURL(itemID: String, options: ShareOptions) async throws -> URL {
-        guard let server = container?.serverState.activeServer else {
-            logger.error("🔴 No active server")
-            throw ShareError.invalidShareURL
-        }
-        guard let baseURL = URL(string: server.baseURL) else {
-            logger.error("🔴 Invalid baseURL: \(server.baseURL, privacy: .public)")
-            throw ShareError.invalidShareURL
-        }
-        logger.debug("🟡 Server: \(server.baseURL, privacy: .public)")
-
-        let creds = try await container?.serverService.activeCredentials()
-        guard let password = creds?.password, !password.isEmpty else {
-            logger.error("🔴 No password in credentials")
-            throw ShareError.invalidShareURL
-        }
-
-        let config = ServerConfiguration(
-            serverURL: baseURL,
-            username: server.username,
-            password: password
-        )
-        let transport = CustomHeadersTransport(headers: creds?.customHeaders ?? [:])
-        let client = SwiftSonicClient(configuration: config, transport: transport)
-        logger.debug("🟡 Options: allowDL=\(options.allowDownloads) original=\(options.shareOriginal)")
-        return try await client.createShareURL(
-            id: itemID,
-            options: options
-        )
+        guard let container else { throw ShareError.invalidShareURL }
+        let client = try await container.serverService.makeSwiftSonicClient()
+        return try await client.createShareURL(id: itemID, options: options)
     }
 }
 

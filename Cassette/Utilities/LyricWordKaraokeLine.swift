@@ -104,21 +104,15 @@ private struct KaraokeWord: View {
                 .font(font)
                 .foregroundStyle(Color.white.opacity(dimOpacity))
             // bright fill — masked left→right
-            if showMask {
-                Text(verbatim: displayStr)
-                    .font(font)
-                    .foregroundStyle(Color.white.opacity(brightOpacity))
-                    .mask(alignment: .leading) {
-                        GeometryReader { geo in
-                            Rectangle()
-                                .frame(width: geo.size.width * fillPct)
-                        }
+            Text(verbatim: displayStr)
+                .font(font)
+                .foregroundStyle(Color.white.opacity(brightOpacity))
+                .mask(alignment: .leading) {
+                    GeometryReader { geo in
+                        Rectangle()
+                            .frame(width: geo.size.width * (rm ? (role > 0 ? 1 : 0) : fillPct))
                     }
-            } else if showBright {
-                Text(verbatim: displayStr)
-                    .font(font)
-                    .foregroundStyle(Color.white.opacity(brightOpacity))
-            }
+                }
         }
         .scaleEffect(rm ? 1.0 : (isCurrent ? 1.06 : 1.0))
         .animation(rm ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: isCurrent)
@@ -171,8 +165,6 @@ private struct KaraokeWord: View {
         guard e > b else { return 1 }
         return min(1, max(0, Double(ms - b) / Double(e - b)))
     }
-    private var showMask: Bool { role == 1 && fillPct > 0 && fillPct < 1 && !rm }
-    private var showBright: Bool { (role == 1 && fillPct >= 1) || role == 2 }
     private var dimOpacity: Double { role == 0 ? (sec ? 0.42 : 0.45) : (sec ? 0.55 : 0.45) }
     private var brightOpacity: Double { sec ? 0.78 : 1.0 }
 }

@@ -9,8 +9,8 @@ import OSLog
 
 /// Persists and restores playback sessions via SwiftData (CloudKit-backed).
 ///
-/// Called by PlayerService on track changes and every 5 s during active playback,
-/// and flushed in full when the app enters background.
+/// Called on queue/track changes and pause, with a 30 s position checkpoint during playback.
+/// Backgrounding flushes the current position immediately.
 ///
 /// Without a unique constraint (CloudKit limitation), multiple `id == "current"`
 /// rows can exist after sync. Restore and save use last-write-wins on `lastUpdated`.
@@ -20,6 +20,9 @@ actor PlaybackSessionService {
     private lazy var modelContext: ModelContext = ModelContext(modelContainer)
     /// Last persisted position — skip tiny deltas so SwiftData merges don't hitch the UI.
     private var lastSavedPosition: TimeInterval?
+    private var lastSavedPayload: SessionPayload?
+    private var lastSavedQueueData: Data?
+    private var lastSavedUpdate: Date?
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -28,30 +31,51 @@ actor PlaybackSessionService {
     /// Full save — queue + position + current track metadata + repeat mode.
     func save(playerState: SessionPayload) {
         let session = fetchOrCreateSession()
+        // A newer CloudKit winner invalidates our local no-op/queue cache.
+        guard playerState != lastSavedPayload || session.lastUpdated != lastSavedUpdate else { return }
+        let queueChanged = lastSavedPayload?.queue != playerState.queue
+            || session.queueData != lastSavedQueueData
         session.update(
             currentIndex: playerState.currentIndex,
             currentPosition: playerState.currentPosition,
             queue: playerState.queue,
             currentTrack: playerState.currentTrack,
-            repeatMode: playerState.repeatMode
+            repeatMode: playerState.repeatMode,
+            encodeQueue: queueChanged
         )
         do {
             try modelContext.save()
+            lastSavedPayload = playerState
+            lastSavedPosition = playerState.currentPosition
+            lastSavedQueueData = session.queueData
+            lastSavedUpdate = session.lastUpdated
         } catch {
             Logger.session.warning("PlaybackSessionService: save failed — \(error)")
         }
         Logger.session.debug("Session saved: track='\(playerState.currentTrack?.title ?? "nil", privacy: .private)', pos=\(playerState.currentPosition, format: .fixed(precision: 1), privacy: .public)s, queue=\(playerState.queue.count, privacy: .public) tracks")
     }
 
-    /// Lightweight position-only save — called every 5 s during active playback.
+    /// Lightweight position-only checkpoint, also used for immediate background flushes.
     func savePosition(_ position: TimeInterval) {
-        if let last = lastSavedPosition, abs(position - last) < 1.0 { return }
+        guard position.isFinite, position >= 0 else { return }
         guard let session = fetchWinningSession() else { return }
+        let matchesLastSave = session.lastUpdated == lastSavedUpdate
+        if matchesLastSave, let last = lastSavedPosition, abs(position - last) < 1.0 { return }
         session.currentPosition = position
         session.lastUpdated = Date()
         do {
             try modelContext.save()
             lastSavedPosition = position
+            // Preserve the known queue for the next full save, but don't mistake an older
+            // pause snapshot for the now-persisted position.
+            if matchesLastSave, let saved = lastSavedPayload {
+                lastSavedPayload = SessionPayload(currentIndex: saved.currentIndex, currentPosition: position,
+                    queue: saved.queue, currentTrack: saved.currentTrack, repeatMode: saved.repeatMode)
+            } else {
+                lastSavedPayload = nil
+            }
+            lastSavedQueueData = session.queueData
+            lastSavedUpdate = session.lastUpdated
         } catch {
             Logger.session.warning("PlaybackSessionService: savePosition failed — \(error)")
         }
@@ -60,6 +84,7 @@ actor PlaybackSessionService {
     /// Extracts and returns restoration data, keeping @Model objects on this actor's context.
     /// Applies last-write-wins across CloudKit duplicates, then prunes losers.
     func loadRestoredSession() -> RestoredSession? {
+        resetSaveCache()
         guard let session = consolidateToWinningSession() else {
             Logger.session.info("No persisted session found")
             return nil
@@ -88,6 +113,7 @@ actor PlaybackSessionService {
     }
 
     func clear() {
+        resetSaveCache()
         let sessions = fetchAllCurrentSessions()
         guard !sessions.isEmpty else { return }
         for session in sessions {
@@ -102,6 +128,13 @@ actor PlaybackSessionService {
     }
 
     // MARK: - LWW helpers
+
+    private func resetSaveCache() {
+        lastSavedPosition = nil
+        lastSavedPayload = nil
+        lastSavedQueueData = nil
+        lastSavedUpdate = nil
+    }
 
     private func fetchOrCreateSession() -> PlaybackSession {
         if let existing = consolidateToWinningSession() { return existing }
@@ -147,7 +180,7 @@ actor PlaybackSessionService {
 
 // MARK: - SessionPayload
 
-nonisolated struct SessionPayload: Sendable {
+nonisolated struct SessionPayload: Sendable, Equatable {
     let currentIndex: Int
     let currentPosition: TimeInterval
     let queue: [DisplayableSong]

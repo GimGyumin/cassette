@@ -31,6 +31,7 @@ struct MainTabView: View {
     @State private var playlistsPath = NavigationPath()
     @State private var downloadsPath = NavigationPath()
     @State private var selectedTab: AppTab = .home
+    @State private var mountedTabs: Set<AppTab> = [.home]
     @State private var showingFullPlayer = false
     @State private var openPlayerWithLyrics = false
     @State private var openPlayerWithQueue = false
@@ -82,6 +83,7 @@ struct MainTabView: View {
                 if newValue == .search, selectedTab == .search {
                     NotificationCenter.default.post(name: .cassetteFocusSearch, object: nil)
                 }
+                mountedTabs.insert(newValue)
                 selectedTab = newValue
             }
         )
@@ -109,6 +111,8 @@ struct MainTabView: View {
                         .miniPlayerBottomMargin()
                     #endif
                 }
+                .environment(\.detailNavigationPath, $searchPath)
+                .onChange(of: searchPath.count) { old, new in logPathChange(.search, from: old, to: new) }
                 #if os(macOS)
                 .searchable(
                     text: $searchText,
@@ -126,6 +130,8 @@ struct MainTabView: View {
                             homeDestinationView(destination)
                         }
                 }
+                .environment(\.detailNavigationPath, $homePath)
+                .onChange(of: homePath.count) { old, new in logPathChange(.home, from: old, to: new) }
             }
 
             Tab("Discover", systemImage: "safari.fill", value: AppTab.discover) {
@@ -136,10 +142,12 @@ struct MainTabView: View {
                             homeDestinationView(destination)
                         }
                 }
+                .environment(\.detailNavigationPath, $discoverPath)
+                .onChange(of: discoverPath.count) { old, new in logPathChange(.discover, from: old, to: new) }
             }
 
-            // Library hub — primary on iPhone tab bar; de-emphasized in the iPad sidebar
-            // (browse destinations live in the Library / Playlists sections below).
+            // Library hub — keep it available in every tab presentation, including the
+            // iPad floating tab bar and sidebar.
             Tab("Library", systemImage: "square.stack.fill", value: AppTab.library) {
                 NavigationStack(path: $libraryPath) {
                     HomeView()
@@ -148,11 +156,9 @@ struct MainTabView: View {
                             libraryDestinationView(destination)
                         }
                 }
+                .environment(\.detailNavigationPath, $libraryPath)
+                .onChange(of: libraryPath.count) { old, new in logPathChange(.library, from: old, to: new) }
             }
-            #if os(iOS)
-            .defaultVisibility(showsSidebarLibrarySections ? .hidden : .automatic, for: .sidebar)
-            #endif
-
             #if os(iOS)
             if showsSidebarLibrarySections {
                 TabSection(String(localized: "Library", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
@@ -161,24 +167,32 @@ struct MainTabView: View {
                             lazySidebarRoot(when: .recentlyAdded) { RecentlyAddedAlbumsView() }
                                 .navigationDestination(for: HomeDestination.self) { libraryDestinationView($0) }
                         }
+                        .environment(\.detailNavigationPath, $recentlyAddedPath)
+                        .onChange(of: recentlyAddedPath.count) { old, new in logPathChange(.recentlyAdded, from: old, to: new) }
                     }
                     Tab("Artists", systemImage: "music.mic", value: AppTab.artists) {
                         NavigationStack(path: $artistsPath) {
                             lazySidebarRoot(when: .artists) { ArtistListView() }
                                 .navigationDestination(for: HomeDestination.self) { libraryDestinationView($0) }
                         }
+                        .environment(\.detailNavigationPath, $artistsPath)
+                        .onChange(of: artistsPath.count) { old, new in logPathChange(.artists, from: old, to: new) }
                     }
                     Tab("Albums", systemImage: "square.stack", value: AppTab.albums) {
                         NavigationStack(path: $albumsPath) {
                             lazySidebarRoot(when: .albums) { AlbumsListView() }
                                 .navigationDestination(for: HomeDestination.self) { libraryDestinationView($0) }
                         }
+                        .environment(\.detailNavigationPath, $albumsPath)
+                        .onChange(of: albumsPath.count) { old, new in logPathChange(.albums, from: old, to: new) }
                     }
                     Tab("Favorites", systemImage: "star", value: AppTab.favorites) {
                         NavigationStack(path: $favoritesPath) {
                             lazySidebarRoot(when: .favorites) { FavoritesView() }
                                 .navigationDestination(for: HomeDestination.self) { libraryDestinationView($0) }
                         }
+                        .environment(\.detailNavigationPath, $favoritesPath)
+                        .onChange(of: favoritesPath.count) { old, new in logPathChange(.favorites, from: old, to: new) }
                     }
                     Tab("Downloads", systemImage: "arrow.down.circle", value: AppTab.downloads) {
                         NavigationStack(path: $downloadsPath) {
@@ -186,6 +200,8 @@ struct MainTabView: View {
                             lazySidebarRoot(when: .downloads, serverBacked: false) { DownloadedView() }
                                 .navigationDestination(for: HomeDestination.self) { libraryDestinationView($0) }
                         }
+                        .environment(\.detailNavigationPath, $downloadsPath)
+                        .onChange(of: downloadsPath.count) { old, new in logPathChange(.downloads, from: old, to: new) }
                     }
                 }
                 .defaultVisibility(.hidden, for: .tabBar)
@@ -196,6 +212,8 @@ struct MainTabView: View {
                             lazySidebarRoot(when: .playlists) { PlaylistListView() }
                                 .navigationDestination(for: HomeDestination.self) { libraryDestinationView($0) }
                         }
+                        .environment(\.detailNavigationPath, $playlistsPath)
+                        .onChange(of: playlistsPath.count) { old, new in logPathChange(.playlists, from: old, to: new) }
                     }
                 }
                 .sectionActions {
@@ -260,14 +278,14 @@ struct MainTabView: View {
     }
 
     #if os(iOS)
-    /// Mount heavy browse roots only while selected — keeps Home cold-start light.
+    /// Mount on first selection and preserve the root thereafter, including scroll/task state.
     @ViewBuilder
     private func lazySidebarRoot<Content: View>(
         when tab: AppTab,
         serverBacked: Bool = true,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        if selectedTab == tab {
+        if selectedTab == tab || mountedTabs.contains(tab) {
             if serverBacked {
                 reachabilityGated { content() }
             } else {
@@ -299,6 +317,8 @@ struct MainTabView: View {
             FavoritesView()
         case .libraryDownloads:
             DownloadedView()
+        case .albumPush(let id, let name, let coverArtId, _):
+            AlbumDetailView(albumId: id, albumName: name, coverArtId: coverArtId)
         case .album(let album):
             AlbumDetailView(album: album)
         case .artist(let artist):
@@ -335,6 +355,10 @@ struct MainTabView: View {
         case .personalMix(let kind):
             PersonalMixDetailView(kind: kind)
         }
+    }
+
+    private func logPathChange(_ tab: AppTab, from old: Int, to new: Int) {
+        Logger.ui.debug("[NAV] path tab=\(String(describing: tab), privacy: .public) \(old, privacy: .public) -> \(new, privacy: .public) tabs=\(tabsInstanceID, privacy: .public)")
     }
 
     var body: some View {
@@ -401,6 +425,7 @@ struct MainTabView: View {
             }
         }
         .toolbarColorScheme(resolvedColorScheme, for: .tabBar)
+        .onChange(of: selectedTab) { _, tab in mountedTabs.insert(tab) }
         .sheet(isPresented: $showAccountSheet) {
             AccountSheetView()
                 .presentationDetents([.large])
@@ -565,6 +590,7 @@ struct MainTabView: View {
     }
 
     private func replacePath(_ path: NavigationPath, in tab: AppTab) {
+        Logger.ui.debug("[NAV] replace requested tab=\(String(describing: tab), privacy: .public) count=\(path.count, privacy: .public)")
         switch tab {
         case .home: homePath = path
         case .library: libraryPath = path
@@ -580,6 +606,7 @@ struct MainTabView: View {
     }
 
     private func appendPath(_ destination: HomeDestination, in tab: AppTab) {
+        Logger.ui.debug("[NAV] append requested tab=\(String(describing: tab), privacy: .public)")
         switch tab {
         case .home: homePath.append(destination)
         case .library: libraryPath.append(destination)
@@ -593,6 +620,7 @@ struct MainTabView: View {
         case .downloads: downloadsPath.append(destination)
         }
     }
+
 
     #if os(iOS)
     /// True while any view controller sits above the key window's root (the full player's cover, a sheet, an

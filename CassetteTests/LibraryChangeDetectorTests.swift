@@ -10,6 +10,16 @@ import Foundation
 @Suite("LibraryChangeDetector")
 struct LibraryChangeDetectorTests {
 
+    @Test func changeCheckDoesNotPresentPreparation() {
+        #expect(LibraryPreparationPhase.checking.isBusy)
+        for phase in [LibraryPreparationPhase.idle, .checking, .complete, .failed] {
+            #expect(!phase.isPreparing)
+        }
+        for phase in [LibraryPreparationPhase.indexing, .covers, .syncing] {
+            #expect(phase.isPreparing)
+        }
+    }
+
     @Test func unknownServerCountNeverPrepares() {
         // A server that has never scanned reports no count — nothing to compare, so block nothing.
         #expect(!LibraryChangeDetector.needsPreparation(storedCount: 100, serverCount: nil))

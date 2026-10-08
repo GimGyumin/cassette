@@ -41,25 +41,50 @@ struct ExternalProvidersSettingsView: View {
     @State private var vm: ExternalProvidersSettingsViewModel?
     @State private var showingAdd = false
     @State private var editingProvider: ExternalReleaseProvider?
+    @AppStorage(IntegrationIntroPreference.externalAppsKey) private var hasSeenIntro = false
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        String(localized: key, bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+    }
 
     var body: some View {
         Group {
-            if let vm {
+            if !hasSeenIntro {
+                CassetteSplashView(
+                    title: text("Get Started with External Apps"),
+                    summary: text("Choose where Cassette opens releases, or add a custom search link."),
+                    icon: "arrow.up.forward.square.fill",
+                    accent: .orange,
+                    features: [
+                        .init(icon: "square.on.square", title: text("Open releases in another app"),
+                              detail: text("Choose a service when you browse a new release.")),
+                        .init(icon: "link", title: text("Add your own provider"),
+                              detail: text("Use a search link for the service you prefer."))
+                    ],
+                    footnote: nil,
+                    buttonTitle: text("Get Started"),
+                    buttonIdentifier: "externalApps.getStarted.continue",
+                    onContinue: { hasSeenIntro = true }
+                )
+                .accessibilityIdentifier("externalApps.getStarted")
+            } else if let vm {
                 content(vm: vm)
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationTitle(String(localized: "Open Releases In", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        .navigationTitle(hasSeenIntro ? text("External Apps") : text("Get Started with External Apps"))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { showingAdd = true } label: {
-                    Image(systemName: "plus")
+            if hasSeenIntro {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showingAdd = true } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel(String(localized: "Add Provider", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 }
-                .accessibilityLabel(String(localized: "Add Provider", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             }
         }
         #endif

@@ -6,23 +6,33 @@
 import Foundation
 import SwiftData
 
-// MARK: - AUDIT NOTE — cascade side-effect of record()
-//
-// record() creates a fresh ModelContext per call (correct isolation). However,
-// ctx.save() posts a store-level change notification that mainContext auto-merges.
-// For NEW inserts: the merge sets all SearchHistoryEntry properties through @Model's
-// @Observable setters in mainContext, firing coverArtId/serverId observations even
-// though those values were never mutated post-init.
-// For UPDATE (existing entry): only visitedAt is written, but the SwiftData merge
-// still refreshes the full object in mainContext → same observation spray.
-// The save() is not the problem; the @Query's non-entity-scoped re-evaluation is.
-// See the AUDIT block in SearchView.swift for the full cascade map and fix direction.
+// History views consume immutable snapshots and history-specific notifications.
+// Unrelated playback/favorite saves no longer re-fetch the list through mainContext's @Query.
 
 actor SearchHistoryService {
+    nonisolated static let didChange = Notification.Name("cassetteSearchHistoryChanged")
     private let container: ModelContainer
 
     init(container: ModelContainer) {
         self.container = container
+    }
+
+    /// Fetch and snapshot on this actor, away from keyboard/layout work and mainContext merges.
+    func recent(serverId: String) -> [SearchHistoryRowData] {
+        let ctx = ModelContext(container)
+        ctx.autosaveEnabled = false
+        var descriptor = FetchDescriptor<SearchHistoryEntry>(
+            predicate: #Predicate { $0.serverId == serverId },
+            sortBy: [SortDescriptor(\.visitedAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 50
+        return ((try? ctx.fetch(descriptor)) ?? []).map(SearchHistoryRowData.init(entry:))
+    }
+
+    private func notifyChange(serverId: String) async {
+        await MainActor.run {
+            NotificationCenter.default.post(name: Self.didChange, object: serverId)
+        }
     }
 
     func record(itemId: String, itemType: String, displayName: String,
@@ -50,7 +60,10 @@ actor SearchHistoryService {
                 entries.prefix(entries.count - 50).forEach { ctx.delete($0) }
             }
         }
-        try? ctx.save()
+        do {
+            try ctx.save()
+            await notifyChange(serverId: serverId)
+        } catch { return }
     }
 
     func clear(serverId: String) async {
@@ -60,7 +73,10 @@ actor SearchHistoryService {
         )
         if let entries = try? ctx.fetch(descriptor) {
             entries.forEach { ctx.delete($0) }
-            try? ctx.save()
+            do {
+                try ctx.save()
+                await notifyChange(serverId: serverId)
+            } catch { return }
         }
     }
 }

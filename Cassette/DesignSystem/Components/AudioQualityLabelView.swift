@@ -98,14 +98,14 @@ struct AudioQualityLabelView: View {
                 Image(systemName: "speaker.wave.3.fill")
                     .font(.system(size: 10, weight: .semibold))
                 Text(quality.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
             }
         case .hiResLossless, .lossless:
             HStack(spacing: 4) {
                 losslessMark(height: 9)
                 Text(quality.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
             }
         }

@@ -26,8 +26,8 @@ extension PlayerService {
     /// network, multichannel routing, device budget); this method only carries it out.
     func ensureGaplessPreparation() async {
         guard gaplessEnabled, !isTrackTransitionPending, !isHandlingEndOfTrack,
-              pendingSeekTarget == nil,
-              gaplessBridgeNext == nil, gaplessPreparationTask == nil,
+              seekState == .idle,
+              gaplessBridge.next == nil, gaplessPreparationTask == nil,
               Date() >= nextGaplessPreparationAttempt else { return }
         nextGaplessPreparationAttempt = Date().addingTimeInterval(5)
         let epoch = playbackEpoch
@@ -53,21 +53,21 @@ extension PlayerService {
         // Foreground audio gets the connection first. A cold server may need several seconds
         // before the engine is actually playing; don't race it with next-track resolution.
         for _ in 0..<10 {
-            do { try await Task.sleep(for: .seconds(2)) } catch { return }
             guard epoch == playbackEpoch, !Task.isCancelled else { return }
-            let isPlaying = usingSystemPlayer
+            let isPlaying = systemPlayback.isActive
                 ? systemEngine.state == .playing : engine.state == .playing
             if isPlaying {
                 await scheduleGaplessPreQueue(current: current, serverId: serverId, epoch: epoch)
                 return
             }
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
         }
     }
 
     func scheduleGaplessPreQueue(current: DisplayableSong, serverId: UUID, epoch: UInt64) async {
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
-        guard gaplessBridgeNext == nil else { return }
-        let systemGeneration = systemPlayerGeneration
+        guard gaplessBridge.next == nil else { return }
+        let systemGeneration = systemPlayback.generation
         let preparationGeneration = gaplessPreparationGeneration
         let (queue, currentIndex, repeatMode) = await MainActor.run { (state.queue, state.currentIndex, state.repeatMode) }
         guard repeatMode != .one else { return }
@@ -89,7 +89,7 @@ extension PlayerService {
         // bridge — AudioStreaming hardcodes a stereo output and would silently downmix surround
         // beds / Atmos to stereo. Skipping the bridge lets end-of-track fall through to play(),
         // which re-routes the track through AVPlayer and preserves multichannel.
-        let requiresSystemPlayer = !usingSystemPlayer && AudioQualityClassifier.requiresSystemPlayer(next)
+        let requiresSystemPlayer = !systemPlayback.isActive && AudioQualityClassifier.requiresSystemPlayer(next)
 
         func decision(nextSourceIsLocal: Bool, allowMeteredNetwork: Bool) -> GaplessDecision {
             GaplessPolicy.decision(
@@ -125,19 +125,16 @@ extension PlayerService {
         }
 
         guard epoch == playbackEpoch, !Task.isCancelled,
-              systemGeneration == systemPlayerGeneration,
-              usingSystemPlayer || nextSource.url.pathExtension.lowercased() != "m3u8" else { return }
+              systemGeneration == systemPlayback.generation,
+              systemPlayback.isActive || nextSource.url.pathExtension.lowercased() != "m3u8" else { return }
         let nextIsStillQueued = await MainActor.run {
             state.repeatMode != .one && state.queue.indices.contains(state.currentIndex + 1)
                 && state.queue[state.currentIndex + 1].id == next.id
         }
         guard nextIsStillQueued, epoch == playbackEpoch, !Task.isCancelled,
-              gaplessBridgeNext == nil, preparationGeneration == gaplessPreparationGeneration else { return }
-        gaplessBridgeNext = next
-        gaplessBridgeSource = nextSource
-        gaplessBridgeEpoch = epoch
-        bridgedEntryDidStart = false
-        if usingSystemPlayer {
+              gaplessBridge.next == nil, preparationGeneration == gaplessPreparationGeneration else { return }
+        gaplessBridge.arm(next: next, source: nextSource, epoch: epoch)
+        if systemPlayback.isActive {
             guard systemEngine.prepareNext(url: nextSource.url, headers: nextSource.customHeaders) else {
                 cancelGaplessBridge()
                 return
@@ -157,13 +154,42 @@ extension PlayerService {
 
     // MARK: - End of track
 
+    /// Reuse AVQueuePlayer's native prepared item for an explicit next-track request.
+    /// Claim the transition before emitting engine events so EOF and manual next cannot both pop.
+    func advancePreparedSystemTrack(tracks: [DisplayableSong], startIndex: Int) async -> Bool {
+        guard systemPlayback.isActive, progressTask != nil, !isRestoringSession,
+              !isTrackTransitionPending, !isHandlingEndOfTrack,
+              gaplessBridge.epoch == playbackEpoch, let next = gaplessBridge.next,
+              let source = gaplessBridge.source, tracks.indices.contains(startIndex),
+              tracks[startIndex].id == next.id else { return false }
+        let epoch = playbackEpoch
+        let requestID = playbackRequestID
+        let matches = await MainActor.run {
+            state.playbackState == .playing && startIndex == state.currentIndex + 1
+                && tracks.map(\.id) == state.queue.map(\.id)
+        }
+        guard matches, epoch == playbackEpoch, requestID == playbackRequestID, !Task.isCancelled,
+              !isHandlingEndOfTrack, !isTrackTransitionPending else { return false }
+        isHandlingEndOfTrack = true
+        defer { isHandlingEndOfTrack = false }
+        guard systemEngine.advanceToPreparedNext(expectedURL: source.url),
+              systemEngine.consumeQueuedTransition() else { return false }
+        gaplessBridge.wasSelected = true
+        stopSystemPlayerProgressWatchdog()
+        let advanced = await finalizeGaplessBridge(epoch: epoch, completedNaturally: false)
+        if systemPlayback.isActive { startSystemPlayerProgressWatchdog(generation: systemPlayback.generation) }
+        return advanced
+    }
+
     func handleEndOfTrack(
         engineConfirmed: Bool = false,
         finishedEntryIdentifier: String? = nil
     ) async {
-        guard finishedEntryIdentifier == nil || !usingSystemPlayer else { return }
+        guard seekState == .idle, Date() >= systemPlayback.seekSettleDeadline,
+              !isTrackTransitionPending else { return }
+        guard finishedEntryIdentifier == nil || !systemPlayback.isActive else { return }
         // AVQueuePlayer owns the armed transition; its currentItem observer confirms the swap.
-        if usingSystemPlayer, systemEngine.hasQueuedItem { return }
+        if systemPlayback.isActive, systemEngine.hasQueuedItem { return }
         guard !isRestoringSession, pendingRestoreInfo == nil, restorePauseTask == nil else {
             Logger.player.warning("[END-OF-TRACK] suppressed — session restore in progress")
             return
@@ -177,59 +203,65 @@ extension PlayerService {
             return
         }
         if let finishedEntryIdentifier,
-           finishedEntryIdentifier != currentSource?.url.absoluteString {
+           finishedEntryIdentifier != currentSource?.url.absoluteString,
+           finishedEntryIdentifier != currentSource?.transcodeRequest(at: streamTimeOffset)?.url.absoluteString {
             Logger.player.debug("[END-OF-TRACK] stale engine entry ignored")
             return
         }
         let epochAtEntry = playbackEpoch
+        let eofSnapshot = await MainActor.run { (state.duration, state.position, state.playbackState) }
+        guard epochAtEntry == playbackEpoch, eofSnapshot.2.hasPlaybackIntent,
+              !isTrackTransitionPending else { return }
+        let eofPosition = max(engineProgress(), eofSnapshot.1)
+        if currentSource.map(AudioQualityClassifier.isLossyTranscodeStream) == true,
+           Self.isPrematureTranscodeEnd(duration: eofSnapshot.0, offset: streamTimeOffset, position: eofPosition) {
+            // A truncated encoder response is a transport failure, never a completed listen
+            // or a repeat-one request. Retry at the retained position once, then expose failure.
+            await recoverPrematureTranscodeEnd(position: eofPosition)
+            return
+        }
         let trackIdAtEntry = await MainActor.run { state.currentTrack?.id }
         isHandlingEndOfTrack = true
         defer { isHandlingEndOfTrack = false }
         let trackIdNow = await MainActor.run { state.currentTrack?.id }
-        guard epochAtEntry == playbackEpoch, trackIdAtEntry == trackIdNow else {
+        guard epochAtEntry == playbackEpoch, trackIdAtEntry == trackIdNow,
+              seekState == .idle, Date() >= systemPlayback.seekSettleDeadline else {
             Logger.player.debug("[END-OF-TRACK] ignored — track changed during skip")
             return
         }
         lastEndOfTrackTransitionAt = Date()
         let repeatMode = await MainActor.run { state.repeatMode }
         if repeatMode != .one,
-           engineConfirmed,
-           await finalizeGaplessBridge(epoch: epochAtEntry) {
-            // The AudioStreaming engine already advanced into the pre-buffered next entry
-            // seamlessly (its `.finishPlaying` fired EOF for the completed track); app state
-            // was updated in place — no `play()` call, no re-created gap.
-            return
-        }
-        if !engineConfirmed, repeatMode != .one,
            await engineMovedIntoArmedEntry(epoch: epochAtEntry),
            await finalizeGaplessBridge(epoch: epochAtEntry) {
-            // The watchdog fired *while* the engine was switching into the pre-buffered entry and
-            // the switch completed during the grace window. Advancing app state in place is the
-            // whole point of the bridge; falling through here would restart the track from zero.
-            Logger.player.info("[GAPLESS] transition confirmed by the engine clock after the watchdog fired")
+            // The queued entry is audibly advancing. App state can now follow it without
+            // re-creating the engine or requiring a manual resume.
+            Logger.player.info("[GAPLESS] transition confirmed by engine start/progress")
             return
         }
-        if !engineConfirmed {
-            // The watchdog fired without proof that the engine consumed its queued entry.
-            // Flush that entry and take the normal play() path so app and engine indices
-            // cannot diverge and replay the same audio under newer lock-screen metadata.
+        guard await MainActor.run(body: { state.playbackState != .paused }) else { return }
+        if gaplessBridge.next != nil {
+            // EOF alone is not proof that the queued entry started. Flush an entry that did not
+            // advance during the grace window and take the regular play path instead of publishing
+            // the next title over a paused transport.
             cancelGaplessBridge()
         }
         if repeatMode == .one {
             wasTrackCompletedNaturally = true
             await recordCurrentTrackPlayback(trigger: "repeat_one")
             wasTrackCompletedNaturally = false
-            resetTrackAccumulator(isPlaying: true)
+            resetTrackAccumulator(isPlaying: false)
             if let source = currentSource {
                 fadeOutTask?.cancel(); fadeOutTask = nil
                 fadeInTask?.cancel(); fadeInTask = nil
                 isFadingOut = false
                 setEngineVolume(restoredVolume)
+                await MainActor.run { state.playbackState = .loading }
                 let song = await MainActor.run { state.currentTrack }
                 #if os(iOS)
                 let useSystem = song.map { AudioQualityClassifier.requiresSystemPlayer($0) } == true
                     || PlayerService.isWirelessSystemRouteActive()
-                    || usingSystemPlayer
+                    || systemPlayback.isActive
                 #else
                 let useSystem = true
                 #endif
@@ -264,17 +296,34 @@ extension PlayerService {
     /// Returns true when the engine demonstrably moved into the armed entry (its clock came back
     /// to ~0, or it jumped backwards by more than a second), or when app state already advanced.
     private func engineMovedIntoArmedEntry(epoch: UInt64) async -> Bool {
-        guard gaplessBridgeNext != nil, !usingSystemPlayer else { return false }
-        // Strongest evidence first: the engine told us it started the pre-buffered entry.
-        if bridgedEntryDidStart { return true }
+        guard gaplessBridge.next != nil, !systemPlayback.isActive else { return false }
         let baseline = engineProgress()
-        let deadline = Date().addingTimeInterval(Self.bridgedEntryGracePeriod)
+        var previous = baseline
+        let startedAt = Date()
+        let deadline = startedAt.addingTimeInterval(Self.bridgedEntryGracePeriod)
         while Date() < deadline {
             if epoch != playbackEpoch { return true }
-            if bridgedEntryDidStart { return true }
             let progress = engineProgress()
-            if progress < Self.bridgedEntryProgressResetThreshold { return true }
-            if progress + 1.0 < baseline { return true }
+            let state = activeEngine.state
+            if Self.confirmsBridgedEntryProgress(
+                previous: previous,
+                current: progress,
+                engineState: state
+            ) {
+                return true
+            }
+            // Normal selection briefly reports buffering. Do not pause the audio graph
+            // unless the selected entry has actually remained motionless for a grace period.
+            let wantsPlayback = await MainActor.run { self.state.playbackState != .paused }
+            guard wantsPlayback, epoch == playbackEpoch else { return false }
+            if Self.shouldRecoverBridgedEntry(
+                selected: gaplessBridge.wasSelected,
+                elapsed: Date().timeIntervalSince(startedAt),
+                previous: previous, current: progress, engineState: state
+            ) {
+                recoverQueuedAudioStreamingTransitionIfNeeded()
+            }
+            previous = progress
             do {
                 try await Task.sleep(for: .milliseconds(120))
             } catch {
@@ -287,12 +336,33 @@ extension PlayerService {
         return false
     }
 
-    /// Records that the engine began playing an entry, so the end-of-track watchdog can tell a
-    /// completed bridged transition from a genuinely stalled one.
-    func handleEngineStartedEntry(entryIdentifier: String) {
-        guard !bridgedEntryDidStart, let armed = gaplessBridgeSource else { return }
+    /// AudioStreaming calls this when it *selects* the queued entry. The callback is emitted while
+    /// its internal state is still `waitingForData`, so it is only a hand-off signal and never
+    /// proof that audio is moving. Leave the renderer uninterrupted; the progress watchdog
+    /// handles recovery only if this selected entry remains stalled.
+    func handleEngineStartedEntry(entryIdentifier: String) async {
+        guard !gaplessBridge.wasSelected, let armed = gaplessBridge.source else { return }
         guard entryIdentifier == armed.url.absoluteString else { return }
-        bridgedEntryDidStart = true
+        gaplessBridge.wasSelected = true
+        // Some engine handoffs do not emit an EOF stop reason. Start the same progress
+        // confirmation from selection as well, so a parked zero clock still gets recovered.
+        await handleEndOfTrack(engineConfirmed: true)
+    }
+
+    private func recoverQueuedAudioStreamingTransitionIfNeeded() {
+        guard !systemPlayback.isActive, !gaplessBridge.recoveryWasRequested else { return }
+        gaplessBridge.recoveryWasRequested = true
+        (engine as? any AudioStreamingPlaybackEngine)?.recoverQueuedTransitionIfNeeded()
+    }
+
+    nonisolated static func shouldRecoverBridgedEntry(
+        selected: Bool, elapsed: TimeInterval,
+        previous: Double, current: Double, engineState: AudioPlayerState
+    ) -> Bool {
+        selected && elapsed >= 0.6
+            && previous.isFinite && current.isFinite
+            && abs(current - previous) < 0.01
+            && (engineState == .bufferring || engineState == .paused)
     }
 
     private nonisolated static let bridgedEntryGracePeriod: TimeInterval = 2.5
@@ -300,16 +370,30 @@ extension PlayerService {
     /// pre-buffered entry.
     private nonisolated static let bridgedEntryProgressResetThreshold: Double = 2.0
 
+    /// A zero clock at EOF is ambiguous: it can mean the queued entry is playing, or that the
+    /// completed transport is parked. Require both a playing engine and forward clock motion (or
+    /// an obvious wrap) before treating it as a successful gapless handoff.
+    nonisolated static func confirmsBridgedEntryProgress(
+        previous: Double,
+        current: Double,
+        engineState: AudioPlayerState
+    ) -> Bool {
+        guard engineState == .playing, previous.isFinite, current.isFinite else { return false }
+        if previous > Self.bridgedEntryProgressResetThreshold, current + 1 < previous {
+            return true
+        }
+        return current < Self.bridgedEntryProgressResetThreshold && current > previous + 0.02
+    }
+
     /// Completes a seamless gapless transition. Returns `true` when a bridge was armed and the
     /// engine already advanced to its pre-buffered next entry, in which case app state is advanced
     /// in place — the engine must NOT be restarted.
-    func finalizeGaplessBridge(epoch: UInt64) async -> Bool {
-        guard let next = gaplessBridgeNext, let nextSource = gaplessBridgeSource else {
+    func finalizeGaplessBridge(epoch: UInt64, completedNaturally: Bool = true) async -> Bool {
+        guard let next = gaplessBridge.next, let nextSource = gaplessBridge.source else {
             return false
         }
-        guard epoch == playbackEpoch, gaplessBridgeEpoch == epoch else {
-            gaplessBridgeNext = nil
-            gaplessBridgeSource = nil
+        guard epoch == playbackEpoch, gaplessBridge.epoch == epoch else {
+            gaplessBridge.clearPreparedSource()
             return false
         }
         // The pre-queued entry must still be the queue's actual next track. If the queue was
@@ -323,10 +407,11 @@ extension PlayerService {
             cancelGaplessBridge()
             return false
         }
-        await recordCurrentTrackPlayback(trigger: "track_completed")
+        wasTrackCompletedNaturally = completedNaturally
+        await recordCurrentTrackPlayback(trigger: completedNaturally ? "track_completed" : "user_skipped")
         guard epoch == playbackEpoch else { return true }
         wasTrackCompletedNaturally = false
-        resetTrackAccumulator(isPlaying: true)
+        resetTrackAccumulator(isPlaying: false)
         playbackEpoch &+= 1
         let bridgedEpoch = playbackEpoch
 
@@ -350,20 +435,22 @@ extension PlayerService {
         let previousJellyfinContext = currentSource?.jellyfinPlaybackContext
         let previousPosition = await MainActor.run { state.position }
         currentSource = nextSource
-        didRecoverFromStalledStream = false
+        streamTimeOffset = 0
+        systemPlayback.resetTrackRecovery()
         cancelPendingCacheDownload()
         cancelPendingPrefetch()
-        gaplessBridgeNext = nil
-        gaplessBridgeSource = nil
-        bridgedEntryDidStart = false
+        gaplessBridge.clearPreparedSource()
+        gaplessBridge.wasSelected = false
+        gaplessBridge.recoveryWasRequested = false
         endOfTrackStallStartedAt = nil
         endOfTrackStallProgress = -1
         lastObservedEngineProgress = 0
         underrunCountForCurrentTrack = 0
         didAdaptQualityForCurrentTrack = false
-        pendingSeekTarget = nil
-        pendingSeekDeadline = .distantPast
+        seekState = .idle
         let bridgedSeekable = engineIsSeekable()
+        let isAudible = systemPlayback.isActive ? systemEngine.state == .playing : engine.state == .playing
+        if isAudible { currentPlaySegmentStart = Date() }
 
         await MainActor.run {
             state.currentTrack = next
@@ -371,7 +458,7 @@ extension PlayerService {
             state.duration = duration
             state.position = 0
             state.isSeekable = bridgedSeekable
-            state.playbackState = .playing
+            state.playbackState = isAudible ? .playing : .loading
             state.isPlaybackAvailable = true
             state.isDeliveringTranscodedAudio = isTranscoding
         }
@@ -385,7 +472,7 @@ extension PlayerService {
             album: next.albumName,
             duration: duration,
             position: 0,
-            playbackRate: 1.0,
+            playbackRate: isAudible ? 1.0 : 0.0,
             artworkURL: nil,
             artworkHeaders: [:],
             coverArtId: next.effectiveCoverArtId,
@@ -399,27 +486,44 @@ extension PlayerService {
         ))
         guard bridgedEpoch == playbackEpoch else { return true }
 
+        nextGaplessPreparationAttempt = .distantPast
+        // Release the handover/EOF guard now. Artwork, session persistence and recommendations
+        // must not prevent the progress loop from prebuffering the following track.
+        gaplessMetadataTask = Task { [weak self] in
+            await self?.finishBridgedMetadata(next: next, source: nextSource, epoch: bridgedEpoch,
+                                            nextIndex: nextIndex, queueCount: bridgedQueueCount,
+                                            previousContext: previousJellyfinContext, previousPosition: previousPosition)
+        }
+        Logger.player.info("[GAPLESS] bridged to '\(next.title, privacy: .public)'")
+        return true
+    }
+
+    private func finishBridgedMetadata(next: DisplayableSong, source: MediaSource, epoch: UInt64,
+                                       nextIndex: Int, queueCount: Int,
+                                       previousContext: JellyfinPlaybackContext?, previousPosition: TimeInterval) async {
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
         if let serverId = await MainActor.run(body: { serverService.state.activeServer?.id }) {
             await scheduleAutomaticDownload(song: next, serverId: serverId)
         }
-        guard bridgedEpoch == playbackEpoch else { return true }
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
 
         let artworkURL = await resolveArtworkURL(for: next)
-        guard bridgedEpoch == playbackEpoch else { return true }
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
         let artworkHeaders: [String: String]
         do {
             artworkHeaders = try await serverService.activeCredentials().customHeaders
         } catch {
             artworkHeaders = [:]
         }
-        guard bridgedEpoch == playbackEpoch else { return true }
+        let transport = await MainActor.run { (state.position, state.playbackState) }
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
         await nowPlayingService?.update(with: NowPlayingSnapshot(
             title: next.title,
             artist: next.artist,
             album: next.albumName,
-            duration: duration,
-            position: 0,
-            playbackRate: 1.0,
+            duration: next.duration,
+            position: transport.0,
+            playbackRate: transport.1 == .playing ? 1.0 : 0.0,
             artworkURL: artworkURL,
             artworkHeaders: artworkHeaders,
             coverArtId: next.effectiveCoverArtId,
@@ -429,8 +533,9 @@ extension PlayerService {
             isrc: cachedISRC(for: next),
             trackId: next.id,
             queueIndex: nextIndex,
-            queueCount: bridgedQueueCount
+            queueCount: queueCount
         ))
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
         if Self.isListeningHistoryEnabled {
             Task { [libraryService] in
                 await libraryService.scrobble(songId: next.id, submission: false)
@@ -440,19 +545,21 @@ extension PlayerService {
             Task { await ws.onTrackStarted(next) }
         }
         await saveSession()
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
         preloadNextTrackArtwork()
         await evaluateAutoExtend()
-        nextGaplessPreparationAttempt = .distantPast
-        // The progress loop schedules the following entry after this handover finishes.
-        await reportOpenSubsonicPlayback(state: .playing, songId: next.id, positionMs: 0)
-        if let previousJellyfinContext {
-            await reportJellyfinStopped(previousJellyfinContext, position: previousPosition)
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        if let previousContext {
+            await reportJellyfinStopped(previousContext, position: previousPosition)
         }
-        if let context = nextSource.jellyfinPlaybackContext {
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        if let context = source.jellyfinPlaybackContext {
             await reportJellyfinStarted(context, position: 0)
         }
-        Logger.player.info("[GAPLESS] bridged to '\(next.title, privacy: .public)'")
-        return true
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        let currentTransport = await MainActor.run { (state.position, state.playbackState) }
+        guard currentTransport.1 == .playing, epoch == playbackEpoch, !Task.isCancelled else { return }
+        await reportOpenSubsonicPlayback(state: .playing, songId: next.id, positionMs: Int(currentTransport.0 * 1000))
     }
 
     func pauseAtEndOfQueue() async {

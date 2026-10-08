@@ -32,6 +32,14 @@ nonisolated extension JellyfinMediaSource {
 /// always requests `.automatic` because there is no playback-method setting any more, but a future
 /// caller that pins Direct Play, Universal, HLS, Original File or OpenSubsonic gets that route back.
 nonisolated enum PlaybackDecisionPolicy {
+    /// A playable original needs no PlaybackInfo negotiation or server transcode startup.
+    static func canStreamOriginalImmediately(format: CacheFormat, song: DisplayableSong?) -> Bool {
+        guard format == .flacOriginal, let song else { return false }
+        let container = iOSAudioCapability.normalize(song.audioFormat)
+            ?? iOSAudioCapability.container(forContentType: song.contentType)
+        return iOSAudioCapability.canDecodeDirectly(container: container, codec: nil,
+            sampleRate: song.samplingRate, bitDepth: song.bitDepth)
+    }
 
     /// Why a route was chosen. Logged verbatim (`[ROUTE] … reason=`) so a device log explains itself.
     nonisolated enum Reason: String, Equatable, Sendable {
@@ -41,6 +49,7 @@ nonisolated enum PlaybackDecisionPolicy {
         case directPlayFits
         case directPlayOverCeiling
         case directPlayUnsupportedCodec
+        case serverRequiresTranscoding
         case directStreamWithoutTranscoding
         case openSubsonicFallback
     }
@@ -56,6 +65,8 @@ nonisolated enum PlaybackDecisionPolicy {
         var supportsDirectPlay: Bool?
         var supportsDirectStream: Bool?
         var supportsTranscoding: Bool?
+        /// Only use segmented delivery when PlaybackInfo actually offers it.
+        var supportsHLSTranscoding: Bool = false
         /// Source bitrate in bits per second, when the server reported it.
         var sourceBitRate: Int?
         var container: String?
@@ -68,6 +79,10 @@ nonisolated enum PlaybackDecisionPolicy {
         var requiresBitstream: Bool = false
         /// Downloaded file: no network decision to make.
         var sourceIsLocal: Bool = false
+        /// Preserve the original; Jellyfin's transcode and HLS routes are lossy.
+        var preferLossless: Bool = false
+        /// An explicit lossy output format must not be satisfied by a raw Direct Play.
+        var requiresLossyEncoding: Bool = false
     }
 
     static func decide(_ inputs: Inputs) -> Outcome {
@@ -82,6 +97,27 @@ nonisolated enum PlaybackDecisionPolicy {
         // 3. A downloaded file is already on disk.
         if inputs.sourceIsLocal {
             return Outcome(route: .directPlay, reason: .localFile)
+        }
+
+        if inputs.requiresLossyEncoding {
+            return Outcome(route: inputs.supportsTranscoding == true
+                ? (inputs.supportsHLSTranscoding ? .hls : .universal)
+                : .openSubsonic,
+                reason: inputs.supportsTranscoding == true ? .serverRequiresTranscoding : .openSubsonicFallback)
+        }
+
+        // A lossless setting is an original-file request. PlaybackInfo may advertise a
+        // transcode, but this server's Universal/HLS outputs cannot satisfy that setting.
+        // Unknown or unsupported originals use the OpenSubsonic raw endpoint instead.
+        if inputs.preferLossless {
+            let decodableOriginal = iOSAudioCapability.canDecodeDirectly(
+                container: inputs.container, codec: inputs.codec,
+                sampleRate: inputs.sampleRate, bitDepth: inputs.bitDepth
+            )
+            if decodableOriginal && (inputs.supportsDirectPlay == true || inputs.supportsDirectStream == true) {
+                return Outcome(route: .directPlay, reason: .directPlayFits)
+            }
+            return Outcome(route: .openSubsonic, reason: .openSubsonicFallback)
         }
 
         let decodable = iOSAudioCapability.canDecodeDirectly(
@@ -100,7 +136,7 @@ nonisolated enum PlaybackDecisionPolicy {
         if !decodable || !fits {
             let reason: Reason = decodable ? .directPlayOverCeiling : .directPlayUnsupportedCodec
             if inputs.supportsTranscoding == true {
-                return Outcome(route: .universal, reason: reason)
+                return Outcome(route: inputs.supportsHLSTranscoding ? .hls : .universal, reason: reason)
             }
             // This Jellyfin route cannot transcode. The Subsonic endpoint still applies
             // `maxBitRate`/`format`, which is exactly what a ceiling needs.
@@ -114,6 +150,10 @@ nonisolated enum PlaybackDecisionPolicy {
         // will neither Direct Play nor transcode.
         if inputs.supportsDirectStream == true {
             return Outcome(route: .directPlay, reason: .directStreamWithoutTranscoding)
+        }
+        if inputs.supportsTranscoding == true {
+            return Outcome(route: inputs.supportsHLSTranscoding ? .hls : .universal,
+                           reason: .serverRequiresTranscoding)
         }
         return Outcome(route: .openSubsonic, reason: .openSubsonicFallback)
     }

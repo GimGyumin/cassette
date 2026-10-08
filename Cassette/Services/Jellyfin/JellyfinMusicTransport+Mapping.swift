@@ -31,6 +31,10 @@ extension JellyfinMusicTransport {
     }
 
     static func song(_ item: JellyfinItem) -> [String: Any] {
+        song(item, mediaSource: nil)
+    }
+
+    static func song(_ item: JellyfinItem, mediaSource: JellyfinMediaSource?) -> [String: Any] {
         var result = common(item)
         result["title"] = item.name ?? ""
         result["isDir"] = false
@@ -47,8 +51,8 @@ extension JellyfinMusicTransport {
         }
         result["track"] = item.indexNumber
         result["discNumber"] = item.parentIndexNumber
-        let source = item.mediaSources?.first
-        let audio = source?.mediaStreams?.first { $0.type?.lowercased() == "audio" }
+        let source = mediaSource ?? item.mediaSources?.first
+        let audio = source?.defaultAudioStream
         result["suffix"] = source?.container ?? audio?.codec
         result["size"] = source?.containerSize
         result["bitRate"] = (audio?.bitRate ?? source?.bitrate).map { $0 / 1000 }
@@ -63,7 +67,10 @@ extension JellyfinMusicTransport {
         result["name"] = item.name ?? ""
         result["songCount"] = item.childCount ?? item.recursiveItemCount ?? 0
         result["duration"] = seconds(item)
-        result["artist"] = item.albumArtist ?? item.artists?.joined(separator: ", ")
+        let albumArtist = item.albumArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
+        result["artist"] = albumArtist?.isEmpty == false ? albumArtist
+            : (item.albumArtists?.first?.name ?? item.artists?.joined(separator: ", "))
+        result["isCompilation"] = item.isCompilation
         result["artistId"] = (item.albumArtists?.first?.id ?? item.artistItems?.first?.id).map(localID)
         return result
     }
@@ -99,8 +106,10 @@ extension JellyfinMusicTransport {
             if format == "raw" || (format == nil && bitrate == nil) {
                 return client.originalFileURL(itemID: remote)
             }
-            return client.universalAudioURL(itemID: remote, container: format, audioCodec: format,
-                                            maxStreamingBitrate: bitrate, staticStream: false)
+            let codec = format ?? "aac"
+            return client.progressiveAudioURL(itemID: remote, container: codec, audioCodec: codec,
+                                              audioBitRate: bitrate,
+                                              startTimeTicks: parameters["timeOffset"].flatMap(Int64.init).map { $0 * 10_000_000 })
         default:
             return nil
         }

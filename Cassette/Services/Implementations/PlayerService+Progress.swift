@@ -37,10 +37,16 @@ extension PlayerService {
         guard automaticDownloadTasks.insert(key).inserted else { return }
         Task {
             defer { automaticDownloadTasks.remove(key) }
+            let scheduledAt = Date()
+            // A second full-file request beside a stream that is still opening can starve the
+            // foreground request, especially for lossless originals. Wait until the media clock
+            // proves that this exact track is producing audio before sharing the connection.
+            guard await waitForEstablishedPlayback(of: song.id) else { return }
             if isLimited {
-                // Give the foreground stream time to establish a safe buffer before an optional
-                // limited-network download is allowed to share the connection.
-                try? await Task.sleep(for: .seconds(45))
+                // Preserve the existing 45-second limited-network grace period, counting time
+                // already spent establishing playback.
+                let remaining = max(0, 45 - Date().timeIntervalSince(scheduledAt))
+                try? await Task.sleep(for: .seconds(remaining))
                 guard !Task.isCancelled else { return }
                 let stillPlayingThisTrack = await MainActor.run {
                     state.playbackState == .playing && state.currentTrack?.id == song.id
@@ -65,10 +71,40 @@ extension PlayerService {
             do {
                 let downloadableSong = await MainActor.run { song.asSong() }
                 try await downloadService.download(song: downloadableSong, serverId: serverId)
+                // Normally playback is already healthy, so this is a no-op. If the engine fell
+                // back into acquisition while the transfer finished, immediately use the valid
+                // local file instead of continuing to wait on the remote response.
+                _ = await recoverAcquiringPlaybackFromLocalMedia(
+                    song: song,
+                    serverId: serverId,
+                    expectedEpoch: nil,
+                    reason: "automatic download completed"
+                )
             } catch {
                 Logger.download.error("Automatic download failed for '\(song.id, privacy: .public)': \(error, privacy: .public)")
             }
         }
+    }
+
+    /// Waits for a real advancing media clock rather than trusting an optimistic `.playing`
+    /// callback. This keeps a background full-file transfer off the playback critical path.
+    private func waitForEstablishedPlayback(of songID: String) async -> Bool {
+        for _ in 0..<40 {
+            guard !Task.isCancelled else { return false }
+            let snapshot = await MainActor.run {
+                (state.currentTrack?.id, state.playbackState)
+            }
+            guard snapshot.0 == songID else { return false }
+            if snapshot.1 == .playing, engineProgress() >= 1 {
+                return true
+            }
+            if snapshot.1 == .paused || snapshot.1 == .idle {
+                return false
+            }
+            if case .error = snapshot.1 { return false }
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return false }
+        }
+        return false
     }
 
     /// An automatic download may proceed when the network is unmetered/unconstrained, or when
@@ -101,6 +137,7 @@ extension PlayerService {
                 let interval: Duration = CassettePerformance.budget.isAppActive ? .milliseconds(500) : .seconds(1)
                 try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { break }
+                await self.handleSystemPlayerItemChanged(generation: self.systemPlayback.generation)
                 let epoch = await self.playbackEpoch
                 let trackID = await MainActor.run { self.state.currentTrack?.id }
                 let progress = await self.engineProgress()
@@ -111,7 +148,7 @@ extension PlayerService {
                 guard !isHandingOver, epoch == (await self.playbackEpoch) else { continue }
                 let positionBeforeTick = await MainActor.run { self.state.position }
                 let seekState = await self.reconcilePendingSeek(engineProgress: progress)
-                let engineIsEstimate = !(await self.usingSystemPlayer)
+                let engineIsEstimate = await self.durationIsEstimate()
                 guard epoch == (await self.playbackEpoch), !Task.isCancelled else { continue }
                 await MainActor.run {
                     guard !isHandingOver, self.state.currentTrack?.id == trackID else { return }
@@ -135,19 +172,16 @@ extension PlayerService {
                     }
                 }
                 guard epoch == (await self.playbackEpoch), !isHandingOver else { continue }
-                // Backstop for the engines' own `.playing` confirmation. A track that was started
-                // from its beginning and is already reporting audible progress is playing, even if
-                // the engine never delivered its state callback — and a state stuck in `.loading`
-                // would leave the transport spinning on audible music while keeping the
-                // end-of-track watchdog disarmed (it only arms while `.playing`).
-                // Bounded to a fresh start: a mid-track recovery (stall retry, restore seek) keeps a
-                // non-zero position and stays owned by the engine's own status reporting.
-                if positionBeforeTick < 1, progress > 1 {
+                // Advancing media time confirms audio after startup, buffering or recovery.
+                // A seek clock jump is excluded until the seek has settled.
+                if !seekState.isSettling, progress > positionBeforeTick + 0.05 {
                     await self.publishEnginePlaybackConfirmation()
                 }
                 if !seekState.isSettling {
                     await self.checkEndOfTrackFallback(progress: progress)
                 }
+                guard epoch == (await self.playbackEpoch), !Task.isCancelled else { continue }
+                await self.checkSustainedPlaybackStall(progress: progress)
                 let publishedProgress = seekState.isSettling
                     ? (seekState.target ?? progress)
                     : progress
@@ -161,38 +195,25 @@ extension PlayerService {
         }
     }
 
+    private func durationIsEstimate() -> Bool {
+        !systemPlayback.isActive || currentSource.map(AudioQualityClassifier.isLossyTranscodeStream) == true
+    }
+
     private func reconcilePendingSeek(engineProgress: TimeInterval) -> (isSettling: Bool, target: TimeInterval?) {
-        guard let target = pendingSeekTarget else { return (false, nil) }
-
-        // If the engine's clock wrapped back to the start, the requested target was never
-        // honoured — the stream restarted (or the engine was rebuilt) instead of seeking. Release
-        // the scrubber immediately: holding it at the target is what left the UI frozen on the old
-        // position while audio played from zero ("it rewound but the bar did not move"), until the
-        // 8-second deadline expired.
-        if Self.didEngineProgressWrap(previous: target, current: engineProgress) {
-            pendingSeekTarget = nil
-            pendingSeekDeadline = .distantPast
-            lastObservedEngineProgress = engineProgress
-            Logger.player.warning(
-                "[SEEK] engine restarted from zero instead of landing on \(target, format: .fixed(precision: 1))s — releasing the scrubber"
-            )
+        switch seekState.reconcile(progress: engineProgress, now: Date()) {
+        case .inactive:
             return (false, nil)
-        }
-
-        let landed = abs(engineProgress - target) <= 2.5
-        let timedOut = Date() >= pendingSeekDeadline
-        if landed || timedOut {
-            pendingSeekTarget = nil
-            pendingSeekDeadline = .distantPast
+        case .waiting(let target):
+            return (true, target)
+        case .finished(let target, let landed):
             lastObservedEngineProgress = engineProgress
-            if timedOut && !landed {
+            if !landed {
                 Logger.player.warning(
                     "[SEEK] engine did not reach target in time target=\(target, format: .fixed(precision: 1))s engine=\(engineProgress, format: .fixed(precision: 1))s"
                 )
             }
             return (false, target)
         }
-        return (true, target)
     }
 
     /// When AudioStreaming never reports EOF (common on AirPlay), advance from progress alone.
@@ -229,10 +250,10 @@ extension PlayerService {
         // their target, which makes this wrap test safe for backward scrubbing.
         if Self.didEngineProgressWrap(previous: previousProgress, current: progress) {
             Logger.player.info(
-                "[END-OF-TRACK] detected engine progress wrap (previous=\(previousProgress, format: .fixed(precision: 2))s current=\(progress, format: .fixed(precision: 2))s bridge=\(self.gaplessBridgeNext != nil))"
+                "[END-OF-TRACK] detected engine progress wrap (previous=\(previousProgress, format: .fixed(precision: 2))s current=\(progress, format: .fixed(precision: 2))s bridge=\(self.gaplessBridge.next != nil))"
             )
             endOfTrackStallStartedAt = nil
-            await handleEndOfTrack(engineConfirmed: gaplessBridgeNext != nil)
+            await handleEndOfTrack(engineConfirmed: gaplessBridge.next != nil)
             return
         }
 
@@ -261,5 +282,23 @@ extension PlayerService {
     func stopProgressTimer() {
         progressTask?.cancel()
         progressTask = nil
+    }
+
+    private func checkSustainedPlaybackStall(progress: Double) async {
+        let epoch = playbackEpoch
+        let snapshot = await MainActor.run { (state.playbackState, state.isLiveStream) }
+        guard epoch == playbackEpoch else { return }
+        let intendsToPlay = snapshot.0.hasPlaybackIntent
+        let stalled = progressStallMonitor.observe(
+            mediaTime: progress,
+            now: ProcessInfo.processInfo.systemUptime,
+            cannotPlay: intendsToPlay && !snapshot.1,
+            isSeeking: seekState != .idle || isTrackTransitionPending
+                || pendingRestoreInfo != nil || Date() < systemPlayback.seekSettleDeadline
+        )
+        if stalled, !systemPlayback.recoveredCurrentStall {
+            // Resolving a replacement must not freeze progress/seek reconciliation.
+            Task { [weak self] in await self?.recoverFromStalledStream() }
+        }
     }
 }

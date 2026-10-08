@@ -66,11 +66,14 @@ final class PlaybackSession {
         currentPosition: TimeInterval,
         queue: [DisplayableSong],
         currentTrack: DisplayableSong?,
-        repeatMode: RepeatMode
+        repeatMode: RepeatMode,
+        encodeQueue: Bool = true
     ) {
         self.currentIndex = currentIndex
         self.currentPosition = currentPosition
-        self.queueData = (try? JSONEncoder().encode(queue)) ?? Data()
+        if encodeQueue {
+            self.queueData = (try? JSONEncoder().encode(queue)) ?? Data()
+        }
         self.currentTrackId = currentTrack?.id
         self.currentTrackTitle = currentTrack?.title
         self.currentTrackArtist = currentTrack?.artist

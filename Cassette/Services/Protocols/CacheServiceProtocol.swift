@@ -16,6 +16,10 @@ protocol CacheServiceProtocol: AnyObject, Sendable {
 
     func store(data: Data, forSongId songId: String, serverId: UUID, mimeType: String) async throws -> URL
 
+    /// Imports a completed download without loading the entire audio file into memory.
+    /// The caller retains ownership of the source file until this call returns.
+    func store(fileAt sourceURL: URL, forSongId songId: String, serverId: UUID, mimeType: String) async throws -> URL
+
     /// Updates the maximum cache size. Triggers FIFO eviction when total bytes exceed it.
     func setMaxBytes(_ value: Int64) async
 

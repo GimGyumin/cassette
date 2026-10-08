@@ -11,6 +11,7 @@ struct PlayButton: View {
     var label: String = "Play"
     var isDisabled: Bool = false
     var accentColor: Color = CassetteColors.accent
+    var height: CGFloat? = nil
     /// Label/glyph color. Default white (`cassetteAccentText`) preserves existing callers; the hero passes the
     /// cover-derived tint (or B/W fallback) on a black/white capsule.
     var labelColor: Color = Color.cassetteAccentText
@@ -24,7 +25,8 @@ struct PlayButton: View {
                 .font(.cassetteCellTitle)
                 .foregroundStyle(labelColor)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, CassetteSpacing.m)
+                .frame(height: height)
+                .padding(.vertical, height == nil ? CassetteSpacing.m : 0)
                 .background {
                     Capsule(style: .continuous)
                         .fill(accentColor.opacity(isDisabled ? 0.45 : 1))

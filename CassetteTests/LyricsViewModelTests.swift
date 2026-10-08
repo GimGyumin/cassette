@@ -182,6 +182,35 @@ struct LyricsAppleTranslationSessionTests {
 @Suite("LyricsViewModel — update(elapsedMs:)")
 @MainActor
 struct LyricsViewModelUpdateTests {
+    @Test func lateClockSampleCannotToggleTheHighlightedLineBackward() async throws {
+        let (vm, _) = try makeViewModel(serverId: UUID(), lyrics: syncedList())
+        await vm.load()
+        vm.update(elapsedMs: 1_100)
+        #expect(vm.currentLineIndex == 1)
+        vm.update(elapsedMs: 990)
+        #expect(vm.currentLineIndex == 1)
+        #expect(vm.karaokePlaybackMs == 1_100)
+        vm.update(elapsedMs: 1_200)
+        #expect(vm.currentLineIndex == 1)
+        // An explicit seek resets the common clock before evaluating its target.
+        vm.karaokePlaybackMs = 900
+        vm.update(elapsedMs: 900)
+        #expect(vm.currentLineIndex == 0)
+    }
+
+    @Test func authoritativeClockCorrectionResynchronizesLyrics() async throws {
+        let (vm, _) = try makeViewModel(serverId: UUID(), lyrics: syncedList())
+        await vm.load()
+
+        vm.update(elapsedMs: 1_100)
+        #expect(vm.currentLineIndex == 1)
+
+        // A correction larger than timestamp quantization is an actual player resync,
+        // such as the engine clock settling after buffering.
+        vm.update(elapsedMs: 700)
+        #expect(vm.currentLineIndex == 0)
+        #expect(vm.karaokePlaybackMs == 700)
+    }
 
     @Test func returnsNilBeforeLoad() throws {
         let (vm, _) = try makeViewModel()

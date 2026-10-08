@@ -8,6 +8,7 @@ import SwiftUI
 /// Apple Music–style search field. Keeps a single `TextField` in the tree so focusing
 /// doesn’t tear down / rebuild the bar (Button ↔ TextField swap caused focus lag).
 struct AppleMusicSearchBar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var text: String
     @Binding var isActive: Bool
     var prompt: String = String(localized: "Artists, Songs, Lyrics, and More", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
@@ -54,13 +55,24 @@ struct AppleMusicSearchBar: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(String(localized: "Clear", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } else {
+                    Button {
+                        activateAndFocus()
+                    } label: {
+                        Image(systemName: "mic.fill")
+                            .font(.title2.weight(.regular))
+                            .foregroundStyle(.primary)
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(String(localized: "Voice Search", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 }
 
             }
             .padding(.horizontal, 16)
-            .frame(minHeight: 52)
-            .background(.quaternary, in: Capsule())
-            .overlay(Capsule().strokeBorder(.primary.opacity(0.06), lineWidth: 1))
+            .frame(minHeight: 48)
+            .cassetteGlassCapsule()
+            .simultaneousGesture(TapGesture().onEnded { activateAndFocus() })
 
             if isActive || !text.isEmpty {
                 Button {
@@ -69,11 +81,9 @@ struct AppleMusicSearchBar: View {
                     isActive = false
                     onCancel()
                 } label: {
-                    Image(systemName: "xmark")
-                        .font(.title2.weight(.regular))
-                        .frame(width: 52, height: 52)
-                        .background(.quaternary, in: Circle())
-                        .overlay(Circle().strokeBorder(.primary.opacity(0.06), lineWidth: 1))
+                        Image(systemName: "xmark")
+                            .font(.title2.weight(.regular))
+                            .cassetteGlassButton(size: 48)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.primary)
@@ -81,7 +91,7 @@ struct AppleMusicSearchBar: View {
                 .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
         }
-        .animation(CassetteAnimation.interactive, value: isActive)
+        .animation(reduceMotion ? nil : CassetteAnimation.chrome, value: isActive || !text.isEmpty)
         .onChange(of: fieldFocused) { _, focused in
             // Expand chrome only — never hide the nav bar from the parent on this
             // same focus change (that stole first-responder and forced a second tap).

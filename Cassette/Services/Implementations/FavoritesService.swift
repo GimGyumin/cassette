@@ -33,17 +33,18 @@ actor FavoritesService: FavoritesServiceProtocol {
     nonisolated func isFavorite(itemType: FavoriteType, itemId: String) -> Bool {
         return MainActor.assumeIsolated {
             guard let serverID = serverState.activeServer?.id else { return false }
-            let candidates = Set(mediaIdentityService.candidateRemoteIDs(
+            let candidates = mediaIdentityService.candidateRemoteIDs(
                 for: itemId,
                 serverId: serverID,
                 entityType: itemType.entityType
-            ))
+            )
             let sid = serverID
             let type = itemType.rawValue
-            let records = (try? modelContainer.mainContext.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
-                $0.serverId == sid && $0.itemType == type
-            }))) ?? []
-            return records.contains { candidates.contains($0.itemId) }
+            var descriptor = FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
+                $0.serverId == sid && $0.itemType == type && candidates.contains($0.itemId)
+            })
+            descriptor.fetchLimit = 1
+            return (try? modelContainer.mainContext.fetch(descriptor).isEmpty) == false
         }
     }
 
@@ -56,9 +57,9 @@ actor FavoritesService: FavoritesServiceProtocol {
         }
 
         let type = itemType.rawValue
-        let existing = (try? backgroundContext.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
+        let existing = try backgroundContext.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
             $0.serverId == serverId && $0.itemType == type
-        }))) ?? []
+        }))
         let candidateIDs = await MainActor.run {
             Set(mediaIdentityService.candidateRemoteIDs(for: currentID, serverId: serverId, entityType: itemType.entityType))
         }
@@ -66,7 +67,8 @@ actor FavoritesService: FavoritesServiceProtocol {
 
         let record = FavoriteRecord(itemType: itemType, itemId: currentID, starredDate: Date(), serverId: serverId)
         backgroundContext.insert(record)
-        try? backgroundContext.save()
+        do { try backgroundContext.save() }
+        catch { backgroundContext.rollback(); throw error }
 
         do {
             switch itemType {
@@ -95,15 +97,16 @@ actor FavoritesService: FavoritesServiceProtocol {
         }
         let sid = serverID
         let type = itemType.rawValue
-        let records = (try? backgroundContext.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
+        let records = try backgroundContext.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
             $0.serverId == sid && $0.itemType == type
-        }))) ?? []
+        }))
         guard let record = records.first(where: { candidates.contains($0.itemId) }) else { return }
 
         let capturedServerId = record.serverId
         let capturedDate = record.starredDate
         backgroundContext.delete(record)
-        try? backgroundContext.save()
+        do { try backgroundContext.save() }
+        catch { backgroundContext.rollback(); throw error }
 
         do {
             switch itemType {

@@ -57,6 +57,7 @@ private extension View {
 private struct PlayerThemeKey: Equatable {
     let coverId: String?
     let override: Color?
+    let isActive: Bool
 }
 
 struct FullPlayerView: View {
@@ -133,8 +134,16 @@ struct FullPlayerView: View {
             let themeCoverId = resolvedPlayerCoverId(playerState)
             content(playerState)
                 .appEntityIdentifier(nowPlayingEntityIdentifier(playerState))
-                .task(id: PlayerThemeKey(coverId: themeCoverId, override: colorExtractor.colorOverride(for: themeCoverId ?? ""))) {
-                    await vm.updateColors(for: themeCoverId, colorExtractor: colorExtractor, container: container)
+                .task(id: PlayerThemeKey(coverId: themeCoverId, override: colorExtractor.colorOverride(for: themeCoverId ?? ""), isActive: scenePhase == .active)) {
+                    guard scenePhase == .active else { return }
+                    for attempt in 0..<3 {
+                        if attempt > 0 {
+                            do { try await Task.sleep(for: .seconds(attempt * 2)) } catch { return }
+                        }
+                        guard !Task.isCancelled else { return }
+                        await vm.updateColors(for: themeCoverId, colorExtractor: colorExtractor, container: container)
+                        guard let themeCoverId, vm.coverImage(for: themeCoverId) == nil else { return }
+                    }
                 }
                 .task(id: playerState.currentTrack?.id) {
                     lyricsViewModel?.setVisible(false)
@@ -250,7 +259,7 @@ struct FullPlayerView: View {
             if source == .black || source == .clear { return .black }
             return CoverColorRefiner.playerAtmosphere(from: source).pageColor
         }()
-        let isPlaying = playerState.playbackState == .playing
+        let isPlaying = playerState.playbackState.hasPlaybackIntent
         let showingQueue = isQueueVisible(playerState)
 
         surfaceStack(playerState, coverArtId: coverArtId, isPlaying: isPlaying,
@@ -274,7 +283,7 @@ struct FullPlayerView: View {
                 mid: vm.atmosphereMid == .black ? dominant : vm.atmosphereMid,
                 bottom: vm.atmosphereBottom == .black ? dominant : vm.atmosphereBottom,
                 isPlaying: isPlaying,
-                coverImage: atmosphereReady ? vm.coverImage : nil,
+                coverImage: atmosphereReady ? vm.coverImage(for: coverArtId) : nil,
                 freezeBeat: !animatedArtwork || !atmosphereReady || showLyrics || showingQueue || scenePhase != .active
             )
         }
@@ -415,11 +424,6 @@ struct FullPlayerView: View {
             topBar
                 .padding(.top, 2)
         }
-        .simultaneousGesture(
-            TapGesture().onEnded {
-                if showLyrics { showLyricsChromeTemporarily() }
-            }
-        )
         .background {
             GeometryReader { geo in
                 Color.clear
@@ -486,7 +490,7 @@ struct FullPlayerView: View {
                 Spacer()
                     .frame(height: coverTopInset)
 
-                CoverArtView(id: coverArtId, size: 700, initialImage: vm.coverImage)
+                CoverArtView(id: coverArtId, size: 700, initialImage: vm.coverImage(for: coverArtId))
                     .aspectRatio(1, contentMode: .fit)
                     .frame(width: coverSize, height: coverSize)
                     .clipShape(RoundedRectangle(cornerRadius: CassetteCornerRadius.large, style: .continuous))
@@ -695,7 +699,7 @@ struct FullPlayerView: View {
             let artSide: CGFloat = isSource ? side : 64
             let artCorner: CGFloat = isSource ? corner : CassetteCornerRadius.standard
 
-            CoverArtView(id: coverArtId, size: 600, initialImage: vm.coverImage, contentMode: .fill)
+            CoverArtView(id: coverArtId, size: 600, initialImage: vm.coverImage(for: coverArtId), contentMode: .fill)
                 .frame(width: artSide, height: artSide)
                 .clipShape(RoundedRectangle(cornerRadius: artCorner, style: .continuous))
                 .shadow(color: .black.opacity(isSource ? 0.4 : 0), radius: isPlaying ? 28 : 18, y: isPlaying ? 14 : 10)

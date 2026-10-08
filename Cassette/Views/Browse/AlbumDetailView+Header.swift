@@ -27,7 +27,10 @@ extension AlbumDetailContentView {
             showsFloatingShadow: false,
             coverShadowColor: atmosphere.coverShadowColor,
             floatingInset: true,
-            floatingHorizontalPadding: 68
+            floatingHorizontalPadding: 68,
+            floatingTopPadding: 24,
+            contentTopPadding: 24,
+            contentBottomPadding: 24
         ) {
             VStack(spacing: CassetteSpacing.l) {
                 albumTitleBlock(vm: vm, songs: songs, alignment: .center)
@@ -54,10 +57,12 @@ extension AlbumDetailContentView {
         let textAlign: TextAlignment = alignment == .leading ? .leading : .center
         VStack(alignment: alignment, spacing: 0) {
             Text(vm?.albumName ?? initialName)
-                .font(.system(.title, design: .rounded, weight: .semibold))
+                // Music uses SF Pro Display here rather than the rounded display face.
+                .font(.system(size: 24, weight: .semibold, design: .default))
                 .foregroundStyle(heroTitleInk)
                 .multilineTextAlignment(textAlign)
                 .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .center)
+                .lineSpacing(1)
                 .padding(.bottom, CassetteSpacing.xs)
             if vm == nil {
                 SkeletonBlock(width: 140, height: 18, cornerRadius: 4)
@@ -67,21 +72,21 @@ extension AlbumDetailContentView {
                     // A unique push (see `HomeDestination.artistPush`): an id-only `artistById` value that
                     // matches an artist already in the path makes NavigationStack reuse that entry — the
                     // album would be dropped from the stack and the back button would stop responding.
-                    NavigationLink(value: HomeDestination.artistPush(
+                    DetailNavigationLink(destination: HomeDestination.artistPush(
                         id: artistId,
                         name: artist,
                         coverArtId: nil,
                         token: artistRouteToken
                     )) {
                         Text(artist)
-                            .font(.title3.weight(.semibold))
+                            .font(.system(size: 22, weight: .regular))
                             .foregroundStyle(heroTitleInk)
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, CassetteSpacing.s)
                 } else {
                     Text(artist)
-                        .font(.title3.weight(.semibold))
+                        .font(.system(size: 22, weight: .regular))
                         .foregroundStyle(heroTitleInk)
                         .padding(.bottom, CassetteSpacing.s)
                 }
@@ -89,27 +94,28 @@ extension AlbumDetailContentView {
             if vm == nil {
                 SkeletonBlock(width: 100, height: 14, cornerRadius: 4)
             } else if let vm {
-                HStack(spacing: CassetteSpacing.s) {
-                    if let year = vm.year {
-                        Text(ReleaseDateFormatting.yearLabel(year))
-                    }
+                let qualities = AudioQualityClassifier.albumQualities(in: songs)
+                HStack(spacing: 6) {
                     if let genre = vm.genre, !genre.isEmpty {
-                        if vm.year != nil { Text("·") }
                         Text(genre)
                     }
-                    if let quality = AudioQualityClassifier.bestQuality(in: songs) {
-                        if vm.year != nil || (vm.genre?.isEmpty == false) {
+                    if let year = vm.year {
+                        if vm.genre?.isEmpty == false { Text("·") }
+                        Text(ReleaseDateFormatting.yearLabel(year))
+                    }
+                    ForEach(qualities.indices, id: \.self) { index in
+                        if index > 0 || vm.year != nil || (vm.genre?.isEmpty == false) {
                             Text("·")
                         }
                         AudioQualityLabelView(
-                            quality: quality,
+                            quality: qualities[index],
                             foreground: headerSecondaryColor,
                             interactive: false,
                             style: .album
                         )
                     }
                 }
-                .font(.cassetteCaption.weight(.medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(headerSecondaryColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
@@ -133,7 +139,10 @@ extension AlbumDetailContentView {
                 Image(systemName: "shuffle")
                     .font(.cassetteCellTitle)
                     .foregroundStyle(headerTextColor)
-                    .cassetteGlassButton(size: 52, tint: atmosphere.controlGlassTint)
+                    .cassetteGlassButton(
+                        size: 52,
+                        tint: atmosphere.controlGlassTint
+                    )
             }
             .disabled(songs.isEmpty)
             .opacity(vm == nil ? 0.4 : 1)
@@ -143,7 +152,7 @@ extension AlbumDetailContentView {
                     guard !songs.isEmpty else { return }
                     try? await container?.playerService.play(tracks: songs, startIndex: 0)
                 }
-            }, isDisabled: songs.isEmpty || (mode == .full && vm?.isDownloadingAlbum == true), accentColor: heroButtonVariant.background, labelColor: heroButtonVariant.foreground)
+            }, label: String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), isDisabled: songs.isEmpty || (mode == .full && vm?.isDownloadingAlbum == true), accentColor: heroButtonVariant.background, height: usesDesktopDetail ? nil : 52, labelColor: heroButtonVariant.foreground)
             .frame(maxWidth: playMaxWidth)
 
             if mode == .downloadedOnly {
@@ -160,7 +169,10 @@ extension AlbumDetailContentView {
                     Image(systemName: "trash")
                         .font(.cassetteCellTitle)
                         .foregroundStyle(headerTextColor)
-                        .cassetteGlassButton(size: 52, tint: atmosphere.controlGlassTint)
+                        .cassetteGlassButton(
+                            size: 52,
+                            tint: atmosphere.controlGlassTint
+                        )
                 }
             } else if vm?.isOffline != true {
                 if let vm {
@@ -169,16 +181,22 @@ extension AlbumDetailContentView {
                             Image(systemName: "xmark")
                                 .font(.cassetteCellTitle)
                                 .foregroundStyle(headerTextColor)
-                                .cassetteGlassButton(size: 52, tint: atmosphere.controlGlassTint)
+                                .cassetteGlassButton(
+                                    size: 52,
+                                    tint: atmosphere.controlGlassTint
+                                )
                         }
                     } else {
                         switch downloadState(for: vm) {
                         case .notDownloaded:
                             Button { Task { await vm.downloadAlbum() } } label: {
-                                Image(systemName: "arrow.down.circle")
+                                Image(systemName: "plus")
                                     .font(.cassetteCellTitle)
                                     .foregroundStyle(headerTextColor)
-                                    .cassetteGlassButton(size: 52, tint: atmosphere.controlGlassTint)
+                                    .cassetteGlassButton(
+                                        size: 52,
+                                        tint: atmosphere.controlGlassTint
+                                    )
                             }
                             .disabled(vm.songs.isEmpty)
                         case .partiallyDownloaded:
@@ -186,7 +204,10 @@ extension AlbumDetailContentView {
                                 Image(systemName: "arrow.down.circle.dotted")
                                     .font(.cassetteCellTitle)
                                     .foregroundStyle(headerTextColor)
-                                    .cassetteGlassButton(size: 52, tint: atmosphere.controlGlassTint)
+                                    .cassetteGlassButton(
+                                        size: 52,
+                                        tint: atmosphere.controlGlassTint
+                                    )
                             }
                         case .fullyDownloaded:
                             Button {
@@ -196,16 +217,22 @@ extension AlbumDetailContentView {
                                 Image(systemName: "trash")
                                     .font(.cassetteCellTitle)
                                     .foregroundStyle(headerTextColor)
-                                    .cassetteGlassButton(size: 52, tint: atmosphere.controlGlassTint)
+                                    .cassetteGlassButton(
+                                        size: 52,
+                                        tint: atmosphere.controlGlassTint
+                                    )
                             }
                         }
                     }
                 } else {
                     Button { } label: {
-                        Image(systemName: "arrow.down.circle")
+                        Image(systemName: "plus")
                             .font(.cassetteCellTitle)
                             .foregroundStyle(headerTextColor)
-                            .cassetteGlassButton(size: 52, tint: atmosphere.controlGlassTint)
+                            .cassetteGlassButton(
+                                size: 52,
+                                tint: atmosphere.controlGlassTint
+                            )
                     }
                     .disabled(true)
                     .opacity(0.4)

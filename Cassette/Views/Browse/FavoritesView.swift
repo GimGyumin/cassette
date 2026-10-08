@@ -143,7 +143,8 @@ struct FavoritesView: View {
         if !artists.isEmpty {
             Section("Artists") {
                 ForEach(artists) { artist in
-                    NavigationLink(value: HomeDestination.artist(artist)) {
+                    NavigationLink(value: HomeDestination.artistById(id: artist.id, name: artist.name,
+                                                                      coverArtId: artist.coverArt)) {
                         ArtistRow(artist: artist)
                     }
                     .artistLongPressMenu(artist)

@@ -94,7 +94,7 @@ extension LyricsViewModel {
             let bodyHasBackground = lyricDocument?.bodyLineKeysWithBackground.contains(lineKey ?? "") == true
             || !displayRows[displayIndex].backgroundWords.isEmpty
             let shouldSuppressBg = false
-            let ttmlBg = rawTtmlBg
+            let ttmlBg = Self.normalizedChorusTranslation(rawTtmlBg)
             let ttmlBgBegin: TimeInterval? = ttmlTranslation?.backgroundBegin
             let ttmlBgEnd: TimeInterval? = ttmlTranslation?.backgroundEnd
             let ttmlTextAdjusted = ttmlText
@@ -266,13 +266,24 @@ extension LyricsViewModel {
                 : LyricsTranslationSettings.resolvedTargetLanguage(preferred: preferredTarget, source: resolvedSource)
             let originalLines = displayRows.map(\.text)
 
-            if let cached = TranslationCache.shared.get(
-                songID: songId,
-                sourceLang: resolvedSource,
-                targetLang: finalTarget,
-                provider: settings.provider,
-                originalLines: originalLines
-            ) {
+            let cached: [TranslatedLyric]? = if settings.provider == .apple {
+                LyricsTranslationService.shared.cachedTranslation(
+                    songID: songId,
+                    sourceLanguage: resolvedSource,
+                    targetLanguage: finalTarget,
+                    originalLines: originalLines,
+                    strategyPreference: settings.strategyPreference
+                )
+            } else {
+                TranslationCache.shared.get(
+                    songID: songId,
+                    sourceLang: resolvedSource,
+                    targetLang: finalTarget,
+                    provider: settings.provider,
+                    originalLines: originalLines
+                )
+            }
+            if let cached {
                 replaceTranslatedLyrics(cached, reveal: settings.isAutoTranslateEnabled)
                 reconcileTracking()
                 return

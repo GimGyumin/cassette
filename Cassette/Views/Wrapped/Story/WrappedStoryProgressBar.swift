@@ -5,6 +5,29 @@
 
 import SwiftUI
 
+/// Only this small leaf animates. The slide, artwork and glass controls don't read
+/// frame-by-frame progress, and no timer runs during a hold or in the background.
+struct WrappedStoryTimedProgressBar: View {
+    let totalSlides: Int
+    let currentIndex: Int
+    let timing: StorySlideTiming
+    @State private var displayedProgress = 0.0
+
+    var body: some View {
+        WrappedStoryProgressBar(totalSlides: totalSlides, currentIndex: currentIndex,
+                                progress: displayedProgress)
+            .task(id: timing) {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { displayedProgress = timing.progress }
+                guard timing.startedAt != nil else { return }
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                withAnimation(.linear(duration: timing.remaining)) { displayedProgress = 1 }
+            }
+    }
+}
+
 /// Segmented progress bar shown at the top of the story player.
 /// Segments before `currentIndex` are fully filled; the current segment
 /// fills proportionally to `progress` (0…1); subsequent segments are empty.

@@ -21,6 +21,7 @@ struct WrappedAwardMedal: View {
     /// Observed so the holo ring stops immediately when the performance budget shrinks.
     @State private var governor = PerformanceGovernor.shared
     @State private var isVisible = false
+    @State private var ringRotation = 0.0
 
     private var spinEnabled: Bool {
         isFocused && isVisible && scenePhase == .active && governor.budget.allowsDecorativeMotion
@@ -74,35 +75,31 @@ struct WrappedAwardMedal: View {
                     .lineLimit(1)
             }
         }
-        .drawingGroup()
         .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
         .onAppear { isVisible = true }
         .onDisappear { isVisible = false }
+        .task(id: spinEnabled) {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { ringRotation = 0 }
+            guard spinEnabled else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            withAnimation(.linear(duration: 12).repeatForever(autoreverses: false)) {
+                ringRotation = 360
+            }
+        }
     }
 
     // MARK: - Outer ring
 
-    @ViewBuilder
     private var outerRing: some View {
-        if spinEnabled {
-            // TimelineView drives rotation from absolute time — no seam at cycle boundary.
-            // Gradient captured once per body evaluation; closure reuses it each tick without reallocating.
-            let gradient = holoGradient
-            // 24 fps instead of the display rate: a slowly rotating ring reads identically and
-            // costs ~20% fewer frames — this is a large `drawingGroup()` surface.
-            TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: false)) { context in
-                let elapsed = context.date.timeIntervalSinceReferenceDate
-                let degrees = (elapsed / 12.0).truncatingRemainder(dividingBy: 1) * 360
-                Circle()
-                    .strokeBorder(gradient, lineWidth: 12)
-                    .frame(width: 140, height: 140)
-                    .rotationEffect(.degrees(degrees))
-            }
-        } else {
-            Circle()
-                .strokeBorder(holoGradient, lineWidth: 12)
-                .frame(width: 140, height: 140)
-        }
+        // Animate a transform on the ring alone; no frame-by-frame SwiftUI clock or
+        // offscreen rasterization of the whole medal, including its text and shadows.
+        Circle()
+            .strokeBorder(holoGradient, lineWidth: 12)
+            .frame(width: 140, height: 140)
+            .rotationEffect(.degrees(ringRotation))
     }
 
     // MARK: - Gradients

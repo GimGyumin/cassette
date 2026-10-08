@@ -64,7 +64,7 @@ private struct LibraryPreparationGate: ViewModifier {
     func body(content: Content) -> some View {
         content
             .overlay {
-                if container?.libraryPreparationService.phase.isBusy == true,
+                if container?.libraryPreparationService.phase.isPreparing == true,
                    container?.libraryPreparationService.isPresentationDeferred != true {
                     LibraryPreparationView()
                         .transition(.opacity)

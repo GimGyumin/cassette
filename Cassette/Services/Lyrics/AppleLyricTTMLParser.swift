@@ -217,7 +217,11 @@ nonisolated private final class TTMLDocumentDecoder {
                     if words.isEmpty, node.name == "span", !raw.contains(where: \.isNewline) {
                         words.append(LyricWord(text: text, begin: bounds.begin ?? 0, end: bounds.end ?? 0, role: role, agentId: agent))
                     }
-                    if !words.isEmpty, words[words.count - 1].role == role, !words[words.count - 1].text.hasSuffix(" ") {
+                    let isPreservedFormattingWhitespace = preserve && raw.contains(where: \.isNewline)
+                    if !isPreservedFormattingWhitespace,
+                       !words.isEmpty,
+                       words[words.count - 1].role == role,
+                       !words[words.count - 1].text.hasSuffix(" ") {
                         let last = words.removeLast()
                         words.append(LyricWord(text: last.text + (preserve ? text : " "), begin: last.begin, end: last.end, role: last.role, agentId: last.agentId, ruby: last.ruby))
                     }

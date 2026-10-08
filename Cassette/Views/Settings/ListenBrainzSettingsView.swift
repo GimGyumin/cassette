@@ -11,10 +11,33 @@ struct ListenBrainzSettingsView: View {
     @State private var viewModel: ListenBrainzSettingsViewModel?
     @State private var showForgetAlert = false
     @State private var showForgetScrobblingAlert = false
+    @AppStorage(IntegrationIntroPreference.listenBrainzKey) private var hasSeenIntro = false
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        String(localized: key, bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+    }
 
     var body: some View {
         Group {
-            if let vm = viewModel {
+            if !hasSeenIntro {
+                CassetteSplashView(
+                    title: text("Get Started with ListenBrainz"),
+                    summary: text("Keep your listening history and discover fresh releases chosen for you."),
+                    icon: "waveform.path.ecg",
+                    accent: .red,
+                    features: [
+                        .init(icon: "clock.arrow.circlepath", title: text("Track your listens"),
+                              detail: text("Connect a token to keep your listening history.")),
+                        .init(icon: "sparkles", title: text("Discover fresh releases"),
+                              detail: text("Find new music based on your listening history."))
+                    ],
+                    footnote: nil,
+                    buttonTitle: text("Get Started"),
+                    buttonIdentifier: "listenBrainz.getStarted.continue",
+                    onContinue: { hasSeenIntro = true }
+                )
+                .accessibilityIdentifier("listenBrainz.getStarted")
+            } else if let vm = viewModel {
                 Form {
                     aboutSection()
                     connectionSection(vm: vm)
@@ -28,7 +51,7 @@ struct ListenBrainzSettingsView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationTitle(String(localized: "ListenBrainz", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        .navigationTitle(hasSeenIntro ? text("ListenBrainz") : text("Get Started with ListenBrainz"))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

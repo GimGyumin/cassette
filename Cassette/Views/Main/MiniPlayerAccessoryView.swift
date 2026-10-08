@@ -48,10 +48,25 @@ struct MiniPlayerAccessoryView: View {
 
     @ViewBuilder
     private var miniPlayerSurface: some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            // tabViewBottomAccessory supplies the native Liquid Glass. An opaque material capsule
+            // here would cover that system surface and make the player look like a flat pill.
+            Capsule()
+                .fill((albumTint ?? .clear).opacity(0.10))
+                .allowsHitTesting(false)
+        } else {
+            Capsule()
+                .fill(surfaceWash)
+                .overlay(Capsule().fill((albumTint ?? .clear).opacity(0.18)))
+                .allowsHitTesting(false)
+        }
+        #else
         Capsule()
             .fill(surfaceWash)
             .overlay(Capsule().fill((albumTint ?? .clear).opacity(0.18)))
             .allowsHitTesting(false)
+        #endif
     }
 
     private var hasTrack: Bool {
@@ -246,34 +261,19 @@ struct MiniPlayerAccessoryView: View {
             .disabled(!isAvailable || isLiveStream)
             .accessibilityLabel(String(localized: "Skip to previous", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
-            if playbackAppearance == .loading {
-                // Same glyph as the live control, inert until an engine produces audio.
-                Image(systemName: "play.fill")
+            Button {
+                HapticFeedback.medium.trigger()
+                Task { await container?.playerService.togglePlayPause() }
+            } label: {
+                Image(systemName: playbackAppearance.systemImage)
                     .font(.system(size: 22, weight: .bold))
                     .foregroundStyle(typoColor.opacity(isAvailable ? 1 : 0.35))
                     .frame(width: 36, height: 36)
-                    .accessibilityLabel(String(localized: "Loading", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-            } else {
-                Button {
-                    HapticFeedback.medium.trigger()
-                    Task {
-                        if playbackAppearance == .play {
-                            await container?.playerService.resume()
-                        } else {
-                            await container?.playerService.pause()
-                        }
-                    }
-                } label: {
-                    Image(systemName: playbackAppearance == .pause ? "pause.fill" : "play.fill")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundStyle(typoColor.opacity(isAvailable ? 1 : 0.35))
-                        .frame(width: 36, height: 36)
-                        .contentTransition(.symbolEffect(.replace))
-                }
-                .buttonStyle(.borderless)
-                .disabled(!isAvailable)
-                .accessibilityLabel(playbackAppearance == .pause ? String(localized: "Pause", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    .contentTransition(.symbolEffect(.replace))
             }
+            .buttonStyle(.borderless)
+            .disabled(!isAvailable)
+            .accessibilityLabel(playbackAppearance == .play ? String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Pause", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
             Button {
                 HapticFeedback.light.trigger()
@@ -560,40 +560,20 @@ struct MiniPlayerAccessoryView: View {
     }
 
     private func playPauseButton(playbackAppearance: PlaybackControlAppearance, isAvailable: Bool, compact: Bool) -> some View {
-        Group {
-            if playbackAppearance == .loading {
-                // Nothing is playable yet: the control shows the play glyph — never a spinner, and
-                // never a pause/stop glyph that would claim playback that is not happening — but
-                // stays inert until an engine confirms audio.
-                Image(systemName: "play.fill")
-                    .font(compact ? .body.weight(.semibold) : .title3)
-                    .foregroundStyle(typoColor)
-                    .opacity(isAvailable ? 1.0 : 0.35)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .accessibilityLabel(String(localized: "Loading", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-            } else {
-                Button {
-                    HapticFeedback.medium.trigger()
-                    Task {
-                        if playbackAppearance == .play {
-                            await container?.playerService.resume()
-                        } else {
-                            await container?.playerService.pause()
-                        }
-                    }
-                } label: {
-                    Image(systemName: playbackAppearance == .pause ? "pause.fill" : "play.fill")
-                        .font(compact ? .body.weight(.semibold) : .title3)
-                        .foregroundStyle(typoColor)
-                        .opacity(isAvailable ? 1.0 : 0.35)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .disabled(!isAvailable)
-                .accessibilityLabel(playbackAppearance == .pause ? String(localized: "Pause", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-            }
+        Button {
+            HapticFeedback.medium.trigger()
+            Task { await container?.playerService.togglePlayPause() }
+        } label: {
+            Image(systemName: playbackAppearance.systemImage)
+                .font(compact ? .body.weight(.semibold) : .title3)
+                .foregroundStyle(typoColor)
+                .opacity(isAvailable ? 1.0 : 0.35)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.borderless)
+        .disabled(!isAvailable)
+        .accessibilityLabel(playbackAppearance == .play ? String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Pause", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
     }
 
     private var swipeSkipGesture: some Gesture {

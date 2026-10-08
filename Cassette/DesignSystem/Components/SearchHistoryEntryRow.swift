@@ -12,8 +12,8 @@ import SwiftData
 /// on existing entries no longer reach row bodies.
 ///
 /// Identifiable via PersistentIdentifier so ForEach can maintain stable row identity
-/// across @Query re-fetches without holding a @Model reference in the view tree.
-struct SearchHistoryRowData: Identifiable, Equatable {
+/// across background snapshots without holding a @Model reference in the view tree.
+nonisolated struct SearchHistoryRowData: Identifiable, Equatable, Sendable {
     let id: PersistentIdentifier
     let coverArtId: String?
     let itemId: String

@@ -64,6 +64,9 @@ protocol ServerServiceProtocol: AnyObject, Sendable {
     /// Callers must NOT cache this client — always request a fresh one to pick up config changes.
     func makeSwiftSonicClient() async throws -> SwiftSonicClient
 
+    /// A dedicated client for slow, sequential server-side lyrics generation.
+    func makeLyricsGenerationClient() async throws -> SwiftSonicClient
+
     /// Returns the stored credentials for the active server.
     /// Used by MediaResolver and DownloadService to inject headers into AVPlayer / URLSession.
     func activeCredentials() async throws -> ServerCredentials
@@ -74,4 +77,11 @@ protocol ServerServiceProtocol: AnyObject, Sendable {
 
     /// Warms Keychain + client construction so the first Home fetch isn't blocked on it.
     func preWarmClient() async
+}
+
+
+extension ServerServiceProtocol {
+    func makeLyricsGenerationClient() async throws -> SwiftSonicClient {
+        try await makeSwiftSonicClient()
+    }
 }

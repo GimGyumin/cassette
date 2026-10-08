@@ -110,7 +110,7 @@ struct AlbumSongRows: View {
             #if os(macOS)
             if showDiscHeader {
                 Text(String(localized: "Disc \(disc)", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                    .font(.cassetteSectionTitle)
+                    .font(.system(size: 17, weight: .regular))
                     .foregroundStyle(titleColor)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, CassetteSpacing.l)
@@ -118,7 +118,7 @@ struct AlbumSongRows: View {
                     .padding(.bottom, CassetteSpacing.xs)
             }
             Group {
-                SongRow(song: liveSong, index: song.trackNumber ?? (index + 1), showArtist: liveSong.showsArtist(inAlbumBy: albumArtist), isFavorite: favoriteSongIds.contains("song:\(song.id)"), titleColor: titleColor, secondaryColor: secondaryColor, onDownload: downloadAction, onRemoveDownload: removeAction, isDownloading: isDownloading, onAddToPlaylist: onAddToPlaylist)
+                SongRow(song: liveSong, index: song.trackNumber ?? (index + 1), showCoverArt: false, showArtist: liveSong.showsArtist(inAlbumBy: albumArtist), isFavorite: favoriteSongIds.contains("song:\(song.id)"), titleColor: titleColor, secondaryColor: secondaryColor, onDownload: downloadAction, onRemoveDownload: removeAction, isDownloading: isDownloading, onAddToPlaylist: onAddToPlaylist)
                     .reservingArtistSpace()
                     .padding(.horizontal, CassetteSpacing.l)
                     .contentShape(Rectangle())
@@ -137,7 +137,7 @@ struct AlbumSongRows: View {
             VStack(spacing: 0) {
                 if showDiscHeader {
                     Text(String(localized: "Disc \(disc)", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                        .font(.cassetteSectionTitle)
+                        .font(.system(size: 17, weight: .regular))
                         .foregroundStyle(titleColor)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, CassetteSpacing.l)
@@ -145,16 +145,16 @@ struct AlbumSongRows: View {
                         .padding(.bottom, CassetteSpacing.xs)
                 }
                 Group {
-                    SongRow(song: liveSong, index: song.trackNumber ?? (index + 1), showArtist: liveSong.showsArtist(inAlbumBy: albumArtist), isFavorite: favoriteSongIds.contains("song:\(song.id)"), titleColor: titleColor, secondaryColor: secondaryColor, onDownload: downloadAction, onRemoveDownload: removeAction, isDownloading: isDownloading, onAddToPlaylist: onAddToPlaylist)
+                    SongRow(song: liveSong, index: song.trackNumber ?? (index + 1), showCoverArt: false, showArtist: liveSong.showsArtist(inAlbumBy: albumArtist), isFavorite: favoriteSongIds.contains("song:\(song.id)"), titleColor: titleColor, secondaryColor: secondaryColor, onDownload: downloadAction, onRemoveDownload: removeAction, isDownloading: isDownloading, onAddToPlaylist: onAddToPlaylist)
                         .reservingArtistSpace()
-                        .padding(.horizontal, CassetteSpacing.l)
+                        .padding(.horizontal, CassetteSpacing.xl)
                         .contentShape(Rectangle())
                 }
                 .onTapGesture { onTap(index) }
                 .accessibilityAction { onTap(index) }
                 AlbumTrackDivider(color: titleColor.opacity(0.22))
-                    .padding(.leading, CassetteSpacing.l + 28 + CassetteSpacing.s)
-                    .padding(.trailing, CassetteSpacing.l)
+                    .padding(.leading, CassetteSpacing.xl + 28 + CassetteSpacing.s)
+                    .padding(.trailing, CassetteSpacing.xl)
             }
             #endif
         }

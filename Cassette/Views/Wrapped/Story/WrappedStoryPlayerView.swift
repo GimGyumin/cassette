@@ -30,13 +30,14 @@ struct WrappedStoryPlayerView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appContainer) private var container
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     private let slides = WrappedStorySlideKind.allCases
     private let slideDuration: Double = 5.0
-    private let timerInterval: Double = 0.05
 
     @State private var currentIndex = 0
-    @State private var progress: Double = 0.0
+    @State private var timing = StorySlideTiming(duration: 5)
+    @State private var isVisible = false
     @State private var isPaused = false
     @State private var timerTask: Task<Void, Never>? = nil
     @State private var longPressTask: Task<Void, Never>? = nil
@@ -83,8 +84,18 @@ struct WrappedStoryPlayerView: View {
         .statusBarHidden(true)
         #endif
         .persistentSystemOverlays(.hidden)
-        .onAppear { startTimer() }
-        .onDisappear { timerTask?.cancel() }
+        .onAppear {
+            isVisible = true
+            reconcileTimer()
+        }
+        .onDisappear {
+            isVisible = false
+            stopTimer()
+            longPressTask?.cancel()
+            longPressTask = nil
+        }
+        .onChange(of: isPaused) { _, _ in reconcileTimer() }
+        .onChange(of: scenePhase) { _, _ in reconcileTimer() }
         .task { await loadWrappedData() }
         #if os(iOS)
         .sheet(isPresented: $showShareSheet) {
@@ -109,10 +120,10 @@ struct WrappedStoryPlayerView: View {
     private var overlayControls: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: CassetteSpacing.s) {
-                WrappedStoryProgressBar(
+                WrappedStoryTimedProgressBar(
                     totalSlides: slides.count,
                     currentIndex: currentIndex,
-                    progress: progress
+                    timing: timing
                 )
                 Button {
                     Logger.wrappedStory.debug("[STORY] dismissed via X button at slide=\(currentIndex, privacy: .public)")
@@ -246,38 +257,49 @@ struct WrappedStoryPlayerView: View {
     private func goForward() {
         HapticFeedback.light.trigger()
         if currentIndex < slides.count - 1 {
-            progress = 0.0
+            stopTimer()
+            timing = StorySlideTiming(duration: slideDuration)
             withAnimation(.easeInOut(duration: 0.25)) { currentIndex += 1 }
+            reconcileTimer()
             Logger.wrappedStory.debug("[STORY] → slide \(currentIndex, privacy: .public)/\(slides.count, privacy: .public)")
         } else {
             Logger.wrappedStory.debug("[STORY] last slide reached — dismissing")
-            timerTask?.cancel()
-            timerTask = nil
+            stopTimer()
             dismiss()
         }
     }
 
     private func goBack() {
         HapticFeedback.light.trigger()
-        progress = 0.0
+        stopTimer()
+        timing = StorySlideTiming(duration: slideDuration)
         withAnimation(.easeInOut(duration: 0.25)) {
             if currentIndex > 0 { currentIndex -= 1 }
         }
+        reconcileTimer()
         Logger.wrappedStory.debug("[STORY] ← slide \(currentIndex, privacy: .public)/\(slides.count, privacy: .public)")
     }
 
     // MARK: - Timer
 
-    private func startTimer() {
+    private func stopTimer() {
         timerTask?.cancel()
+        timerTask = nil
+        timing.pause(at: ProcessInfo.processInfo.systemUptime)
+    }
+
+    private func reconcileTimer() {
+        stopTimer()
+        guard isVisible, scenePhase == .active, !isPaused,
+              currentIndex < slides.count - 1 else { return }
+        timing.resume(at: ProcessInfo.processInfo.systemUptime)
+        let remaining = timing.remaining
+        // One deadline per slide, not a 20 Hz loop invalidating the entire story.
         timerTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(Int(timerInterval * 1000)))
-                guard !Task.isCancelled, !isPaused else { continue }
-                guard currentIndex < slides.count - 1 else { continue }
-                progress += timerInterval / slideDuration
-                if progress >= 1.0 { goForward() }
-            }
+            do { try await Task.sleep(for: .seconds(remaining)) }
+            catch { return }
+            guard !Task.isCancelled, isVisible, scenePhase == .active, !isPaused else { return }
+            goForward()
         }
     }
 

@@ -14,6 +14,7 @@ import AppKit
 @MainActor
 final class FullPlayerViewModel {
     var coverImage: PlatformImage? = nil
+    private(set) var coverImageId: String? = nil
     var dominantColor: Color = .black
     var atmosphereTop: Color = .black
     var atmosphereMid: Color = .black
@@ -34,6 +35,10 @@ final class FullPlayerViewModel {
     /// holes against near-black themes. Light frost on dark / soft white frost on light keeps contrast.
     var glassTint: Color { isLightBackground ? Color.white.opacity(0.58) : Color.white.opacity(0.16) }
 
+    func coverImage(for coverArtId: String) -> PlatformImage? {
+        coverImageId == coverArtId ? coverImage : nil
+    }
+
     func updateColors(for coverArtId: String?, colorExtractor: DominantColorExtractor, container: AppContainer?) async {
         let generation = colorUpdateGeneration + 1
         colorUpdateGeneration = generation
@@ -41,6 +46,7 @@ final class FullPlayerViewModel {
         guard let coverArtId else {
             withAnimation(CassetteAnimation.theme) {
                 coverImage = nil
+                coverImageId = nil
                 dominantColor = .black
                 atmosphereTop = .black
                 atmosphereMid = .black
@@ -54,7 +60,9 @@ final class FullPlayerViewModel {
         // Theme the page INSTANTLY from the already-memoized dominant colour (it's cached app-wide by the cards /
         // mini player), so the background is coloured the moment the player opens — no black flash while the
         // cover downloads. Refined again once the artwork yields a player-atmosphere accent.
-        let cachedColor = colorExtractor.cachedColor(for: coverArtId)
+        let cachedColor = colorExtractor.colorOverride(for: coverArtId)
+            ?? colorExtractor.cachedColor(for: coverArtId)
+            ?? ColorCache.palette(for: coverArtId)?.background
         if let cachedColor {
             withAnimation(CassetteAnimation.theme) {
                 applyThemeColor(cachedColor)
@@ -75,9 +83,9 @@ final class FullPlayerViewModel {
             // One k-means background extraction feeds both seeds. The page colour and the player
             // atmosphere seed are the same analysis, so this used to run the whole palette
             // pipeline twice per track change.
-            // Under Low Power Mode / thermal pressure we reuse the memoized colour instead of
-            // spending the CPU on a device that is already struggling.
-            let skipAnalysis = cachedColor != nil && !CassettePerformance.allowsHeavyColorAnalysis
+            // A prepared palette is valid on a cool device too. Reopening the player
+            // or changing tracks on the same album must not repeat image clustering.
+            let skipAnalysis = cachedColor != nil
             let extracted: (page: Int?, player: Int?) = skipAnalysis
                 ? (nil, nil)
                 : await Task.detached(priority: .utility) { () -> (page: Int?, player: Int?) in
@@ -85,7 +93,7 @@ final class FullPlayerViewModel {
                     let page = cachedColor == nil ? background : nil
                     return (page, background)
                 }.value
-            guard generation == colorUpdateGeneration else { return }
+            guard generation == colorUpdateGeneration, !Task.isCancelled else { return }
             if cachedColor == nil, let page = extracted.page {
                 _ = colorExtractor.storeColor(packed: page, for: coverArtId)
             }
@@ -97,6 +105,7 @@ final class FullPlayerViewModel {
             }()
             withAnimation(CassetteAnimation.theme) {
                 coverImage = image
+                coverImageId = coverArtId
                 applyThemeColor(seed)
             }
             return
@@ -114,7 +123,8 @@ final class FullPlayerViewModel {
 
         let data: Data
         if url.isFileURL {
-            guard let localData = try? Data(contentsOf: url) else { return }
+            let localData = await Task.detached(priority: .utility) { try? Data(contentsOf: url) }.value
+            guard let localData, !Task.isCancelled else { return }
             data = localData
         } else {
             var request = URLRequest(url: url)
@@ -131,12 +141,9 @@ final class FullPlayerViewModel {
         }
         guard generation == colorUpdateGeneration else { return }
 
-        // Snapshot the policy on the MainActor so the detached closure stays free of global reads.
-        let allowsHeavyAnalysis = CassettePerformance.allowsHeavyColorAnalysis
         let processed: (image: PlatformImage, page: Int?, player: Int?)? = await Task.detached(priority: .utility) {
-            guard let image = PlatformImage(data: data) else { return nil }
-            guard cachedColor == nil || allowsHeavyAnalysis else {
-                // Constrained device: show the artwork, theme it from the memoized colour.
+            guard let image = ArtworkImageCache.thumbnailImage(from: data, maxDimension: ArtworkTier.hero.decodePixels) else { return nil }
+            guard cachedColor == nil else {
                 return (image, nil, nil)
             }
             // Single extraction shared by both seeds (see the cached-image path above).
@@ -144,7 +151,7 @@ final class FullPlayerViewModel {
             let page = cachedColor == nil ? background : nil
             return (image, page, background)
         }.value
-        guard generation == colorUpdateGeneration, let processed else { return }
+        guard generation == colorUpdateGeneration, !Task.isCancelled, let processed else { return }
         if cachedColor == nil {
             _ = colorExtractor.storeColor(packed: processed.page, for: coverArtId)
         }
@@ -156,6 +163,7 @@ final class FullPlayerViewModel {
         }()
         withAnimation(CassetteAnimation.theme) {
             coverImage = processed.image
+            coverImageId = coverArtId
             applyThemeColor(seed)
         }
     }

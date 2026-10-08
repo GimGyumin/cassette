@@ -148,18 +148,26 @@ extension PlayerService {
         guard epoch == nowPlayingEpoch else { return }
         await nowPlayingService?.pushPosition(elapsed: clamped, rate: 1.0, duration: duration)
         // OpenSubsonic playbackReport (Navidrome 0.62+) — keep server Now Playing rich without double-scrobbling.
-        if now.timeIntervalSince(lastPlaybackReportAt) >= 30 {
-            if let songId = await MainActor.run(body: { state.currentTrack?.id }) {
-                await reportOpenSubsonicPlayback(
-                    state: .playing,
-                    songId: songId,
-                    positionMs: Int(clamped * 1000)
-                )
-            }
-            if let context = currentSource?.jellyfinPlaybackContext {
-                await reportJellyfinProgress(context, position: clamped, isPaused: false)
+        if now.timeIntervalSince(lastPlaybackReportAt) >= 30, periodicPlaybackReportTask == nil {
+            let playbackEpoch = self.playbackEpoch
+            let songId = await MainActor.run { state.currentTrack?.id }
+            guard epoch == nowPlayingEpoch, playbackEpoch == self.playbackEpoch, let songId else { return }
+            let context = currentSource?.jellyfinPlaybackContext
+            lastPlaybackReportAt = now
+            // A slow server must not freeze the 500 ms progress/EOF/prebuffer loop.
+            periodicPlaybackReportTask = Task { [weak self] in
+                await self?.sendPeriodicPlaybackReport(songId: songId, context: context,
+                                                      position: clamped, epoch: playbackEpoch)
             }
         }
+    }
+
+    private func sendPeriodicPlaybackReport(songId: String, context: JellyfinPlaybackContext?, position: TimeInterval, epoch: UInt64) async {
+        defer { if epoch == playbackEpoch { periodicPlaybackReportTask = nil } }
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        await reportOpenSubsonicPlayback(state: .playing, songId: songId, positionMs: Int(position * 1000))
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        if let context { await reportJellyfinProgress(context, position: position, isPaused: false) }
     }
 
     func reportJellyfinStarted(_ context: JellyfinPlaybackContext, position: TimeInterval) async {

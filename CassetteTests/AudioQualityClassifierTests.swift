@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import Cassette
 
 @Suite("AudioQualityClassifier")
@@ -74,12 +75,45 @@ struct AudioQualityClassifierTests {
         #expect(AudioQualityClassifier.bestQuality(in: [lossless, surround]) == .multichannel(channels: 6, codec: nil))
     }
 
-    @Test("Lossless badge still respects cellular and transcoding")
+    @Test("Album header keeps spatial and lossless masters visible together")
+    func albumQualityBadges() {
+        let atmos = DisplayableSong(id: "atmos", title: "A", genre: "Dolby Atmos", channelCount: 6)
+        let hiRes = DisplayableSong(
+            id: "hires",
+            title: "B",
+            audioFormat: "flac",
+            bitDepth: 24,
+            samplingRate: 96_000,
+            channelCount: 2
+        )
+        #expect(AudioQualityClassifier.albumQualities(in: [hiRes, atmos]) == [
+            .dolbyAtmos,
+            .hiResLossless(bitDepth: 24, sampleRate: 96_000, formatLabel: "FLAC")
+        ])
+    }
+
+    @Test("Lossless badge follows the stream codec on Wi-Fi and cellular")
     func losslessBadgeGating() {
         let song = DisplayableSong(id: "flac", title: "Music", audioFormat: "flac", bitDepth: 16, samplingRate: 44_100)
         #expect(AudioQualityClassifier.displayablePlaybackQuality(for: song, isExpensive: false, isTranscoding: false) != nil)
-        #expect(AudioQualityClassifier.displayablePlaybackQuality(for: song, isExpensive: true, isTranscoding: false) == nil)
+        #expect(AudioQualityClassifier.displayablePlaybackQuality(for: song, isExpensive: true, isTranscoding: false) != nil)
         #expect(AudioQualityClassifier.displayablePlaybackQuality(for: song, isExpensive: false, isTranscoding: true) == nil)
+    }
+
+    @Test func streamQualityUsesCodecInsteadOfUniversalEndpointName() throws {
+        let routes: [(String, Bool)] = [
+            ("/Audio/song/universal?AudioCodec=flac&Static=false", true),
+            ("/Audio/song/universal?audiocodec=ALAC", true),
+            ("/Audio/song/universal?AudioCodec=aac&Static=false", true),
+            ("/Audio/song/universal?Static=true", false),
+            ("/Audio/song/main.m3u8?AudioCodec=aac", true),
+            ("/rest/stream?format=raw", false),
+            ("/rest/stream?format=aac", true),
+        ]
+        for (route, isLossy) in routes {
+            let url = try #require(URL(string: "https://music.example.com" + route))
+            #expect(AudioQualityClassifier.isLossyTranscodeStream(.stream(url, customHeaders: [:])) == isLossy)
+        }
     }
 
     @Test("Lossy stereo codecs have no quality label", arguments: ["mp3", "aac", "opus", "ogg", "wma"])
@@ -112,6 +146,13 @@ struct AudioQualityClassifierTests {
         #expect(AudioQualityClassifier.shouldSkipTranscoding(song))
         #expect(AudioQualityClassifier.classify(song) == nil)
         #expect(!AudioQualityClassifier.isSpatialOrMultichannel(song))
+    }
+
+    @Test("Missing Jellyfin channel metadata does not force a raw FLAC stream")
+    func unknownStereoLayoutCanTranscode() {
+        let song = DisplayableSong(id: "unknown", title: "Music", audioFormat: "flac",
+                                   bitRate: nil, channelCount: nil)
+        #expect(!AudioQualityClassifier.shouldSkipTranscoding(song))
     }
 
     @Test("Multichannel FLAC bypasses stereo cache")

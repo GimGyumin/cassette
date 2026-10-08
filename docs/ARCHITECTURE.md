@@ -249,12 +249,11 @@ order — RAM → tiered disk → plain disk → network — so a downloaded fil
 
 **Launch preparation.** `LibraryChangeDetector` compares the media-file count reported by
 `getScanStatus` with the count recorded the last time the library was prepared, per server. A
-different count means tracks were added or removed, and `LibraryPreparationService` then runs a
-visible pass — rebuild the local index, reconcile album artwork (including covers whose id moved),
-drop catalog-derived caches — behind `LibraryPreparationView`, which `RootView` overlays while the
-phase is busy. Two rules keep it from being annoying: an unknown server count (never scanned) never
-triggers work, and the **first** observation for a server only records the count, because the
-onboarding pass already prepared that library.
+different count means tracks were added or removed. `LibraryPreparationService` rebuilds the local
+index, optionally reconciles the entire artwork library when the user enabled that in Storage, then
+refreshes catalog-derived caches. An index failure stops the pass without recording the new count,
+so a later retry can recover. First sign-in opens the library immediately and starts indexing in the
+background; visible covers load on demand. The first server-count observation records a baseline.
 
 ### AVPlayer hand-over (why a track change is audible sooner)
 
@@ -317,8 +316,8 @@ nothing while the device is perfectly connected. `ServerReachabilityMonitor` own
 |---|---|
 | `ServerState.isServerReachable` | False when the active server does not answer |
 | Probe | `ServerService.testConnection()` — one bounded `ping`, no retries |
-| While reachable | one check every 20 s |
-| While unreachable | one check every 3 s (that is what makes recovery automatic) |
+| While reachable | one check every 60 s |
+| While unreachable | retries after 3, 6, 12, 24, then 30 s |
 | No device route | `isOnline == false` flips it immediately, no ping wasted |
 | Foreground / "Try Again" | `checkNow()` |
 
@@ -327,9 +326,8 @@ Which surfaces read it:
 - **Home, Discover, Recently Added, Artists, Albums, Favorites, Playlists** show
   `ServerUnreachableView` instead of their content (`MainTabView.reachabilityGated`).
 - **Library, Downloads and Search are never gated**: they read the local index and the download
-  store. `SearchViewModel.search(query:serverReachable:)` skips the catalog query while the server is
-  away, answers from `LibraryIndexService` only (`isLocalOnly`), and `SearchView` re-runs the query —
-  upgrading to a catalog search by itself — when the flag flips back.
+  store. Search uses bounded pages from the local index while it is healthy. If index creation fails,
+  an online search falls back to the server; offline search shows an error with a rebuild action.
 - **Playback** keeps working from downloads/cache, and `CassetteApp` re-runs
   `playerService.handleNetworkRestored()` on both `isOnline` **and** `isServerReachable` transitions.
 
@@ -561,11 +559,30 @@ logs one line, e.g. `thermal=serious lowPower=false active=false motion=false be
 
 ## Known debt
 
+### Explicit transport and seek states
+
+`PlaybackState.loading` means initial acquisition only. `buffering` means the current
+track is waiting for data, and `recovering` means it is being reopened at its saved
+position. All three retain play intent and a cancellable pending control. Engine
+waiting/confirmation and resume rules live in `PlaybackState`, shared by both engines;
+late engine notifications cannot turn a user pause into playback. Advancing media time
+also confirms waiting phases. Waiting finalizes the listening segment; confirmation
+starts a new segment, so buffer waits are excluded from listening time.
+
+`PlaybackSeekState` owns a target and deadline together. Reconciliation either waits,
+lands, or expires, clearing the whole operation atomically. Seeking remains separate
+from transport because a paused track may be scrubbed without resuming it. EOF and
+recovery gates consult this operation instead of independently maintained target and
+deadline variables. Engine generations, restore information and gapless ownership remain
+actor-owned; this change does not yet introduce separate transition/session coordinators.
+
 ### Playback state ownership after the first file decomposition
 
-`PlayerService.swift` now holds 344 lines of stored state and dependency wiring. Its implementation
+`PlayerService.swift` holds stored state and dependency wiring. Its implementation
 is split across 14 actor extensions, including engine, gapless, transition and iOS audio-session
-files. State still has one actor owner; the move preserves execution order and generation guards.
+files. `GaplessBridgeState` and `SystemPlaybackState` now group bridge flags and the AVPlayer
+handover/recovery generation, so their reset and invalidation rules are explicit. The actor still
+owns these values; the move preserves execution order and generation guards.
 Cross-file members are now module-internal, while file-local helpers remain private. This is an
 explicit intermediate tradeoff: smaller responsibility files do not remove shared mutable state or
 make the two playback engines interchangeable.

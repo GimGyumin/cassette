@@ -35,6 +35,9 @@ nonisolated enum HomeDestination: Hashable {
     case artistById(id: String, name: String, coverArtId: String?)
 
     // MARK: - Unique in-page pushes
+    /// Detail-to-detail navigation has no matched zoom source. Keep the path value small
+    /// and stable while the artist's album metadata refreshes during an interactive pop.
+    case albumPush(id: String, name: String, coverArtId: String?, token: UUID)
     /// An artist pushed from inside another page (album header, playlist header, Now Playing).
     ///
     /// `artistById` is Hashable by content, and `NavigationStack` maps an equal path value onto the entry

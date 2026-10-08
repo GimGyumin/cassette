@@ -34,6 +34,7 @@ final class MockKeychain: KeychainServiceProtocol {
 
 @MainActor
 final class MockCacheService: CacheServiceProtocol {
+    var cachedFileURL: URL?
     var usedBytes: Int64 {
         get async { 0 }
     }
@@ -46,9 +47,12 @@ final class MockCacheService: CacheServiceProtocol {
     var lyricsCount: Int {
         get async { 0 }
     }
-    func cachedURL(forSongId songId: String, serverId: UUID) async -> URL? { nil }
+    func cachedURL(forSongId songId: String, serverId: UUID) async -> URL? { cachedFileURL }
     func touch(songId: String, serverId: UUID) async {}
     func store(data: Data, forSongId songId: String, serverId: UUID, mimeType: String) async throws -> URL {
+        struct MockError: Error {}; throw MockError()
+    }
+    func store(fileAt sourceURL: URL, forSongId songId: String, serverId: UUID, mimeType: String) async throws -> URL {
         struct MockError: Error {}; throw MockError()
     }
     func setMaxBytes(_ value: Int64) async {}
@@ -76,6 +80,27 @@ struct ServerServiceTests {
     }
 
     // MARK: addServer
+
+    @Test func quickConnectVerificationStateTracksCredentials() async throws {
+        let keychain = MockKeychain()
+        let (service, state) = try makeService(keychain: keychain)
+        try await service.addServer(displayName: "Music", baseURL: "https://music.example.com",
+                                    username: "listener", password: "", customHeaders: [:])
+        let id = try #require(state.activeServer?.id)
+        try await keychain.store(ServerCredentials(password: "", customHeaders: [:], jellyfinAccessToken: "quick-connect-token"),
+                                 forKey: ServerCredentials.keychainKey(for: id))
+        await service.refreshCredentialAvailability()
+        #expect(state.needsSubsonicVerification)
+        #expect(!state.needsCredentialReentry)
+        try await service.updateServer(id: id, displayName: "Music", baseURL: "https://music.example.com",
+                                       username: "listener", password: "verified-password", customHeaders: [:])
+        #expect(!state.needsSubsonicVerification)
+        let credentials = try await service.activeCredentials()
+        #expect(credentials.password == "verified-password")
+        #expect(credentials.jellyfinAccessToken == nil)
+        await service.loadPersistedState()
+        #expect(!state.needsSubsonicVerification)
+    }
 
     @Test func addServer_firstServer_becomesActive() async throws {
         let (service, state) = try makeService()

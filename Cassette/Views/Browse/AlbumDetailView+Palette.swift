@@ -23,7 +23,7 @@ extension AlbumDetailContentView {
             return
         }
         // Whole-cover majority color so the page body matches the cover's dominant hue.
-        let cached = colorExtractor.dominantColor(for: coverArtId, image: effectiveInitialImage)
+        let cached = colorExtractor.cachedColor(for: coverArtId) ?? .clear
         if cached != .clear {
             dominantColor = cached
             if let palette = ColorCache.palette(for: coverArtId) {
@@ -43,7 +43,7 @@ extension AlbumDetailContentView {
         let palette = await Task.detached(priority: .utility) {
             AlbumColorAnalyzer.generateArtworkPalette(from: image)
         }.value
-        guard let palette else { return }
+        guard let palette, !Task.isCancelled else { return }
         cacheAlbumPaletteAliases(palette, coverArtId: coverArtId)
         let color = colorExtractor.storeColor(packed: palette.packedBackground, for: coverArtId)
         withAnimation(CassetteAnimation.theme) {

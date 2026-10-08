@@ -22,6 +22,7 @@ final class PlaylistDetailViewModel {
     var downloadingIds: Set<String> = []
 
     private(set) var playlistDetail: PlaylistWithSongs?
+    private var loadGeneration = 0
     private let playlistId: String
     private let libraryService: any LibraryServiceProtocol
     private let downloadService: any DownloadServiceProtocol
@@ -46,33 +47,43 @@ final class PlaylistDetailViewModel {
     }
 
     func load() async {
+        guard !Task.isCancelled else { return }
+        loadGeneration += 1
+        let generation = loadGeneration
         isLoading = true
         error = nil
         if serverState.isOnline {
-            await loadFromAPI()
+            await loadFromAPI(generation: generation)
         } else {
             isOffline = true
-            await loadFromLocal()
+            await loadFromLocal(generation: generation)
         }
+        guard generation == loadGeneration else { return }
         isLoading = false
-        isDownloadingPlaylist = await downloadService.isDownloadingPlaylist(playlistId)
+        let downloading = await downloadService.isDownloadingPlaylist(playlistId)
+        guard generation == loadGeneration, !Task.isCancelled else { return }
+        isDownloadingPlaylist = downloading
     }
 
-    private func loadFromAPI() async {
+    private func loadFromAPI(generation: Int) async {
         do {
             let apiPlaylist = try await libraryService.playlist(id: playlistId)
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             // Empty-success guard: behind a captive proxy / Cloudflare-WARP edge the server
             // is reachable but answers 200 with no entries. That never throws, so the catch
             // below can't help — treat an empty result exactly like a failure and prefer the
             // downloaded copy before clobbering the UI with an "Empty Playlist" state.
-            if (apiPlaylist.entry ?? []).isEmpty, await loadFromLocal() { return }
-            playlistDetail = apiPlaylist
+            if (apiPlaylist.entry ?? []).isEmpty, await loadFromLocal(generation: generation) { return }
             guard let serverId = serverState.activeServer?.id else { return }
             let downloadedIds = await downloadService.downloadedSongIds(serverId: serverId)
+            let prepared = try await DisplayableSong.prepare(apiPlaylist.entry ?? [], downloadedIDs: downloadedIds)
+            guard generation == loadGeneration, !Task.isCancelled,
+                  serverState.activeServer?.id == serverId else { return }
+            playlistDetail = apiPlaylist
             name = apiPlaylist.name
             owner = apiPlaylist.owner
             coverArtId = apiPlaylist.coverArt
-            songs = (apiPlaylist.entry ?? []).map { DisplayableSong(from: $0, isDownloaded: downloadedIds.contains($0.id)) }
+            songs = prepared
             isOffline = false
             // Self-heal: if this playlist was downloaded before songIds existed (or with an
             // empty list), repair it now from the authoritative order so it reads offline next time.
@@ -81,10 +92,14 @@ final class PlaylistDetailViewModel {
                 serverId: serverId,
                 orderedSongIds: (apiPlaylist.entry ?? []).map(\.id)
             )
+        } catch is CancellationError {
+            return
         } catch {
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             // Server unreachable (airplane mode with stale isOnline, VPN-satisfied path,
             // server down): fall back to the downloaded copy before surfacing an error.
-            if await loadFromLocal() { return }
+            if await loadFromLocal(generation: generation) { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             self.error = UserFacingError.from(error)
         }
     }
@@ -93,10 +108,11 @@ final class PlaylistDetailViewModel {
     /// Sets isOffline only on success — a transient online failure must not flip
     /// the UI into offline mode while songs from a previous load are still shown.
     @discardableResult
-    private func loadFromLocal() async -> Bool {
+    private func loadFromLocal(generation: Int) async -> Bool {
         guard let serverId = serverState.activeServer?.id,
               let data = await downloadService.localPlaylistData(playlistId: playlistId, serverId: serverId),
-              !data.songs.isEmpty else { return false }
+              !data.songs.isEmpty, generation == loadGeneration, !Task.isCancelled,
+              serverState.activeServer?.id == serverId else { return false }
         name = data.name
         coverArtId = data.coverArtId
         songs = data.songs

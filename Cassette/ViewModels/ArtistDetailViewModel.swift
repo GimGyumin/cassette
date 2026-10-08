@@ -11,6 +11,8 @@ import OSLog
 @MainActor
 final class ArtistDetailViewModel {
     var artist: ArtistID3?
+    private(set) var albumSections: [(ArtistAlbumCategorizer.Section, [AlbumID3])] = []
+    private(set) var latestRelease: AlbumID3?
     var artistBiography: String?
     /// MusicBrainz ID from `getArtistInfo2` (used for profile facts / enrichment).
     var musicBrainzId: String?
@@ -30,7 +32,6 @@ final class ArtistDetailViewModel {
     private let recommendationService: RecommendationService
     private let imageResolver: ExternalArtistImageResolver
     private var loadGeneration = 0
-    private var outOfLibraryImagesTask: Task<Void, Never>?
     /// Prevents re-fetch when pushing album detail and popping back (SwiftUI re-runs `.task`).
     private var didLoadArtist = false
     private var didLoadTopSongs = false
@@ -71,16 +72,30 @@ final class ArtistDetailViewModel {
     }
 
     func load(force: Bool = false) async {
+        guard !Task.isCancelled else { return }
         if didLoadArtist, !force, artist != nil { return }
 
         let generation = loadGeneration + 1
         loadGeneration = generation
         isLoading = true
+        defer { if generation == loadGeneration { isLoading = false } }
         error = nil
         do {
             let fetched = try await libraryService.artist(id: artistId)
-            guard generation == loadGeneration else { return }
+            try Task.checkCancellation()
+            let presentation = await Task.detached(priority: .userInitiated) {
+                let albums = fetched.album ?? []
+                return (ArtistAlbumCategorizer.sections(from: albums),
+                        ArtistAlbumCategorizer.sortedByNewest(albums).first)
+            }.value
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            albumSections = presentation.0
+            latestRelease = presentation.1
             artist = fetched
+            isLoading = false
+            // The page is usable now. An album push may cancel optional biography work;
+            // returning to this artist must not fetch and rebuild its album sections again.
+            didLoadArtist = true
             var artistMBID: String?
             if let info = try? await libraryService.getArtistInfo(forArtistID: artistId, count: 0) {
                 guard generation == loadGeneration else { return }
@@ -98,17 +113,11 @@ final class ArtistDetailViewModel {
             }
             guard generation == loadGeneration else { return }
             await enrichBiographyIfNeeded(musicBrainzId: artistMBID, generation: generation)
-            if generation == loadGeneration {
-                didLoadArtist = true
-            }
         } catch is CancellationError {
             // Superseded / view torn down — leave prior content if any.
         } catch {
             guard generation == loadGeneration else { return }
             self.error = UserFacingError.from(error)
-        }
-        if generation == loadGeneration {
-            isLoading = false
         }
     }
 
@@ -155,6 +164,7 @@ final class ArtistDetailViewModel {
 
     /// Top songs (getTopSongs takes the artist NAME) — call after `load()` so `artist?.name` is set.
     func loadTopSongs(force: Bool = false) async {
+        guard !Task.isCancelled else { return }
         if didLoadTopSongs, !force { return }
         guard let name = artist?.name else { isLoadingTopSongs = false; return }
         let generation = loadGeneration
@@ -180,7 +190,11 @@ final class ArtistDetailViewModel {
     // Called from the view's .task after load() returns so artist loading and
     // index/network calls from similar artists never compete on the same server.
     func loadSimilarArtists(force: Bool = false) async {
-        if didLoadSimilarArtists, !force, !similarArtists.isEmpty { return }
+        guard !Task.isCancelled else { return }
+        if didLoadSimilarArtists, !force {
+            await loadOutOfLibraryImages(generation: loadGeneration)
+            return
+        }
         let generation = loadGeneration
         isLoadingSimilarArtists = true
         if force { similarArtists = [] }
@@ -199,8 +213,8 @@ final class ArtistDetailViewModel {
             if generation == loadGeneration { didLoadSimilarArtists = true }
         }
         guard generation == loadGeneration else { return }
-        outOfLibraryImagesTask?.cancel()
-        outOfLibraryImagesTask = Task { await loadOutOfLibraryImages(generation: generation) }
+        // Keep image enrichment in the view task's lifetime; a pop cancels this loop.
+        await loadOutOfLibraryImages(generation: generation)
     }
 
     /// Pull-to-refresh — reload artist, top songs, and similar artists.
@@ -213,9 +227,10 @@ final class ArtistDetailViewModel {
     private func loadOutOfLibraryImages(generation: Int) async {
         for rec in similarArtists where !rec.inLibrary {
             guard generation == loadGeneration, !Task.isCancelled else { return }
+            guard outOfLibraryArtistImages.index(forKey: rec.id) == nil else { continue }
             let url = await imageResolver.resolveImageURL(for: rec)
             guard generation == loadGeneration, !Task.isCancelled else { return }
-            outOfLibraryArtistImages[rec.id] = url
+            outOfLibraryArtistImages[rec.id] = .some(url)
         }
     }
 }

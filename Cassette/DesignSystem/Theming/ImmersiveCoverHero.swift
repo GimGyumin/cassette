@@ -39,6 +39,8 @@ struct ImmersiveCoverHero<Content: View>: View {
     var floatingHorizontalPadding: CGFloat = 40
     /// Top inset for `floatingInset` so the cover clears the transparent back / … nav chrome.
     var floatingTopPadding: CGFloat = CassetteSpacing.xxxxl + 72
+    var contentTopPadding: CGFloat? = nil
+    var contentBottomPadding: CGFloat = CassetteSpacing.l
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -51,15 +53,15 @@ struct ImmersiveCoverHero<Content: View>: View {
                         y: showsFloatingShadow && !floatingInset ? 14 : 0
                     )
                 content()
-                    .padding(.top, floatingInset || showsFloatingShadow ? CassetteSpacing.m : CassetteSpacing.s)
-                    .padding(.bottom, CassetteSpacing.l)
+                    .padding(.top, contentTopPadding ?? (floatingInset || showsFloatingShadow ? CassetteSpacing.m : CassetteSpacing.s))
+                    .padding(.bottom, contentBottomPadding)
             }
             .frame(maxWidth: .infinity)
         } else {
             ZStack(alignment: .bottom) {
                 coverHero
                 content()
-                    .padding(.bottom, CassetteSpacing.l)
+                    .padding(.bottom, contentBottomPadding)
             }
             .frame(height: heroHeight)
             .frame(maxWidth: .infinity)

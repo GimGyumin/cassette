@@ -22,7 +22,7 @@ struct DownloadedView: View {
             }
         }
         .cassetteContentWidth()
-        .navigationTitle(String(localized: "Downloads", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        .navigationTitle(String(localized: "Downloaded", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         .navigationBarTitleDisplayModeInline()
     }
 }
@@ -206,7 +206,7 @@ private struct DownloadedContent: View {
 
                 if !recentItems.isEmpty {
                     VStack(alignment: .leading, spacing: CassetteSpacing.m) {
-                        Text("Recently Downloaded")
+                        Text("Recently Downloaded Items")
                             .font(.title2.bold())
 
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: CassetteSpacing.m)], alignment: .leading, spacing: CassetteSpacing.m) {

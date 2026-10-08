@@ -39,6 +39,14 @@ struct iOSAudioCapabilityTests {
         #expect(!iOSAudioCapability.canDecodeDirectly(container: nil, codec: nil, sampleRate: nil, bitDepth: nil))
     }
 
+    @Test func knownMimeTypeCanStartOriginalWithoutPlaybackInfo() {
+        let flac = DisplayableSong(id: "flac", title: "FLAC", contentType: "audio/flac; charset=binary")
+        #expect(PlaybackDecisionPolicy.canStreamOriginalImmediately(format: .flacOriginal, song: flac))
+        #expect(!PlaybackDecisionPolicy.canStreamOriginalImmediately(format: .aac256, song: flac))
+        let unknown = DisplayableSong(id: "unknown", title: "Unknown", contentType: "audio/x-unknown")
+        #expect(!PlaybackDecisionPolicy.canStreamOriginalImmediately(format: .flacOriginal, song: unknown))
+    }
+
     @Test func exceedsEngineLimits() {
         #expect(!iOSAudioCapability.canDecodeDirectly(container: "flac", codec: "flac", sampleRate: 384_000, bitDepth: 24))
         #expect(!iOSAudioCapability.canDecodeDirectly(container: "flac", codec: "flac", sampleRate: 48_000, bitDepth: 32))
@@ -92,6 +100,46 @@ struct JellyfinDefaultAudioStreamTests {
 
 @Suite("PlaybackDecisionPolicy")
 struct PlaybackDecisionPolicyTests {
+    @Test func advertisedHLSTranscodeIsPreferredOnASlowLink() {
+        var inputs = capableSource
+        inputs.container = "flac"
+        inputs.sourceBitRate = 2_000_000
+        inputs.ceilingBitsPerSecond = 256_000
+        inputs.supportsHLSTranscoding = true
+        #expect(PlaybackDecisionPolicy.decide(inputs).route == .hls)
+        inputs.supportsHLSTranscoding = false
+        #expect(PlaybackDecisionPolicy.decide(inputs).route == .universal)
+        inputs.supportsTranscoding = false
+        #expect(PlaybackDecisionPolicy.decide(inputs).route == .openSubsonic)
+    }
+
+    @Test func selectedLossyFormatNeverUsesRawDirectPlayWhenMetadataIsMissing() {
+        var inputs = capableSource
+        inputs.requiresLossyEncoding = true
+        #expect(PlaybackDecisionPolicy.decide(inputs).route == .universal)
+        inputs.supportsHLSTranscoding = true
+        #expect(PlaybackDecisionPolicy.decide(inputs).route == .hls)
+        inputs.supportsTranscoding = false
+        #expect(PlaybackDecisionPolicy.decide(inputs).route == .openSubsonic)
+    }
+
+    @Test func hlsDoesNotTranscodeAnOriginalThatFits() {
+        var inputs = capableSource
+        inputs.container = "flac"
+        inputs.sourceBitRate = 900_000
+        inputs.ceilingBitsPerSecond = 1_500_000
+        inputs.supportsHLSTranscoding = true
+        #expect(PlaybackDecisionPolicy.decide(inputs).route == .directPlay)
+    }
+
+    @Test func serverCanRequireTranscodingEvenForADecodableFile() {
+        var inputs = capableSource
+        inputs.container = "mp3"
+        inputs.supportsDirectPlay = false
+        inputs.supportsDirectStream = false
+        inputs.supportsHLSTranscoding = true
+        #expect(PlaybackDecisionPolicy.decide(inputs).route == .hls)
+    }
 
     /// A server that can do everything, so the ceiling and codec decide the outcome.
     private var capableSource: PlaybackDecisionPolicy.Inputs {

@@ -259,36 +259,18 @@ struct PlaybackControlsView: View {
                 .accessibilityLabel("Skip to previous")
             }
 
-            // A stream that is still opening shows the plain play glyph instead of a spinner: the
-            // transport keeps one visual language, and a pause/stop glyph before any audio exists
-            // would claim playback that is not happening. The control stays inert — no audio exists
-            // yet, so a tap must not restart the preparation that is already in flight.
-            if playerState.playbackState.controlAppearance == .loading {
-                Image(systemName: "play.fill")
+            Button {
+                HapticFeedback.medium.trigger()
+                Task { await playerService?.togglePlayPause() }
+            } label: {
+                Image(systemName: playerState.playbackState.controlAppearance.systemImage)
                     .font(.system(size: 44, weight: .semibold, design: .default))
                     .foregroundStyle(isPlaybackAvailable ? Color.white : Color.white.opacity(0.4))
                     .frame(minWidth: showsShuffleRepeat ? 72 : 88, minHeight: showsShuffleRepeat ? 72 : 88)
-                    .accessibilityLabel(String(localized: "Loading", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-            } else {
-                Button {
-                    HapticFeedback.medium.trigger()
-                    Task {
-                        if playerState.playbackState == .playing {
-                            await playerService?.pause()
-                        } else {
-                            await playerService?.resume()
-                        }
-                    }
-                } label: {
-                    Image(systemName: playerState.playbackState.controlAppearance == .pause ? "pause.fill" : "play.fill")
-                        .font(.system(size: 44, weight: .semibold, design: .default))
-                        .foregroundStyle(isPlaybackAvailable ? Color.white : Color.white.opacity(0.4))
-                        .frame(minWidth: showsShuffleRepeat ? 72 : 88, minHeight: showsShuffleRepeat ? 72 : 88)
-                        .contentShape(Rectangle())
-                }
-                .disabled(!isPlaybackAvailable)
-                .accessibilityLabel(playerState.playbackState.controlAppearance == .pause ? "Pause" : "Play")
+                    .contentShape(Rectangle())
             }
+            .disabled(!isPlaybackAvailable)
+            .accessibilityLabel(playerState.playbackState.controlAppearance == .play ? "Play" : "Pause")
 
             if !playerState.isLiveStream {
                 Button {

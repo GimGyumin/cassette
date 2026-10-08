@@ -25,9 +25,16 @@ extension PlayerService {
     /// link as slow — which is what makes a throttled Wi-Fi link behave like cellular even though
     /// iOS reports it as unmetered. An explicit quality choice is never touched.
     func handleBufferUnderrun() async {
-        guard !usingSystemPlayer, !isTrackTransitionPending,
-              pendingSeekTarget == nil, Date() >= seekSettleDeadline else { return }
+        guard !systemPlayback.isActive, !isTrackTransitionPending,
+              seekState == .idle, Date() >= systemPlayback.seekSettleDeadline else { return }
         let epoch = playbackEpoch
+        let progress = engineProgress()
+        // AudioStreaming also emits playing → buffering while selecting/prebuffering a
+        // queued entry. Let that transient settle before cancelling its prepared audio.
+        do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
+        guard epoch == playbackEpoch, engine.state == .bufferring,
+              !isHandlingEndOfTrack, !gaplessBridge.wasSelected,
+              abs(engineProgress() - progress) < 0.01 else { return }
         // Audible playback owns the bandwidth when a buffer runs dry.
         cancelPendingCacheDownload()
         cancelPendingPrefetch()
@@ -70,11 +77,14 @@ extension PlayerService {
     func handleAudioStateChanged(_ newState: AudioPlayerState) async {
         // AudioStreaming can deliver queued callbacks after a switch to AVPlayer.
         // Those callbacks must never consume the system player's pending restore.
-        guard !usingSystemPlayer, !isTrackTransitionPending, engine.state == newState else { return }
+        guard !systemPlayback.isActive, !isTrackTransitionPending, engine.state == newState else { return }
+        let epoch = playbackEpoch
         switch newState {
+        case .bufferring:
+            await publishEngineWaiting()
         case .playing:
-            if let requested = lastTransitionRequestedAt {
-                lastTransitionRequestedAt = nil
+            if let requested = systemPlayback.transitionRequestedAt {
+                systemPlayback.transitionRequestedAt = nil
                 Logger.player.info("[TRANSITION-TIMING] AudioStreaming playback began \(Int(Date().timeIntervalSince(requested) * 1000), privacy: .public)ms after request")
             }
             let parsedDuration = engineDuration()
@@ -86,7 +96,22 @@ extension PlayerService {
             // and this is what ends it — never the pause/stop control, because nothing was
             // playable before this point.
             await publishEnginePlaybackConfirmation()
+            guard epoch == playbackEpoch, !systemPlayback.isActive,
+                  !isTrackTransitionPending, engine.state == .playing else { return }
             guard let info = pendingRestoreInfo else { break }
+            // Some remote streams produce samples before AudioStreaming can seek.
+            // Dropping the restore at that point silently replays the song from zero.
+            // Let AVPlayer open and seek the same source with the restore still armed.
+            if info.seekTime > 1, !engineIsSeekable(), let source = currentSource {
+                seekState = .settling(target: info.seekTime, deadline: Date().addingTimeInterval(12))
+                lastObservedEngineProgress = info.seekTime
+                startEnginePlayback(
+                    url: source.url,
+                    headers: source.customHeaders,
+                    useSystemPlayer: true
+                )
+                return
+            }
             pendingRestoreInfo = nil
             if engineIsSeekable() && info.seekTime > 1 {
                 seekEngine(to: info.seekTime)
@@ -122,7 +147,7 @@ extension PlayerService {
     }
 
     func handleAudioError(_ error: AudioPlayerError) async {
-        guard !usingSystemPlayer, !isTrackTransitionPending, engine.state == .error else { return }
+        guard !systemPlayback.isActive, !isTrackTransitionPending, engine.state == .error else { return }
         Logger.player.error("[PLAYER] AudioStreaming unexpected error")
         let isLive = await MainActor.run { state.isLiveStream }
         if isLive {

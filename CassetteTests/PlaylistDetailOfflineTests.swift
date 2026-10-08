@@ -18,7 +18,9 @@ private final class PDLibraryStub: LibraryServiceProtocol {
     /// empty-but-successful (200, no entries) path that the catch block can't catch.
     func song(id: String) async throws -> Song { throw URLError(.unknown) }
     var playlistResult: PlaylistWithSongs?
+    var playlistLoader: (() async throws -> PlaylistWithSongs)?
     func playlist(id: String) async throws -> PlaylistWithSongs {
+        if let playlistLoader { return try await playlistLoader() }
         if let playlistResult { return playlistResult }
         throw URLError(.notConnectedToInternet)
     }
@@ -133,6 +135,32 @@ struct PlaylistDetailOfflineTests {
     /// edge response that returns without throwing.
     private var emptySuccessPlaylist: PlaylistWithSongs {
         PlaylistWithSongs(id: "playlist-1", name: "Road Trip", songCount: 0, duration: 0)
+    }
+
+    @Test("a slower previous load cannot replace a newer playlist result")
+    func overlappingLoadsKeepNewestResult() async {
+        let state = ServerState()
+        state.isOnline = true
+        state.activeServer = ServerSnapshot(from: ServerConfig(displayName: "Test", baseURL: "https://example.invalid", username: "u"))
+        let library = PDLibraryStub()
+        var requests: [CheckedContinuation<PlaylistWithSongs, any Error>] = []
+        library.playlistLoader = {
+            try await withCheckedThrowingContinuation { requests.append($0) }
+        }
+        let vm = PlaylistDetailViewModel(playlistId: "playlist-1", libraryService: library,
+                                         downloadService: PDDownloadStub(), playlistService: PDPlaylistStub(),
+                                         toastService: ToastService(), serverState: state)
+        let first = Task { await vm.load() }
+        while requests.count < 1 { await Task.yield() }
+        let second = Task { await vm.load() }
+        while requests.count < 2 { await Task.yield() }
+        requests[1].resume(returning: PlaylistWithSongs(id: "playlist-1", name: "Latest", songCount: 0, duration: 0))
+        await second.value
+        requests[0].resume(returning: PlaylistWithSongs(id: "playlist-1", name: "Stale", songCount: 0, duration: 0))
+        await first.value
+        #expect(vm.name == "Latest")
+        #expect(!vm.isLoading)
+        #expect(vm.error == nil)
     }
 
     private var downloadedPlaylist: LocalPlaylistData {

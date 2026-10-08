@@ -6,6 +6,7 @@
 import SwiftUI
 import Translation
 import SwiftSonic
+import OSLog
 
 /// How densely lyric lines pack in the viewport.
 enum LyricsViewportDensity: Equatable {
@@ -34,6 +35,8 @@ struct LyricsView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var translationConfiguration: TranslationSession.Configuration?
+    @State private var translationStrategy: LyricsTranslationStrategy = .standard
+    @State private var translationSourceLanguageCode: String?
     /// Bumped whenever the Apple session must die; in-flight work checks this before touching `session`.
     @State private var translationEpoch: Int = 0
 
@@ -352,20 +355,28 @@ struct LyricsView: View {
         .translationTask(translationConfiguration) { session in
             let epoch = await MainActor.run { translationEpoch }
             let requestID = await MainActor.run { viewModel.appleTranslationRequestID }
+            let requestedStrategy = await MainActor.run { translationStrategy }
             guard viewModel.beginAppleTranslationSession(requestID: requestID) else { return }
 
             guard settings.provider == .apple,
-                  case .loaded(let structured) = viewModel.state else {
+                  case .loaded = viewModel.state else {
                 await viewModel.failAppleTranslation()
                 return
             }
 
             let target = targetLanguageCode
-            let originalTexts = structured.line.map { line -> String in
-                LyricsLanguage.shouldTranslateRow(line.value, targetCode: target) ? line.value : ""
+            let originalTexts = viewModel.displayRows.map { row -> String in
+                guard !row.isSecondaryAgent else { return "" }
+                return LyricsLanguage.shouldTranslateRow(row.text, targetCode: target) ? row.text : ""
             }
+            let chorusTexts = viewModel.displayRows.map { row -> String in
+                guard !row.isSecondaryAgent, !row.backgroundWords.isEmpty else { return "" }
+                let chorus = LyricKaraokeText.chorusText(from: row.backgroundWords)
+                return LyricsLanguage.shouldTranslateRow(chorus, targetCode: target) ? chorus : ""
+            }
+            let batchTexts = originalTexts + chorusTexts
 
-            let nonEmptyCount = originalTexts.reduce(0) {
+            let nonEmptyCount = batchTexts.reduce(0) {
                 $0 + ($1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0 : 1)
             }
             guard nonEmptyCount > 0 else {
@@ -375,11 +386,11 @@ struct LyricsView: View {
                 return
             }
 
-            let translator = AppleTranslator()
+            let translationService = LyricsTranslationService.shared
 
             do {
-                let translatedTexts = try await translator.translate(
-                    lyrics: originalTexts,
+                let translatedTexts = try await translationService.translate(
+                    lines: batchTexts,
                     using: session
                 )
 
@@ -392,34 +403,54 @@ struct LyricsView: View {
                 }
 
                 var finalTranslatedTexts: [String] = []
-                for (idx, originalLine) in structured.line.enumerated() {
+                for idx in viewModel.displayRows.indices {
                     if idx < translatedTexts.count {
                         let translated = translatedTexts[idx]
                         if translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            finalTranslatedTexts.append(originalLine.value)
+                            finalTranslatedTexts.append("")
                         } else {
                             finalTranslatedTexts.append(translated)
                         }
                     } else {
-                        finalTranslatedTexts.append(originalLine.value)
+                        finalTranslatedTexts.append("")
                     }
                 }
 
-                await viewModel.applyAppleTranslation(finalTranslatedTexts)
+                let chorusOffset = viewModel.displayRows.count
+                let finalChorusTexts = viewModel.displayRows.indices.map { index in
+                    let translatedIndex = chorusOffset + index
+                    guard translatedTexts.indices.contains(translatedIndex) else { return "" }
+                    return translatedTexts[translatedIndex]
+                }
+
+                await viewModel.applyAppleTranslation(
+                    finalTranslatedTexts,
+                    chorusTexts: finalChorusTexts,
+                    requestID: requestID,
+                    trackID: viewModel.songId
+                )
             } catch is CancellationError {
+                translationService.debugCancellation(trackID: viewModel.songId)
                 await MainActor.run {
                     if translationEpoch == epoch && viewModel.appleTranslationRequestID == requestID {
                         viewModel.abandonAppleTranslation()
                     }
                 }
             } catch {
-                print("❌ [Apple Translation] 번역 태스크 최종 실패: \(error.localizedDescription)")
                 let stillCurrent = await MainActor.run {
                     translationEpoch == epoch && viewModel.appleTranslationRequestID == requestID
                 }
-                guard stillCurrent else {
+                guard stillCurrent else { return }
+
+                if requestedStrategy != .standard {
+                    translationService.debugFallback(trackID: viewModel.songId)
+                    await MainActor.run {
+                        retryAppleTranslation(after: requestedStrategy)
+                    }
                     return
                 }
+
+                Logger.lyrics.error("Apple Translation failed: \(error.localizedDescription, privacy: .public)")
                 await viewModel.failAppleTranslation(message: error.localizedDescription)
             }
         }
@@ -501,21 +532,78 @@ struct LyricsView: View {
             await viewModel.failAppleTranslation()
             return
         }
-        guard LyricsLanguage.needsTranslation(lines: structured.line.map(\.value), targetCode: target) else {
+        let displayedLines = viewModel.displayRows.map(\.text)
+        guard LyricsLanguage.needsTranslation(lines: displayedLines, targetCode: target) else {
             await viewModel.failAppleTranslation(message: String(localized: "No lyrics need translation.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             return
         }
 
-        let targetLanguage = Locale.Language(identifier: target)
-        translationEpoch += 1
-        if var configuration = translationConfiguration {
-            configuration.source = nil
-            configuration.target = targetLanguage
-            configuration.invalidate()
-            translationConfiguration = configuration
-        } else {
-            translationConfiguration = TranslationSession.Configuration(source: nil, target: targetLanguage)
+        let source = LyricsLanguage.resolvedSourceLanguage(from: structured.lang)
+        let sourceLanguageCode = LyricsTranslationService.shared.detectedSourceLanguage(
+            lines: displayedLines,
+            metadataLanguageCode: source,
+            targetLanguageCode: target
+        )
+        let sampleText = displayedLines.first {
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        } ?? ""
+        let strategy: LyricsTranslationStrategy
+        switch settings.strategyPreference {
+        case .automatic:
+            strategy = await LyricsTranslationService.shared.preferredStrategy(
+                sourceLanguageCode: sourceLanguageCode,
+                targetLanguageCode: target,
+                sampleText: sampleText
+            )
+        case .highFidelity:
+            strategy = .highFidelity
+        case .lowLatency:
+            strategy = .lowLatency
+        case .standard:
+            strategy = .standard
         }
+
+        translationSourceLanguageCode = sourceLanguageCode
+        translationStrategy = strategy
+        installAppleTranslationConfiguration(target: target, strategy: strategy)
+        LyricsTranslationService.shared.debugStart(
+            trackID: viewModel.songId,
+            sourceLanguage: source,
+            targetLanguage: target,
+            strategy: strategy,
+            lineCount: viewModel.displayRows.count,
+            cacheHit: false
+        )
+    }
+
+    @MainActor
+    private func retryAppleTranslation(after failedStrategy: LyricsTranslationStrategy) {
+        guard case .loaded = viewModel.state else { return }
+        let fallback: LyricsTranslationStrategy = failedStrategy == .highFidelity
+            ? .lowLatency
+            : .standard
+        translationStrategy = fallback
+        installAppleTranslationConfiguration(
+            target: targetLanguageCode,
+            strategy: fallback
+        )
+    }
+
+    @MainActor
+    private func installAppleTranslationConfiguration(
+        target: String,
+        strategy: LyricsTranslationStrategy
+    ) {
+        translationEpoch += 1
+        var configuration = LyricsTranslationService.shared.configuration(
+            sourceLanguageCode: translationSourceLanguageCode,
+            targetLanguageCode: target,
+            strategy: strategy
+        )
+        if translationConfiguration == configuration {
+            configuration.invalidate()
+        }
+        translationConfiguration = configuration
     }
 
 }

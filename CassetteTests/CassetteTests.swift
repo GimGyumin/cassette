@@ -62,4 +62,19 @@ struct CassetteTests {
         #expect(explicitCover.effectiveCoverArtId == "album-cover")
     }
 
+    @Test func displayableSong_formatsExplicitAdvisoryLikeMusic() {
+        let explicit = DisplayableSong(
+            id: "explicit",
+            title: "Explicit Track",
+            explicitStatus: "explicit"
+        )
+        #expect(explicit.contentAdvisoryLabel(locale: Locale(identifier: "ko_KR")) == "19")
+        #expect(explicit.contentAdvisoryLabel(locale: Locale(identifier: "en_US")) == "E")
+
+        let literalE = DisplayableSong(id: "e", title: "E Track", explicitStatus: "E")
+        let clean = DisplayableSong(id: "clean", title: "Clean Track", explicitStatus: "notExplicit")
+        #expect(literalE.contentAdvisoryLabel(locale: Locale(identifier: "ko_KR")) == "E")
+        #expect(clean.contentAdvisoryLabel(locale: Locale(identifier: "ko_KR")) == nil)
+    }
+
 }

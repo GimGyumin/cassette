@@ -125,6 +125,7 @@ final class ArtworkImageCache {
     private let session: URLSession
     // Caps in-flight server cover fetches to prevent saturating the TCP connection pool.
     private let fetchGate = CoverFetchGate(limit: 2)
+    private let preparationFetchGate = CoverFetchGate(limit: 4)
     private let decodeGate = CoverDecodeGate(limit: 2)
 
     init(downloadService: any DownloadServiceProtocol, libraryService: any LibraryServiceProtocol, serverService: (any ServerServiceProtocol)? = nil, session: URLSession? = nil) {
@@ -204,7 +205,9 @@ final class ArtworkImageCache {
     /// Used by the library-wide album-cover preloader so artwork is stored at its highest
     /// quality — no server-side `size` downscale and no JPEG re-encode.
     @discardableResult
-    func downloadOriginalAndCacheAsHero(coverArtId: String) async -> Bool {
+    func downloadOriginalAndCacheAsHero(
+        coverArtId: String, cacheHero: Bool = true, preparationDirectory: URL? = nil
+    ) async -> Bool {
         let generation = cacheGeneration
         let key = cacheKey(id: coverArtId, tier: .hero)
 
@@ -215,8 +218,27 @@ final class ArtworkImageCache {
         if shouldSkipNetworkFetch(forKey: key) { return false }
         guard let serverURL = await libraryService.coverArtURL(id: coverArtId, size: nil) else { return false }
 
-        await fetchGate.acquire()
-        defer { await fetchGate.release() }
+        #if os(iOS)
+        if !cacheHero, let preparationDirectory {
+            do {
+                let request = await artworkRequest(url: serverURL)
+                let destination = preparationDirectory.appendingPathComponent(tieredDiskId)
+                _ = try await CassetteBackgroundDownloads.artwork.download(
+                    request: request, clientKey: tieredDiskId, persistentArtworkURL: destination
+                )
+                guard generation == cacheGeneration, !Task.isCancelled else { return false }
+                originalWasInstalled(coverArtId)
+                return true
+            } catch {
+                if !Self.isCancellation(error) { rememberNetworkFailure(forKey: key) }
+                return false
+            }
+        }
+        #endif
+
+        let gate = cacheHero ? fetchGate : preparationFetchGate
+        await gate.acquire()
+        defer { await gate.release() }
         guard !Task.isCancelled else { return false }
 
         let data: Data
@@ -234,6 +256,20 @@ final class ArtworkImageCache {
         } catch {
             if !Self.isCancellation(error) { rememberNetworkFailure(forKey: key) }
             return false
+        }
+
+        // Bulk preparation stores original bytes without allocating a 1200px image
+        // for every invisible cover. The palette pass needs only a small thumbnail.
+        if !cacheHero {
+            let valid = await Task.detached(priority: .utility) {
+                guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+                return CGImageSourceGetCount(source) > 0 && CGImageSourceGetStatus(source) == .statusComplete
+            }.value
+            guard valid, generation == cacheGeneration, !Task.isCancelled else { return false }
+            await downloadService.persistCover(data, forId: tieredDiskId)
+            guard await downloadService.localCoverArtURL(forId: tieredDiskId) != nil else { return false }
+            originalWasInstalled(coverArtId)
+            return true
         }
 
         // Decode a hero thumbnail for immediate RAM display (ImageIO reads only what it needs).
@@ -260,6 +296,16 @@ final class ArtworkImageCache {
             "[NET-COVER] original done id=\(coverArtId, privacy: .public) bytes=\(data.count, privacy: .public)"
         )
         return await downloadService.localCoverArtURL(forId: tieredDiskId) != nil
+    }
+
+    private func originalWasInstalled(_ coverArtId: String) {
+        for tier in [ArtworkTier.thumb, .hero] {
+            let key = cacheKey(id: coverArtId, tier: tier)
+            cache.removeValue(forKey: key)
+            localImageSources[key] = nil
+            failedNetworkLoadUntil[key] = nil
+        }
+        NotificationCenter.default.post(name: OriginalArtwork.didInstall, object: coverArtId)
     }
 
     private func artworkRequest(url: URL) async -> URLRequest {

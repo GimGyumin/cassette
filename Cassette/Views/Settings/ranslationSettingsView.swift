@@ -43,6 +43,17 @@ struct TranslationSettingsView: View {
                 }
                 .pickerStyle(.menu)
                 
+                if settings.provider == .apple {
+                    Picker(selection: $settings.strategyPreference) {
+                        ForEach(TranslationStrategyPreference.allCases) { strategy in
+                            Text(strategy.displayName).tag(strategy)
+                        }
+                    } label: {
+                        SettingsRowLabel(title: "Translation Strategy", systemImage: "gauge.with.dots.needle.50percent", color: .purple)
+                    }
+                    .pickerStyle(.menu)
+                }
+
                 Picker(selection: $settings.targetLanguage) {
                     ForEach(languageCodes, id: \.self) { code in
                         Text(languageLabel(code)).tag(code)

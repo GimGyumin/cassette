@@ -51,6 +51,7 @@ extension PlaylistDetailView {
                 }
             }
         } else {
+            #if os(macOS)
             ToolbarItem(placement: .navigation) {
                 Button {
                     dismiss()
@@ -59,6 +60,7 @@ extension PlaylistDetailView {
                 }
                 .buttonStyle(.plain)
             }
+            #endif
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showAddMusic = true

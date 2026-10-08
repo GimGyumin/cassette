@@ -53,11 +53,13 @@ final class LibraryPreparationLiveActivityController {
     private var updateTask: Task<Void, Never>?
     #endif
 
-    /// Ends activities left behind by a previous run — the system can stop the app mid-pass, and
-    /// Apple asks apps to reconcile on launch rather than leave a stale activity on the lock screen.
+    /// Reuses an interrupted pass's activity and removes duplicate activities after relaunch.
     func reconcileOnLaunch() {
         #if os(iOS)
-        for stale in Activity<LibraryPreparationActivityAttributes>.activities {
+        let existing = Activity<LibraryPreparationActivityAttributes>.activities
+            .filter { $0.activityState == .active || $0.activityState == .stale }
+        activity = existing.first
+        for stale in existing.dropFirst() {
             Logger.library.notice("[LIVE-ACTIVITY] ending stale activity \(stale.id, privacy: .public)")
             Task { await stale.end(nil, dismissalPolicy: .immediate) }
         }
@@ -101,11 +103,7 @@ final class LibraryPreparationLiveActivityController {
 
         // `.checking` only probes the server and usually finds nothing to do, so starting an activity
         // for it would flash the lock screen on every launch. Only real work starts one.
-        let isRealWork: Bool
-        switch progress.phase {
-        case .indexing, .covers, .syncing: isRealWork = true
-        case .idle, .checking, .complete, .failed: isRealWork = false
-        }
+        let isRealWork = progress.phase.isPreparing
 
         if let activity {
             let now = Date()

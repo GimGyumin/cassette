@@ -3,6 +3,13 @@ import Testing
 
 @Suite("Playback buffering and sustained stalls")
 struct PlaybackBufferPolicyTests {
+    @Test func bufferBehindSeekTargetDoesNotCountAsPlayableAudio() {
+        let ranges: [(start: Double, duration: Double)] = [(0, 120), (240, 10)]
+        #expect(PlaybackBufferPolicy.bufferedAhead(position: 245, ranges: ranges) == 5)
+        #expect(PlaybackBufferPolicy.bufferedAhead(position: 180, ranges: ranges) == 0)
+        #expect(PlaybackBufferPolicy.bufferedAhead(position: 250, ranges: ranges) == 0)
+        #expect(PlaybackBufferPolicy.bufferedAhead(position: .nan, ranges: ranges) == 0)
+    }
     @Test func localPlaybackNeedsNoNetworkBuffer() {
         #expect(PlaybackBufferPolicy.forwardBuffer(isLocal: true, isLimited: true) == 0)
         #expect(PlaybackBufferPolicy.forwardBuffer(isLocal: false, isLimited: true)

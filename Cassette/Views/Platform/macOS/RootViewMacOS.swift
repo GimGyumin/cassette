@@ -346,6 +346,8 @@ struct RootViewMacOS: View {
             FavoritesView()
         case .libraryDownloads:
             DownloadedView()
+        case .albumPush(let id, let name, let coverArtId, _):
+            AlbumDetailMacOS(albumId: id, albumName: name, coverArtId: coverArtId)
         case .album(let album):
             AlbumDetailMacOS(albumId: album.id, albumName: album.name, coverArtId: album.coverArt)
         case .artist(let artist):

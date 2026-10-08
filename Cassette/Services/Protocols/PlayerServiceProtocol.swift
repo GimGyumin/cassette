@@ -12,6 +12,9 @@ protocol PlayerServiceProtocol: AnyObject, Sendable {
     /// Never duplicate this state in a view model.
     var state: PlayerState { get }
 
+    /// Resolved playback route, without credentials or stream URLs.
+    func playbackDetails() async -> PlaybackDetails?
+
     func play(tracks: [DisplayableSong], startIndex: Int) async throws
     func resume() async
     func pause() async
@@ -66,4 +69,8 @@ protocol PlayerServiceProtocol: AnyObject, Sendable {
     /// Stops the audio engine synchronously without going through the actor.
     /// Only safe to call during app termination (single-threaded, no concurrent access).
     nonisolated func stopAudioEngineSync()
+}
+
+extension PlayerServiceProtocol {
+    func playbackDetails() async -> PlaybackDetails? { nil }
 }

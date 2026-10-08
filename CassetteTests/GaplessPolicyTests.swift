@@ -1,10 +1,39 @@
 import Testing
+import Foundation
 @testable import Cassette
 
 /// The gapless decision is a pure function over the queue, the settings and the device, so the
 /// whole arbitration table is asserted here instead of being felt out on a device.
 @Suite("GaplessPolicy")
 struct GaplessPolicyTests {
+    @Test("AVPlayer teardown invalidates callbacks without resetting the cross-track cooldown")
+    func systemPlaybackStateFencesLateEvents() {
+        var playback = SystemPlaybackState()
+        playback.isActive = true
+        playback.recoveredCurrentStall = true
+        playback.lastStallRecoveryAt = Date()
+        let recoveryTime = playback.lastStallRecoveryAt
+        playback.invalidateCallbacks()
+        #expect(playback.generation == 1)
+        playback.resetTrackRecovery()
+        #expect(!playback.recoveredCurrentStall)
+        #expect(playback.lastStallRecoveryAt == recoveryTime)
+    }
+
+    @Test("A cancelled bridge cannot retain a queued source or recovery flags")
+    func bridgeStateResetsAsOneUnit() {
+        var bridge = GaplessBridgeState()
+        let song = DisplayableSong(id: "next", title: "Next")
+        bridge.arm(next: song, source: .downloaded(URL(fileURLWithPath: "/tmp/next.flac")), epoch: 42)
+        bridge.wasSelected = true
+        bridge.recoveryWasRequested = true
+        bridge.reset()
+        #expect(bridge.next == nil)
+        #expect(bridge.source == nil)
+        #expect(bridge.epoch == 0)
+        #expect(!bridge.wasSelected && !bridge.recoveryWasRequested)
+    }
+
     private func decision(
         hasNext: Bool = true,
         crossfade: Double = 0,

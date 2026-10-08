@@ -80,11 +80,10 @@ private struct CoverArtViewContent: View {
     @AppStorage("coverArtUploadVersion") private var coverArtUploadVersion = 0
     @State private var cachedImage: PlatformImage?
     @State private var url: URL?
+    @State private var urlId: String?
     @State private var originalRevision = 0
-    /// The id whose image `cachedImage` currently represents. Lets a track change resolve the
-    /// NEW id instead of short-circuiting on a stale image: we only keep the current image when
-    /// `displayedId == id`. A failed hero load can therefore never leave the previous track's
-    /// artwork on screen — the resolution below clears it and falls back against the current id.
+    /// The id whose image `cachedImage` currently represents. A new cover id immediately
+    /// hides the old image while its replacement is resolved.
     @State private var displayedId: String?
 
     init(id: String, size: Int?, tier: ArtworkTier?, cornerRadius: CGFloat, placeholderSystemImage: String, initialImage: PlatformImage?, contentMode: ContentMode = .fill, loadingEnabled: Bool = true) {
@@ -107,13 +106,13 @@ private struct CoverArtViewContent: View {
 
     var body: some View {
         ZStack {
-            if let cached = cachedImage {
+            if displayedId == id, let cached = cachedImage {
                 Image(platformImage: cached)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
             } else {
                 // AsyncImage safety fallback — reached only when artworkCache.load() fails.
-                AsyncImage(url: url) { phase in
+                AsyncImage(url: urlId == id ? url : nil) { phase in
                     switch phase {
                     case .success(let image):
                         image
@@ -133,6 +132,7 @@ private struct CoverArtViewContent: View {
                         EmptyView()
                     }
                 }
+                .id(id)
             }
         }
         .clipped()
@@ -145,13 +145,12 @@ private struct CoverArtViewContent: View {
         .task(id: "\(loadingEnabled):\(id):\(coverArtUploadVersion):\(originalRevision)") {
             guard loadingEnabled else { return }
             url = nil
+            urlId = nil
             let t = resolvedTier
             let online = container?.serverState.isOnline ?? true
 
-            // Resolution runs against the CURRENT id only; each successful step sets both
-            // `cachedImage` and `displayedId = id`, so an image whose id != current id is never
-            // shown. The previous image stays visible while we resolve (no flash) — it is only
-            // swapped atomically on success, or cleared at the end if nothing resolves.
+            // Resolution runs against the current id only. The body shows a placeholder as
+            // soon as the id changes, then swaps in a matching cached image when available.
 
             // 1. RAM hit for the requested tier. Sync read in .task (not body) — reads in task
             //    closures are not tracked by @Observable, so this creates no observation on the
@@ -203,8 +202,7 @@ private struct CoverArtViewContent: View {
             }
             guard !Task.isCancelled else { return }
 
-            // 5. Nothing local resolved and the on-screen image belongs to a previous id — clear it
-            //    so a mismatched cover is never left up, then try the online URL safety net
+            // 5. Nothing local resolved — discard stale cached state, then try the online URL safety net
             //    (AsyncImage falls through to the placeholder when offline).
             cachedImage = nil
             displayedId = nil
@@ -212,6 +210,7 @@ private struct CoverArtViewContent: View {
             let fallbackURL = await container?.libraryService.coverArtURL(id: id, size: size)
             guard !Task.isCancelled else { return }
             url = fallbackURL
+            urlId = id
         }
     }
 
@@ -220,6 +219,7 @@ private struct CoverArtViewContent: View {
         cachedImage = image
         displayedId = resolvedId
         url = nil
+        urlId = nil
     }
 
     private var placeholder: some View {

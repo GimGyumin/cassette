@@ -19,8 +19,11 @@ struct ArtistDetailMacOS: View {
         self.artistName = artistName
         self.coverArtId = coverArtId
         self.showBackButton = showBackButton
-        let cid = "artist:\(artistId)"
-        _artistFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> { $0.id == cid })
+        let itemId = artistId
+        let type = FavoriteType.artist.rawValue
+        _artistFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> {
+            $0.itemId == itemId && $0.itemType == type
+        })
     }
 
     @Environment(\.appContainer) private var container
@@ -34,7 +37,10 @@ struct ArtistDetailMacOS: View {
     @Query private var artistFavoriteMatches: [FavoriteRecord]
     @State private var showPinLimitAlert = false
 
-    private var isArtistFavorite: Bool { !artistFavoriteMatches.isEmpty }
+    private var isArtistFavorite: Bool {
+        guard let serverId = container?.serverState.activeServer?.id else { return false }
+        return artistFavoriteMatches.contains { $0.serverId == serverId }
+    }
     private var isArtistPinned: Bool {
         container?.pinService.isPinned(itemType: .artist, itemId: artistId) == true
     }
@@ -430,11 +436,17 @@ struct ArtistDetailMacOS: View {
 
         ToolbarItem(placement: .primaryAction) {
             Button {
+                let wasFavorite = isArtistFavorite
                 Task {
-                    if isArtistFavorite {
-                        try? await container?.favoritesService.unstar(itemType: .artist, itemId: artistId)
-                    } else {
-                        try? await container?.favoritesService.star(itemType: .artist, itemId: artistId)
+                    guard let container else { return }
+                    do {
+                        if wasFavorite {
+                            try await container.favoritesService.unstar(itemType: .artist, itemId: artistId)
+                        } else {
+                            try await container.favoritesService.star(itemType: .artist, itemId: artistId)
+                        }
+                    } catch {
+                        container.toastService.showError(error.localizedDescription)
                     }
                 }
             } label: {

@@ -16,7 +16,9 @@ struct CircleToolbarLabel: View {
         Image(systemName: systemName)
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(filled ? Color.white : Color.primary)
-            .frame(width: 30, height: 30)
-            .background(Circle().fill(filled ? Color.cassetteAccent : Color.secondary.opacity(0.15)))
+            .cassetteGlassButton(
+                size: 30,
+                tint: filled ? Color.cassetteAccent.opacity(0.78) : nil
+            )
     }
 }

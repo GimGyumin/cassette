@@ -44,6 +44,8 @@ final class DownloadedTrack {
     var samplingRate: Int?
     var channelCount: Int?
     var comment: String?
+    /// Optional so existing stores migrate without rewriting downloaded rows.
+    var explicitStatus: String?
     // ReplayGain metadata — captured at download time for offline normalization.
     var replayGainTrackGain: Double?
     var replayGainTrackPeak: Double?
@@ -83,6 +85,7 @@ final class DownloadedTrack {
         samplingRate: Int? = nil,
         channelCount: Int? = nil,
         comment: String? = nil,
+        explicitStatus: String? = nil,
         replayGainTrackGain: Double? = nil,
         replayGainTrackPeak: Double? = nil,
         replayGainAlbumGain: Double? = nil,
@@ -120,6 +123,7 @@ final class DownloadedTrack {
         self.samplingRate = samplingRate
         self.channelCount = channelCount
         self.comment = comment
+        self.explicitStatus = explicitStatus
         self.replayGainTrackGain = replayGainTrackGain
         self.replayGainTrackPeak = replayGainTrackPeak
         self.replayGainAlbumGain = replayGainAlbumGain

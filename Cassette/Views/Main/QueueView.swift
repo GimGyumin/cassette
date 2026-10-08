@@ -237,13 +237,19 @@ private struct QueueRow: View {
         self.contentColor = contentColor
         self.secondaryContentColor = secondaryContentColor
         self.loadArtwork = loadArtwork
-        let cid = "song:\(song.id)"
-        _favoriteMatches = Query(filter: #Predicate<FavoriteRecord> { $0.id == cid })
+        let itemId = song.id
+        let type = FavoriteType.song.rawValue
+        _favoriteMatches = Query(filter: #Predicate<FavoriteRecord> {
+            $0.itemId == itemId && $0.itemType == type
+        })
     }
 
     private var isOnline: Bool { container?.serverState.isOnline == true }
     private var isPlaying: Bool { container?.playerState.playbackState == .playing }
-    private var isFavorite: Bool { !favoriteMatches.isEmpty }
+    private var isFavorite: Bool {
+        guard let serverId = container?.serverState.activeServer?.id else { return false }
+        return favoriteMatches.contains { $0.serverId == serverId }
+    }
 
     var body: some View {
         HStack(spacing: CassetteSpacing.m) {
@@ -324,10 +330,15 @@ private struct QueueRow: View {
             Button {
                 let fav = isFavorite
                 Task {
-                    if fav {
-                        try? await container?.favoritesService.unstar(itemType: .song, itemId: song.id)
-                    } else {
-                        try? await container?.favoritesService.star(itemType: .song, itemId: song.id)
+                    guard let container else { return }
+                    do {
+                        if fav {
+                            try await container.favoritesService.unstar(itemType: .song, itemId: song.id)
+                        } else {
+                            try await container.favoritesService.star(itemType: .song, itemId: song.id)
+                        }
+                    } catch {
+                        container.toastService.showError(error.localizedDescription)
                     }
                 }
             } label: {
@@ -336,7 +347,7 @@ private struct QueueRow: View {
                     systemImage: isFavorite ? "heart.slash" : "heart"
                 )
             }
-            .disabled(!isOnline)
+            .disabled(container?.serverState.activeServer == nil)
 
             if let onRemove {
                 Divider()

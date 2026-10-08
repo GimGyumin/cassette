@@ -223,13 +223,10 @@ extension PlayerService {
         systemEngine.cancelQueuedItem()
         // Flush the AudioStreaming pre-queued entry so it can't auto-advance into a track the
         // user just re-ordered around (e.g. "Play Next" inserted before the armed next track).
-        if let source = gaplessBridgeSource {
+        if let source = gaplessBridge.source {
             engine.removeFromQueue(url: source.url)
         }
-        gaplessBridgeNext = nil
-        gaplessBridgeSource = nil
-        gaplessBridgeEpoch = 0
-        bridgedEntryDidStart = false
+        gaplessBridge.reset()
     }
 
     func playNext(_ songs: [DisplayableSong]) async {

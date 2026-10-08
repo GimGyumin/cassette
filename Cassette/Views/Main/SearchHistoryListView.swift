@@ -16,7 +16,8 @@ struct SearchHistoryListView: View {
     var embedsInScrollView: Bool = false
 
     @Environment(\.appContainer) private var container
-    @Query private var historyEntries: [SearchHistoryEntry]
+    @State private var rowsData: [SearchHistoryRowData] = []
+    @State private var revision = 0
     @State private var showClearConfirm = false
 
     init(serverId: String, path: Binding<NavigationPath>, showsClearButton: Bool = true, embedsInScrollView: Bool = false) {
@@ -24,58 +25,56 @@ struct SearchHistoryListView: View {
         self._path = path
         self.showsClearButton = showsClearButton
         self.embedsInScrollView = embedsInScrollView
-        var descriptor = FetchDescriptor<SearchHistoryEntry>(
-            sortBy: [SortDescriptor(\.visitedAt, order: .reverse)]
-        )
-        descriptor.fetchLimit = 50
-        _historyEntries = Query(descriptor)
-    }
-
-    private var serverHistory: [SearchHistoryEntry] {
-        historyEntries.filter { $0.serverId == serverId }
     }
 
     var body: some View {
-        let history = serverHistory
-        let rowsData = history.map { SearchHistoryRowData(entry: $0) }
-        if embedsInScrollView {
-            embeddedHistory(history: history, rowsData: rowsData)
-        } else if history.isEmpty {
-            EmptyStateView(
-                systemImage: "magnifyingglass",
-                title: "Search your library",
-                subtitle: "Find songs, albums, artists, and playlists from your server."
-            )
-        } else {
-            List {
-                Section {
-                    LazyVStack(spacing: 0) {
+        Group {
+            if embedsInScrollView {
+                embeddedHistory(rowsData: rowsData)
+            } else if rowsData.isEmpty {
+                EmptyStateView(
+                    systemImage: "magnifyingglass",
+                    title: "Search your library",
+                    subtitle: "Find songs, albums, artists, and playlists from your server."
+                )
+            } else {
+                List {
+                    Section {
                         ForEach(rowsData) { rowData in
                             historyRowButton(rowData)
+                                .listRowInsets(EdgeInsets())
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
                         }
+                    } header: {
+                        historyHeader
                     }
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                } header: {
-                    historyHeader
+                }
+                .listStyle(.plain)
+                .cassetteDestructiveAlert(
+                    "Clear search history?",
+                    isPresented: $showClearConfirm,
+                    message: "This will remove all your recent searches. This action cannot be undone.",
+                    destructiveButtonTitle: String(localized: "Clear", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                ) {
+                    Task { await container?.searchHistoryService.clear(serverId: serverId) }
                 }
             }
-            .listStyle(.plain)
-            .cassetteDestructiveAlert(
-                "Clear search history?",
-                isPresented: $showClearConfirm,
-                message: "This will remove all your recent searches. This action cannot be undone.",
-                destructiveButtonTitle: String(localized: "Clear", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
-            ) {
-                Task { await container?.searchHistoryService.clear(serverId: serverId) }
-            }
+        }
+        .task(id: "\(serverId):\(revision)") {
+            guard let service = container?.searchHistoryService else { return }
+            let snapshot = await service.recent(serverId: serverId)
+            guard !Task.isCancelled else { return }
+            if rowsData != snapshot { rowsData = snapshot }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SearchHistoryService.didChange)) { note in
+            if note.object as? String == serverId { revision &+= 1 }
         }
     }
 
     @ViewBuilder
-    private func embeddedHistory(history: [SearchHistoryEntry], rowsData: [SearchHistoryRowData]) -> some View {
-        if history.isEmpty {
+    private func embeddedHistory(rowsData: [SearchHistoryRowData]) -> some View {
+        if rowsData.isEmpty {
             EmptyStateView(
                 systemImage: "magnifyingglass",
                 title: "Search your library",
@@ -138,7 +137,7 @@ struct SearchHistoryListView: View {
             }
             path.append(target)
         } label: {
-            SearchHistoryEntryRow(data: rowData)
+            SearchHistoryEntryRow(data: rowData).equatable()
         }
         .buttonStyle(.plain)
         .modifier(SearchHistoryLongPressMenu(rowData: rowData))
@@ -167,4 +166,3 @@ private struct SearchHistoryLongPressMenu: ViewModifier {
         }
     }
 }
-

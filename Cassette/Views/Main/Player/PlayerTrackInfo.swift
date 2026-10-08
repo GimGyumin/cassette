@@ -16,6 +16,21 @@ import AVFoundation
 
 // MARK: - Top-bar favorite
 
+@MainActor
+private func currentSongIsFavorite(
+    playerState: PlayerState,
+    container: AppContainer?,
+    records: [FavoriteRecord]
+) -> Bool {
+    guard let container,
+          let serverId = container.serverState.activeServer?.id,
+          let songId = playerState.currentTrack?.id else { return false }
+    let candidates = Set(container.mediaIdentityService.candidateRemoteIDs(
+        for: songId, serverId: serverId, entityType: .song
+    ))
+    return records.contains { candidates.contains($0.itemId) }
+}
+
 struct FullPlayerFavoriteStarButton: View {
     let playerState: PlayerState
     let container: AppContainer?
@@ -27,13 +42,16 @@ struct FullPlayerFavoriteStarButton: View {
         self.playerState = playerState
         self.container = container
         self.contentColor = contentColor
-        let songId = playerState.currentTrack?.id ?? ""
-        let cid = "song:\(songId)"
-        _favoriteMatches = Query(filter: #Predicate<FavoriteRecord> { $0.id == cid })
+        let sid = container?.serverState.activeServer?.id ?? UUID()
+        let type = FavoriteType.song.rawValue
+        _favoriteMatches = Query(filter: #Predicate<FavoriteRecord> {
+            $0.serverId == sid && $0.itemType == type
+        })
     }
 
-    private var isFavorite: Bool { !favoriteMatches.isEmpty }
-    private var isOnline: Bool { container?.serverState.isOnline == true }
+    private var isFavorite: Bool {
+        currentSongIsFavorite(playerState: playerState, container: container, records: favoriteMatches)
+    }
 
     var body: some View {
         Button {
@@ -42,10 +60,15 @@ struct FullPlayerFavoriteStarButton: View {
             let songId = playerState.currentTrack?.id ?? ""
             guard !songId.isEmpty else { return }
             Task {
-                if fav {
-                    try? await container?.favoritesService.unstar(itemType: .song, itemId: songId)
-                } else {
-                    try? await container?.favoritesService.star(itemType: .song, itemId: songId)
+                guard let container else { return }
+                do {
+                    if fav {
+                        try await container.favoritesService.unstar(itemType: .song, itemId: songId)
+                    } else {
+                        try await container.favoritesService.star(itemType: .song, itemId: songId)
+                    }
+                } catch {
+                    container.toastService.showError(error.localizedDescription)
                 }
             }
         } label: {
@@ -56,7 +79,7 @@ struct FullPlayerFavoriteStarButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!isOnline || playerState.currentTrack == nil)
+        .disabled(container?.serverState.activeServer == nil || playerState.currentTrack == nil)
         .accessibilityLabel(
             isFavorite
                 ? String(localized: "Remove from Favorites", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
@@ -176,12 +199,17 @@ struct TrackInfoSection: View {
         self.showsFavoriteStar = showsFavoriteStar
         self.lyricsViewModel = lyricsViewModel
         let songId = playerState.currentTrack?.id ?? ""
-        let cid = "song:\(songId)"
-        _favoriteMatches = Query(filter: #Predicate<FavoriteRecord> { $0.id == cid })
+        let sid = container?.serverState.activeServer?.id ?? UUID()
+        let type = FavoriteType.song.rawValue
+        _favoriteMatches = Query(filter: #Predicate<FavoriteRecord> {
+            $0.serverId == sid && $0.itemType == type
+        })
         _downloadedMatches = Query(filter: #Predicate<DownloadedTrack> { $0.songId == songId })
     }
 
-    private var isFavorite: Bool { !favoriteMatches.isEmpty }
+    private var isFavorite: Bool {
+        currentSongIsFavorite(playerState: playerState, container: container, records: favoriteMatches)
+    }
     private var isDownloaded: Bool { !downloadedMatches.isEmpty }
     private var isOnline: Bool { container?.serverState.isOnline == true }
     private var isLyricsHeader: Bool { layout == .lyricsHeader }
@@ -237,7 +265,7 @@ struct TrackInfoSection: View {
                                     systemImage: "square.stack"
                                 )
                             }
-                            .disabled(playerState.currentTrack?.albumId == nil || !isOnline)
+                            .disabled(playerState.currentTrack?.albumId == nil)
                             Button {
                                 goToArtist()
                             } label: {
@@ -247,7 +275,6 @@ struct TrackInfoSection: View {
                                     systemImage: "music.mic"
                                 )
                             }
-                            .disabled(!isOnline)
                         } label: {
                             Text(artist)
                                 .font(isLyricsHeader ? .body : .subheadline)
@@ -256,7 +283,6 @@ struct TrackInfoSection: View {
                                 .truncationMode(.tail)
                         }
                         .buttonStyle(.plain)
-                        .disabled(!isOnline)
                         .accessibilityLabel(artist)
                         .accessibilityHint(String(localized: "Go to album or artist", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                     }
@@ -321,7 +347,7 @@ struct TrackInfoSection: View {
                                         systemImage: isFavorite ? "star.slash" : "star"
                                     )
                                 }
-                                .disabled(!isOnline || playerState.currentTrack == nil)
+                                .disabled(container?.serverState.activeServer == nil || playerState.currentTrack == nil)
 
                                 if let track = playerState.currentTrack {
                                     CassetteShareButton(
@@ -337,7 +363,7 @@ struct TrackInfoSection: View {
                             } label: {
                                 Label(String(localized: "Add to Playlist…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "text.badge.plus")
                             }
-                            .disabled(!isOnline || playerState.currentTrack == nil)
+                            .disabled(container?.serverState.activeServer == nil || playerState.currentTrack == nil)
 
                             Divider()
 
@@ -358,7 +384,7 @@ struct TrackInfoSection: View {
                                     systemImage: "square.stack"
                                 )
                             }
-                            .disabled(playerState.currentTrack?.albumId == nil || !isOnline)
+                            .disabled(playerState.currentTrack?.albumId == nil)
 
                             Button {
                                 goToArtist()
@@ -369,7 +395,7 @@ struct TrackInfoSection: View {
                                     systemImage: "music.mic"
                                 )
                             }
-                            .disabled(playerState.currentTrack?.artist == nil || !isOnline)
+                            .disabled(playerState.currentTrack?.artist == nil)
 
                             Button {
                                 showSongInfo = true
@@ -485,10 +511,15 @@ struct TrackInfoSection: View {
         let songId = playerState.currentTrack?.id ?? ""
         guard !songId.isEmpty else { return }
         Task {
-            if fav {
-                try? await container?.favoritesService.unstar(itemType: .song, itemId: songId)
-            } else {
-                try? await container?.favoritesService.star(itemType: .song, itemId: songId)
+            guard let container else { return }
+            do {
+                if fav {
+                    try await container.favoritesService.unstar(itemType: .song, itemId: songId)
+                } else {
+                    try await container.favoritesService.star(itemType: .song, itemId: songId)
+                }
+            } catch {
+                container.toastService.showError(error.localizedDescription)
             }
         }
     }
@@ -504,7 +535,7 @@ struct TrackInfoSection: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!isOnline || playerState.currentTrack == nil)
+        .disabled(container?.serverState.activeServer == nil || playerState.currentTrack == nil)
         .accessibilityLabel(
             isFavorite
                 ? String(localized: "Remove from Favorites", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
@@ -535,7 +566,11 @@ struct TrackInfoSection: View {
               let downloadService = container?.downloadService else { return }
         HapticFeedback.light.trigger()
         Task {
-            try? await downloadService.remove(songId: track.id, serverId: serverId)
+            do {
+                try await downloadService.remove(songId: track.id, serverId: serverId)
+            } catch {
+                container?.toastService.showError(error.localizedDescription)
+            }
         }
     }
 

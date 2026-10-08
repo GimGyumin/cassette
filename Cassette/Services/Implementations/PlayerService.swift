@@ -19,6 +19,52 @@ nonisolated enum CrossfadePhase: Sendable {
     case fadeIn
 }
 
+/// State for an AudioStreaming entry that is already queued inside the engine.
+/// Kept together so queue resets and engine handovers cannot leave a stale bridge flag.
+nonisolated struct GaplessBridgeState: Sendable {
+    var next: DisplayableSong?
+    var source: MediaSource?
+    var epoch: UInt64 = 0
+    var wasSelected = false
+    var recoveryWasRequested = false
+
+    mutating func arm(next: DisplayableSong, source: MediaSource, epoch: UInt64) {
+        self.next = next
+        self.source = source
+        self.epoch = epoch
+        wasSelected = false
+        recoveryWasRequested = false
+    }
+
+    mutating func reset() {
+        next = nil
+        source = nil
+        epoch = 0
+        wasSelected = false
+        recoveryWasRequested = false
+    }
+
+    mutating func clearPreparedSource() {
+        next = nil
+        source = nil
+    }
+}
+
+/// AVPlayer handover and stall-recovery state. The generation fences late engine
+/// callbacks after a teardown; recovery and seek windows belong to that same engine.
+nonisolated struct SystemPlaybackState: Sendable {
+    var isActive = false
+    var generation: UInt64 = 0
+    var transitionRequestedAt: Date?
+    var lastWaitingLogAt = Date.distantPast
+    var recoveredCurrentStall = false
+    var seekSettleDeadline = Date.distantPast
+    var lastStallRecoveryAt = Date.distantPast
+
+    mutating func invalidateCallbacks() { generation &+= 1 }
+    mutating func resetTrackRecovery() { recoveredCurrentStall = false }
+}
+
 actor PlayerService: PlayerServiceProtocol {
     nonisolated let state: PlayerState
 
@@ -54,6 +100,9 @@ actor PlayerService: PlayerServiceProtocol {
     private let audioDelegate: AudioStreamingDelegate
     var progressTask: Task<Void, Never>?
     var playbackRequestTask: Task<Void, Error>?
+    /// Bounded recovery for a finite track whose engine never advances beyond initial loading.
+    /// Cancelled whenever the user changes transport state or selects another track.
+    var playbackAcquisitionTask: Task<Void, Never>?
     var playbackRequestID: UInt64 = 0
     var gaplessPreparationTask: Task<Void, Never>?
     var gaplessPreparationGeneration: UInt64 = 0
@@ -63,48 +112,25 @@ actor PlayerService: PlayerServiceProtocol {
     /// While a user seek is settling, hold the scrubber at the requested target until the
     /// engine reports that it actually landed. Remote streams can take longer than a fixed
     /// delay, especially when seeking backward outside the current buffer.
-    var pendingSeekTarget: TimeInterval?
-    var pendingSeekDeadline: Date = .distantPast
+    var seekState: PlaybackSeekState = .idle
     /// Gapless bridge: when the AudioPlayer's internal queue already holds the next
     /// pre-buffered entry, a natural EOF transitions seamlessly. Cassette must then advance app
     /// state to that already-playing track instead of re-calling `play()` (which would flush the
     /// engine and re-create the gap). Whether an entry may be armed at all is decided by
     /// `GaplessPolicy` (user setting, crossfade arbitration, metered network, device budget).
-    var gaplessBridgeNext: DisplayableSong?
-    var gaplessBridgeSource: MediaSource?
-    var gaplessBridgeEpoch: UInt64 = 0
-    /// Set when the engine reports it actually started the pre-buffered entry. This is the
-    /// authoritative "the transition happened" signal for the end-of-track watchdog, which
-    /// otherwise only has progress heuristics to go on.
-    var bridgedEntryDidStart = false
+    var gaplessBridge = GaplessBridgeState()
     /// Set when next-track artwork preload was skipped because the app was backgrounded;
     /// cleared (and retried) when the app becomes active again.
     var needsArtworkPreloadRecheck = false
     /// Source of the currently playing track; kept for repeat-one replay.
     var currentSource: MediaSource?
+    /// A server-offset response starts its engine clock at zero. App/UI clocks remain song-relative.
+    var streamTimeOffset: TimeInterval = 0
     var liveStreamStallTask: Task<Void, Never>?
 
     /// AVPlayer path for Dolby Atmos / E-AC-3 / multichannel so Spatial Audio can engage.
     nonisolated let systemEngine = AVPlayerPlaybackEngine()
-    var usingSystemPlayer = false
-    var systemPlayerGeneration: UInt64 = 0
-    /// When the last tap/skip was requested, kept until audio actually starts so
-    /// `[TRANSITION-TIMING] audio started …` can report the full perceived latency.
-    var lastTransitionRequestedAt: Date?
-    /// Throttle for the `[AVPLAYER] waiting to play` diagnostic.
-    var lastSystemPlayerWaitingLogAt = Date.distantPast
-    /// One stall recovery per track: a hi-res original that the link cannot carry is re-resolved at a
-    /// lower tier once, and a second stall falls through to the normal error handling instead of looping.
-    var didRecoverFromStalledStream = false
-    /// Samples the AVPlayer's media clock while it claims to be playing — see
-    /// `startSystemPlayerProgressWatchdog(generation:)`.
-    /// Until this instant a seek is still settling. AVPlayer legitimately reports "cannot play" while it
-    /// refetches from the new offset, and treating that as a stalled stream would re-resolve the whole
-    /// track — an extra gap right where the listener just asked to jump.
-    var seekSettleDeadline = Date.distantPast
-    /// Last time the session tier was stepped down for a stalled stream. Skipping through a queue on a
-    /// slow link must not re-resolve every track: the recovery is a last resort, not a per-track routine.
-    var lastStallRecoveryAt = Date.distantPast
+    var systemPlayback = SystemPlaybackState()
 
     var audioSessionConfigured = false
     #if os(iOS)
@@ -180,6 +206,10 @@ actor PlayerService: PlayerServiceProtocol {
     var nextTrackISRCPrefetchTask: Task<Void, Never>?
     /// Task scheduled to download and cache the current track at +30s of playback.
     var cacheDownloadTask: Task<Void, Never>?
+    /// Ordered history writes survive track changes; audio never waits for their persistence.
+    var historyWriteTask: Task<Void, Never>?
+    var periodicPlaybackReportTask: Task<Void, Never>?
+    var gaplessMetadataTask: Task<Void, Never>?
     let cacheSession: URLSession
     /// Task that prefetches the next queued track into cache ahead of the crossfade window.
     var prefetchTask: Task<Void, Never>?
@@ -222,6 +252,7 @@ actor PlayerService: PlayerServiceProtocol {
     var nowPlayingEpoch: UInt64 = 0
     /// Bumped on every `play()` / `startPlayback` — stale resolves and EOF handlers bail out.
     var playbackEpoch: UInt64 = 0
+    var progressStallMonitor = PlaybackStallMonitor()
     /// The track the next `startPlayback` replaces. The visible track flips as soon as a tap is
     /// accepted (so the UI never waits on a network resolve), which means listening history has to
     /// read the outgoing track from here instead of `state.currentTrack`.

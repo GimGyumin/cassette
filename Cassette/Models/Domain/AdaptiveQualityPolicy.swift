@@ -12,6 +12,11 @@ import Foundation
 /// and is always honored. The ceiling keeps headroom over the codec bitrate so a fluctuation, a
 /// TLS retry or a competing background request cannot starve the live stream.
 nonisolated enum AdaptiveQualityPolicy {
+    /// Automatic that can carry the source must request original bytes explicitly. A missing
+    /// Subsonic format lets the server's own AAC default silently override the client's decision.
+    static func transportFormat(_ effectiveFormat: CacheFormat) -> CacheFormat {
+        effectiveFormat == .matchStream ? .flacOriginal : effectiveFormat
+    }
 
     /// Fraction of the measured rate a stream may use. Half leaves room for retries, protocol
     /// overhead and the occasional artwork request.
@@ -137,11 +142,8 @@ nonisolated enum AdaptiveQualityPolicy {
             isLimitedNetwork: isLimitedNetwork
         )
         guard let ceiling else { return adapted }
-        // Automatic always reacts to the ceiling. An explicit choice does so only when the caller has
-        // *proof* the link cannot carry it — `applyCeilingToExplicitChoice` is set by the AVPlayer stall
-        // recovery, where a hi-res original demonstrably stops producing audio. Even then the ceiling can
-        // only lower quality, never raise it.
-        guard configured == .matchStream || applyCeilingToExplicitChoice else { return adapted }
+        // Explicit quality remains authoritative, including callers carrying the legacy override.
+        guard configured == .matchStream else { return adapted }
         return qualityRank(adapted) <= qualityRank(ceiling) ? adapted : ceiling
     }
 }

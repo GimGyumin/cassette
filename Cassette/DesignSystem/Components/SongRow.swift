@@ -75,7 +75,7 @@ struct SongRow: View {
     var body: some View {
         HStack(alignment: reservesArtistSpace ? .top : .center, spacing: CassetteSpacing.s) {
             if showCoverArt {
-                CoverArtCard(id: song.coverArtId ?? song.id, size: 44)
+                CoverArtCard(id: song.effectiveCoverArtId, size: 44)
                     .overlay {
                         // Now-playing equalizer over the thumbnail (with a scrim) for the current track —
                         // restores the playing cue lost when rows switched to album thumbnails (showCoverArt).
@@ -105,7 +105,7 @@ struct SongRow: View {
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                             #else
-                            .font(reservesArtistSpace ? .system(size: 18, weight: .regular) : .cassetteCaption)
+                            .font(reservesArtistSpace ? .system(size: 17, weight: .regular) : .cassetteCaption)
                             .foregroundStyle(secondaryColor)
                             #endif
                             .monospacedDigit()
@@ -131,20 +131,26 @@ struct SongRow: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(song.title)
-                    #if os(macOS)
-                    .font(.system(size: 14, weight: .regular))
-                    #else
-                    .font(reservesArtistSpace ? .system(size: 18, weight: .regular) : .cassetteCellTitle)
-                    #endif
-                    .foregroundStyle(isCurrentTrack ? playingAccent : titleColor)
-                    #if os(macOS)
-                    .lineLimit(reservesArtistSpace ? nil : 1)
-                    #else
-                    .lineLimit(reservesArtistSpace ? 2 : 1)
-                    .lineSpacing(reservesArtistSpace ? 1 : 0)
-                    #endif
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(song.title)
+                        #if os(macOS)
+                        .font(.system(size: 14, weight: .regular))
+                        #else
+                        .font(reservesArtistSpace ? .system(size: 17, weight: .regular) : .cassetteCellTitle)
+                        #endif
+                        .foregroundStyle(isCurrentTrack ? playingAccent : titleColor)
+                        #if os(macOS)
+                        .lineLimit(reservesArtistSpace ? nil : 1)
+                        #else
+                        .lineLimit(reservesArtistSpace ? 2 : 1)
+                        .lineSpacing(reservesArtistSpace ? 1 : 0)
+                        #endif
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let advisory = song.contentAdvisoryLabel(locale: AppUILanguage.locale) {
+                        ContentAdvisoryBadge(label: advisory, color: secondaryColor)
+                    }
+                }
                 if !reservesArtistSpace, let classical = song.classicalSubtitle {
                     Text(classical)
                         #if os(macOS)
@@ -207,7 +213,7 @@ struct SongRow: View {
         .padding(.vertical, reservesArtistSpace ? 12 : CassetteSpacing.s)
         .padding(.trailing, CassetteSpacing.s)
         #else
-        .padding(.vertical, reservesArtistSpace ? 14 : CassetteSpacing.s)
+        .padding(.vertical, reservesArtistSpace ? 16 : CassetteSpacing.s)
         #endif
         .contentShape(Rectangle())
         #if os(macOS)
@@ -215,11 +221,12 @@ struct SongRow: View {
         .animation(.easeOut(duration: 0.12), value: isHovered)
         .onHover { isHovered = $0 }
         #endif
-        .task(id: song.id) {
+        .task(id: "\(song.id):\(song.effectiveCoverArtId)") {
             pinnedSnapshot = container?.pinService.isPinned(itemType: .song, itemId: song.id) == true
             favoriteSnapshot = isFavorite
-            coverImage = await artworkImageCache.load(coverArtId: song.coverArtId ?? song.id)
+            coverImage = await artworkImageCache.load(coverArtId: song.effectiveCoverArtId)
         }
+        .musicShareDraggable(itemID: song.id, title: song.title)
         .contextMenu { songMenu } preview: {
             SongContextPreview(coverImage: coverImage, song: song)
         }
@@ -257,9 +264,7 @@ struct SongRow: View {
                 }
                 .disabled(!isOnline)
 
-                ShareLink(item: songShareText) {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                }
+                ContextMenuShareAction(itemID: song.id, text: songShareText)
             }
 
             Divider()
@@ -391,5 +396,26 @@ struct SongRow: View {
         guard #available(iOS 27.0, macOS 27.0, *),
               let serverId = container?.serverState.activeServer?.id else { return }
         SiriDonations.donateAffinity(song: song, serverId: serverId, isLiked: isLiked)
+    }
+}
+
+private struct ContentAdvisoryBadge: View {
+    let label: String
+    let color: Color
+
+    var body: some View {
+        Text(verbatim: label)
+            .font(.system(size: label == "19" ? 7.5 : 9, weight: .bold))
+            .foregroundStyle(color)
+            .frame(width: 15, height: 15)
+            .background {
+                if label == "19" {
+                    Circle().fill(color.opacity(0.16))
+                } else {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(color.opacity(0.16))
+                }
+            }
+            .accessibilityLabel(String(localized: "Explicit", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
     }
 }

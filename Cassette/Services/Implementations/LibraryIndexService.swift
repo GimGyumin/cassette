@@ -16,11 +16,36 @@ final class LibraryIndexService {
     private(set) var lastIndexedAt: Date?
     private(set) var entryCount = 0
     private(set) var progress: Double = 0
+    private(set) var isPreparing = false
+    private(set) var lastError: UserFacingError?
+    private(set) var lastBuildSucceeded = false
+    var hasUsableIndex: Bool { lastIndexedAt != nil }
 
     private var artists: [IndexedArtist] = []
     private var albums: [IndexedAlbum] = []
     private var playlists: [IndexedPlaylist] = []
     private var songs: [DisplayableSong] = []
+    private var genreCoverCache: [String: String] = [:]
+    private var missingGenreCovers: Set<String> = []
+    /// Preserve track-level artwork identity; never collapse this map by album ID.
+    var songArtworkSnapshot: [String: String] {
+        Dictionary(songs.map { ("song:\($0.id)", $0.effectiveCoverArtId) }, uniquingKeysWith: { _, new in new })
+    }
+
+    /// Representative library artwork for an Apple Music-style genre card.
+    func browseCoverArtId(for genre: String) -> String? {
+        let needle = genre.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        if let cached = genreCoverCache[needle] { return cached }
+        if missingGenreCovers.contains(needle) { return nil }
+        let coverID = songs.first { song in
+            let value = (song.genre ?? "")
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            return !value.isEmpty && (value.contains(needle) || needle.contains(value))
+        }?.effectiveCoverArtId
+        if let coverID { genreCoverCache[needle] = coverID }
+        else { missingGenreCovers.insert(needle) }
+        return coverID
+    }
     private var songTokens: [[String]] = []
     private var artistTokens: [[String]] = []
     private var albumTokens: [[String]] = []
@@ -51,6 +76,7 @@ final class LibraryIndexService {
     }
 
     private var indexTask: Task<Void, Never>?
+    private var indexTaskServerID: UUID?
 
     nonisolated struct IndexedArtist: Sendable, Codable {
         let id: String
@@ -80,17 +106,26 @@ final class LibraryIndexService {
 
     /// Rebuilds the in-memory index. Safe to call repeatedly; overlapping runs are cancelled.
     func rebuild(using library: any LibraryServiceProtocol) {
+        startIndexTask(using: library, refreshExisting: true)
+    }
+
+    private func startIndexTask(using library: any LibraryServiceProtocol, refreshExisting: Bool) {
         indexTask?.cancel()
         generation &+= 1
+        isPreparing = true
+        lastError = nil
+        lastBuildSucceeded = false
         let token = generation
+        indexTaskServerID = serverID()
         indexTask = Task { [weak self] in
-            await self?.runRebuild(using: library, token: token)
+            await self?.runRebuild(using: library, token: token, refreshExisting: refreshExisting)
         }
     }
 
     func clear() {
         indexTask?.cancel()
         indexTask = nil
+        indexTaskServerID = nil
         generation &+= 1
         // Logout clears every account; keep no persisted catalog from a previously selected server.
         if let directory, FileManager.default.fileExists(atPath: directory.path) {
@@ -99,6 +134,8 @@ final class LibraryIndexService {
         }
         loadedServerID = nil
         songs = []
+        genreCoverCache.removeAll()
+        missingGenreCovers.removeAll()
         songTokens = []
         artistTokens = []; albumTokens = []; playlistTokens = []
         artists = []
@@ -108,22 +145,72 @@ final class LibraryIndexService {
         lastIndexedAt = nil
         isIndexing = false
         progress = 0
+        isPreparing = false
+        lastError = nil
+        lastBuildSucceeded = false
     }
 
     /// Awaits a full index rebuild, updating progress as each catalog phase completes.
     /// Used by the onboarding preparation screen.
-    func rebuildAndWait(using library: any LibraryServiceProtocol) async {
+    @discardableResult
+    func rebuildAndWait(using library: any LibraryServiceProtocol) async -> Bool {
         rebuild(using: library)
         await indexTask?.value
+        return lastBuildSucceeded
     }
 
-    /// Starts a rebuild only when the index is empty — used on Search first entry.
+    /// Restore a persisted index silently. Fetch the catalog only when no usable index exists;
+    /// confirmed library changes and explicit refreshes use `rebuild` instead.
     func ensureIndexed(using library: any LibraryServiceProtocol) {
-        if loadedServerID == serverID(), (lastIndexedAt != nil || isIndexing) { return }
-        rebuild(using: library)
+        if loadedServerID == serverID(), lastIndexedAt != nil { return }
+        if indexTask != nil, indexTaskServerID == serverID() { return }
+        if lastError != nil, loadedServerID == serverID() { return }
+        startIndexTask(using: library, refreshExisting: false)
+    }
+
+    @discardableResult
+    func ensureIndexedAndWait(using library: any LibraryServiceProtocol) async -> Bool {
+        ensureIndexed(using: library)
+        await indexTask?.value
+        return hasUsableIndex
     }
 
     func search(query: String, limit: Int = 20) -> LocalHits {
+        Self.match(query: query, limit: limit, artists: artists, albums: albums,
+                   playlists: playlists, songs: songs, artistTokens: artistTokens,
+                   albumTokens: albumTokens, playlistTokens: playlistTokens, songTokens: songTokens)
+    }
+
+    /// Capture immutable, copy-on-write arrays, then scan away from keyboard/layout work.
+    func searchInBackground(query: String, limit: Int = 80) async -> LocalHits {
+        let token = generation
+        let indexedEntryCount = entryCount
+        let worker = Task.detached(priority: .userInitiated) {
+            [artists, albums, playlists, songs, artistTokens, albumTokens, playlistTokens, songTokens] in
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            let hits = Self.match(query: query, limit: limit, artists: artists, albums: albums,
+                                  playlists: playlists, songs: songs, artistTokens: artistTokens,
+                                  albumTokens: albumTokens, playlistTokens: playlistTokens, songTokens: songTokens)
+            let elapsedMilliseconds = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)
+            Logger.library.debug("Local search took \(elapsedMilliseconds) ms for \(indexedEntryCount) entries (limit \(limit))")
+            return hits
+        }
+        let result = await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+        guard token == generation, !Task.isCancelled else {
+            return LocalHits(artists: [], albums: [], playlists: [])
+        }
+        return result
+    }
+
+    nonisolated private static func match(
+        query: String, limit: Int, artists: [IndexedArtist], albums: [IndexedAlbum],
+        playlists: [IndexedPlaylist], songs: [DisplayableSong], artistTokens: [[String]],
+        albumTokens: [[String]], playlistTokens: [[String]], songTokens: [[String]]
+    ) -> LocalHits {
         let queryTokens = HangulRomanization.searchTokens(query)
         guard !queryTokens.isEmpty else {
             return LocalHits(artists: [], albums: [], playlists: [])
@@ -135,7 +222,9 @@ final class LibraryIndexService {
         func collect<T>(_ values: [T], tokens: [[String]]) -> [T] {
             guard limit > 0 else { return [] }
             var result: [T] = []
-            for (value, terms) in zip(values, tokens) where matches(terms) {
+            for (value, terms) in zip(values, tokens) {
+                if Task.isCancelled { break }
+                guard matches(terms) else { continue }
                 result.append(value)
                 if result.count == limit { break }
             }
@@ -149,9 +238,7 @@ final class LibraryIndexService {
             artists: Array(matchedArtists),
             albums: Array(matchedAlbums),
             playlists: Array(matchedPlaylists),
-            songs: Array(zip(songs, songTokens).lazy.filter { _, tokens in
-                queryTokens.contains { q in tokens.contains { $0.contains(q) } }
-            }.prefix(limit).map { $0.0 })
+            songs: collect(songs, tokens: songTokens)
         )
     }
 
@@ -172,30 +259,46 @@ final class LibraryIndexService {
             (snapshot.artists.map { HangulRomanization.searchTokens($0.name) },
              snapshot.albums.map { HangulRomanization.searchTokens([$0.name, $0.artist ?? ""].joined(separator: " ")) },
              snapshot.playlists.map { HangulRomanization.searchTokens($0.name) },
-             snapshot.songs.map { HangulRomanization.searchTokens([$0.title, $0.artist ?? "", $0.albumName ?? ""].joined(separator: " ")) })
+             snapshot.songs.map {
+                 HangulRomanization.searchTokens(
+                    [$0.title, $0.artist ?? "", $0.albumName ?? "", $0.genre ?? ""]
+                        .joined(separator: " ")
+                 )
+             })
         }.value
         guard token == generation, server == serverID(), !Task.isCancelled else { return false }
         artists = snapshot.artists
         albums = snapshot.albums
         playlists = snapshot.playlists
         songs = snapshot.songs
+        genreCoverCache.removeAll()
+        missingGenreCovers.removeAll()
         (artistTokens, albumTokens, playlistTokens, songTokens) = tokens
         entryCount = artists.count + albums.count + playlists.count + songs.count
         lastIndexedAt = snapshot.date
         return true
     }
 
-    private func runRebuild(using library: any LibraryServiceProtocol, token: UInt64) async {
+    private func runRebuild(using library: any LibraryServiceProtocol, token: UInt64, refreshExisting: Bool) async {
+        guard token == generation, !Task.isCancelled else { return }
         let id = serverID()
         if loadedServerID != id {
             artists = []; albums = []; playlists = []; songs = []; songTokens = []
+            genreCoverCache.removeAll(); missingGenreCovers.removeAll()
             artistTokens = []; albumTokens = []; playlistTokens = []
             entryCount = 0; lastIndexedAt = nil
         }
         loadedServerID = id
-        isIndexing = true
+        if isIndexing { isIndexing = false }
         progress = 0
-        defer { if token == generation { isIndexing = false; indexTask = nil } }
+        defer {
+            if token == generation {
+                if isIndexing { isIndexing = false }
+                isPreparing = false
+                indexTask = nil
+                indexTaskServerID = nil
+            }
+        }
         let file = id.flatMap { id in directory?.appendingPathComponent("\(id).json") }
         if lastIndexedAt == nil, let file {
             let stored = await Task.detached(priority: .utility) {
@@ -203,9 +306,21 @@ final class LibraryIndexService {
                 return try? JSONDecoder().decode(Snapshot.self, from: data)
             }.value
             guard token == generation, id == serverID(), !Task.isCancelled else { return }
-            if let stored { guard await install(stored, token: token, server: id) else { return } }
+            if let stored {
+                guard await install(stored, token: token, server: id) else { return }
+                progress = 1
+            }
         }
-        guard networkAvailable() else { return }
+        if !refreshExisting, lastIndexedAt != nil {
+            lastBuildSucceeded = true
+            return
+        }
+        guard networkAvailable() else {
+            if lastIndexedAt == nil { lastError = .noNetwork }
+            return
+        }
+        isIndexing = true
+        progress = 0
         do {
             async let artistsTask = library.artists()
             async let albumsTask = library.allAlbums()
@@ -244,8 +359,10 @@ final class LibraryIndexService {
                 try data.write(to: file, options: .atomic)
             }
             LibraryIndexSchema.markPrepared()
+            lastBuildSucceeded = true
         } catch is CancellationError {
         } catch {
+            lastError = UserFacingError.from(error)
             Logger.library.debug("Library index rebuild failed: \(error, privacy: .public)")
         }
     }

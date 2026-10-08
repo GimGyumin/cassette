@@ -182,6 +182,7 @@ extension LyricsViewModel {
             lastPositionSampleMs = targetMs
             lastPositionSampleAt = CACurrentMediaTime()
             lastDisplayedPositionMs = targetMs
+            karaokePlaybackMs = targetMs
 
             // Immediately re-evaluate active lyric lines / words at the new position
             // so the UI jumps to the tapped line without waiting for the next timer tick.

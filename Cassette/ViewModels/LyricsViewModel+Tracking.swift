@@ -51,7 +51,13 @@ extension LyricsViewModel {
         let lyricOffsetMs = lyricDocument.map {
             LyricTime.milliseconds(fromSeconds: $0.lyricOffset)
         } ?? 0
-        let baseMs = elapsedMs - structured.offset + lyricOffsetMs
+        let requestedMs = elapsedMs - structured.offset + lyricOffsetMs
+        // Use one clock for line selection and word fill. Absorb only sub-frame-ish
+        // timestamp jitter; larger backward corrections are authoritative player resyncs
+        // (for example after buffering) and must not leave lyrics running ahead of audio.
+        let backwardCorrectionMs = karaokePlaybackMs - requestedMs
+        let baseMs = backwardCorrectionMs > 0 && backwardCorrectionMs <= 120
+            ? karaokePlaybackMs : requestedMs
         let timedLines = playbackTimeline.activeRows(for: baseMs)
         let adjustedMs = baseMs
 
@@ -76,13 +82,8 @@ extension LyricsViewModel {
             rows: displayRows
         )
 
-        // Word progress must be monotonic — streaming hiccups or position updates
-        // that slip backward for one tick cause visible "karaoke jump-back".
-        // Only accept forward progress, or a backward jump >10s (genuine seek).
-        let wasMovingForward = adjustedMs >= karaokePlaybackMs
-        let isLargeJump = (karaokePlaybackMs - adjustedMs) > 10_000
-        let monotonicMs = (wasMovingForward || isLargeJump) ? adjustedMs : karaokePlaybackMs
-        karaokePlaybackMs = monotonicMs
+        // Line selection, instrumental gaps and word fill share the filtered clock.
+        karaokePlaybackMs = adjustedMs
 
         if newPrimary != currentLineIndex
             || newActive != activeLineIndices
@@ -374,18 +375,19 @@ extension LyricsViewModel {
         if nowMs != lastPositionSampleMs {
             lastPositionSampleMs = nowMs
             lastPositionSampleAt = now
-            // Accept forward progress.  Only reject small backward jumps
-            // that follow a seek (playerState still reporting old position
-            // while the audio engine catches up).  Large backward jumps
-            // (>2s) are genuine track changes / restarts.
-            if nowMs >= lastDisplayedPositionMs || (lastDisplayedPositionMs - nowMs) > 2000 {
+            // Fresh engine samples are authoritative. Ignore only tiny backward
+            // quantization jitter; corrections larger than 120 ms commonly mean the
+            // interpolated lyric clock advanced during buffering and must be pulled back.
+            if nowMs >= lastDisplayedPositionMs || (lastDisplayedPositionMs - nowMs) > 120 {
                 lastDisplayedPositionMs = nowMs
             }
             return lastDisplayedPositionMs
         }
 
         // No new sample — interpolate forward from the last known position.
-        let interpolated = nowMs + Int((now - lastPositionSampleAt) * 1000)
+        // The service samples at 500 ms. A frozen engine clock must not let
+        // lyrics run seconds ahead and then jump backward when buffering ends.
+        let interpolated = nowMs + min(750, max(0, Int((now - lastPositionSampleAt) * 1000)))
         lastDisplayedPositionMs = max(interpolated, lastDisplayedPositionMs)
         return lastDisplayedPositionMs
     }

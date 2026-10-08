@@ -6,32 +6,46 @@
 import SwiftUI
 import SwiftSonic
 import OSLog
+#if os(macOS)
+import AppKit
+#endif
 #if os(iOS)
 import UIKit
 #endif
 
-private struct ContextMenuShareAction: View {
+struct ContextMenuShareAction: View {
+    let itemID: String
     let text: String
+    @Environment(\.appContainer) private var container
 
     var body: some View {
-        #if os(iOS)
         Button {
-            presentContextMenuShare(text)
+            guard let container else { return }
+            let options = ShareSettings.shared.makeOptions(trackTitle: text)
+            Task {
+                do {
+                    let client = try await container.serverService.makeSwiftSonicClient()
+                    let url = try await client.createShareURL(id: itemID, options: options)
+                    #if os(iOS)
+                    presentContextMenuShare(url)
+                    #else
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                    #endif
+                } catch {
+                    container.toastService.showError(error.localizedDescription)
+                }
+            }
         } label: {
             Label("Share", systemImage: "square.and.arrow.up")
         }
-        #else
-        ShareLink(item: text) {
-            Label("Share", systemImage: "square.and.arrow.up")
-        }
-        #endif
     }
 }
 
 #if os(iOS)
 /// A ShareLink hosted inside UIContextMenu can be dismissed with the menu that created it.
 /// Wait for that transient controller to leave, then present from the stable app hierarchy.
-private func presentContextMenuShare(_ text: String) {
+private func presentContextMenuShare(_ url: URL) {
     Task { @MainActor in
         try? await Task.sleep(for: .milliseconds(300))
         guard !Task.isCancelled,
@@ -46,7 +60,7 @@ private func presentContextMenuShare(_ text: String) {
             presenter = presented
         }
         let controller = UIActivityViewController(
-            activityItems: [text],
+            activityItems: [url],
             applicationActivities: nil
         )
         controller.popoverPresentationController?.sourceView = presenter.view
@@ -203,6 +217,7 @@ struct SongContextMenuModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .musicShareDraggable(itemID: song.id, title: song.title)
             .contextMenu {
                 ControlGroup {
                     Button {
@@ -215,7 +230,7 @@ struct SongContextMenuModifier: ViewModifier {
                     }
                     .disabled(!isOnline)
 
-                    ContextMenuShareAction(text: shareText)
+                    ContextMenuShareAction(itemID: song.id, text: shareText)
                 }
 
                 Divider()
@@ -381,7 +396,10 @@ struct CollectionContextMenuModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .musicShareDraggable(itemID: itemId, title: displayName)
             .contextMenu {
+                ContextMenuShareAction(itemID: itemId, text: displayName)
+
                 if !songs.isEmpty {
                     Button {
                         Task {
@@ -551,6 +569,7 @@ struct LazyCollectionContextMenuModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .musicShareDraggable(itemID: itemId, title: displayName)
             .contextMenu {
                 ControlGroup {
                     if favoriteType != nil {
@@ -564,7 +583,7 @@ struct LazyCollectionContextMenuModifier: ViewModifier {
                         }
                     }
 
-                    ContextMenuShareAction(text: shareText)
+                    ContextMenuShareAction(itemID: itemId, text: shareText)
                 }
 
                 Divider()

@@ -71,6 +71,21 @@ struct LyricsSourceRaceTests {
         #expect(decide(external: synced("External"), externalSettled: true, headStartElapsed: true) == "external")
     }
 
+    @Test func libraryGenerationWaitsForServerEvenAfterInteractiveDeadline() {
+        #expect(LyricsService.chooseSource(
+            embedded: nil, embeddedSettled: false, external: synced("External"),
+            externalSettled: true, serverHeadStartElapsed: true, waitForServer: true
+        ) == nil)
+        #expect(kind(LyricsService.chooseSource(
+            embedded: karaoke("Server"), embeddedSettled: true, external: synced("External"),
+            externalSettled: true, serverHeadStartElapsed: true, waitForServer: true
+        )) == "server")
+        #expect(kind(LyricsService.chooseSource(
+            embedded: nil, embeddedSettled: true, external: synced("External"),
+            externalSettled: true, serverHeadStartElapsed: false, waitForServer: true
+        )) == "external")
+    }
+
     @Test("Once the server answered without lyrics, the external result is used immediately")
     func emptyServerDefersToExternal() {
         #expect(decide(embedded: empty(), embeddedSettled: true,

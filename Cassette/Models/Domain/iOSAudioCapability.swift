@@ -67,6 +67,25 @@ nonisolated enum iOSAudioCapability {
         return normalized.isEmpty ? nil : normalized
     }
 
+    /// Some Jellyfin-compatible responses omit `suffix` but still include a MIME type.
+    /// Use only known audio types; an arbitrary `audio/*` value is not proof we can decode it.
+    static func container(forContentType value: String?) -> String? {
+        guard let mime = value?.split(separator: ";", maxSplits: 1).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else { return nil }
+        switch mime {
+        case "audio/flac", "audio/x-flac": return "flac"
+        case "audio/alac": return "alac"
+        case "audio/mp4", "audio/x-m4a": return "m4a"
+        case "audio/mpeg": return "mp3"
+        case "audio/aac", "audio/aacp": return "aac"
+        case "audio/wav", "audio/x-wav", "audio/wave": return "wav"
+        case "audio/aiff", "audio/x-aiff": return "aiff"
+        case "audio/ogg": return "ogg"
+        case "audio/opus": return "opus"
+        default: return nil
+        }
+    }
+
     /// True when the engines can decode this stream directly.
     ///
     /// A missing container **and** codec means the server told us nothing usable, which is not a
@@ -89,7 +108,7 @@ nonisolated enum iOSAudioCapability {
 
     /// Device profile advertised to the server, so a Jellyfin implementation that *does* honour it
     /// answers the Direct Play question correctly on its own.
-    static func deviceProfile(maxStreamingBitrate: Int?) -> JellyfinPlaybackInfoRequest.DeviceProfile {
+    static func deviceProfile(maxStreamingBitrate: Int?, preferLossless: Bool = false) -> JellyfinPlaybackInfoRequest.DeviceProfile {
         JellyfinPlaybackInfoRequest.DeviceProfile(
             Name: "Cassette",
             MaxStreamingBitrate: maxStreamingBitrate,
@@ -99,7 +118,8 @@ nonisolated enum iOSAudioCapability {
                     AudioCodec: $0.codec
                 )
             },
-            TranscodingProfiles: [
+            TranscodingProfiles: preferLossless ? [] : [
+                .init(Container: "ts", AudioCodec: "aac", transport: "hls", Context: "Streaming", MaxAudioChannels: "2"),
                 .init(Container: "aac", AudioCodec: "aac", transport: "http", Context: "Streaming", MaxAudioChannels: "2"),
                 .init(Container: "mp3", AudioCodec: "mp3", transport: "http", Context: "Streaming", MaxAudioChannels: "2"),
                 .init(Container: "opus", AudioCodec: "opus", transport: "http", Context: "Streaming", MaxAudioChannels: "2"),

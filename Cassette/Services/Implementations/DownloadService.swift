@@ -24,6 +24,10 @@ actor DownloadService: DownloadServiceProtocol {
     private var progressContinuation: AsyncStream<[DownloadProgress]>.Continuation?
     /// Keyed by "songId::serverId" to allow per-track cancellation.
     private var inFlightTasks: [String: Task<Void, Error>] = [:]
+    /// Cover requests are shared by every track that references the same artwork ID. Album
+    /// downloads run several audio transfers at once, so a disk-only existence check can race
+    /// and issue the same artwork request multiple times before the first write finishes.
+    private var inFlightCoverTasks: [String: Task<Void, Error>] = [:]
     private var activeAlbumDownloads: Set<String> = []
     private var activePlaylistDownloads: Set<String> = []
     private let toastService: ToastService
@@ -145,18 +149,11 @@ actor DownloadService: DownloadServiceProtocol {
         let parts = coverArtId.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
         let baseID = String(parts[0])
         let suffix = parts.count == 2 ? "@\(parts[1])" : ""
-        let serverID = await MainActor.run { serverService.state.activeServer?.id }
-        let candidates: [String]
-        if let serverID {
-            candidates = await MainActor.run {
-                mediaIdentityService?.candidateRemoteIDs(
-                    for: baseID,
-                    serverId: serverID,
-                    entityType: .coverArt
-                ) ?? [baseID]
-            }
-        } else {
-            candidates = [baseID]
+        let candidates = await MainActor.run {
+            guard let serverID = serverService.state.activeServer?.id else { return [baseID] }
+            return mediaIdentityService?.candidateRemoteIDs(
+                for: baseID, serverId: serverID, entityType: .coverArt
+            ) ?? [baseID]
         }
         let suffixes = suffix.isEmpty ? ["@original-v1", ""] : [suffix]
         for preferredSuffix in suffixes {
@@ -339,6 +336,20 @@ actor DownloadService: DownloadServiceProtocol {
     // MARK: - Single track download
 
     func download(song: Song, serverId: UUID) async throws {
+        try await downloadAudio(song: song, serverId: serverId, albumCoverArtID: nil)
+        let songCoverArtID = song.coverArt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedCoverArtID = songCoverArtID.flatMap { $0.isEmpty ? nil : $0 } ?? song.id
+        do {
+            try await _downloadCoverArt(id: resolvedCoverArtID)
+        } catch {
+            Logger.download.error("Cover art download failed for '\(song.id, privacy: .public)': \(error, privacy: .public)")
+        }
+    }
+
+    /// Downloads and records only the audio payload. Album downloads call this path so artwork
+    /// can be planned once for the whole album: the shared album cover is fetched once and only
+    /// tracks with a different cover-art ID add another request.
+    private func downloadAudio(song: Song, serverId: UUID, albumCoverArtID: String?) async throws {
         guard await !isDownloaded(songId: song.id, serverId: serverId) else {
             Logger.download.debug("Song '\(song.id, privacy: .public)' already downloaded — skipping.")
             return
@@ -353,13 +364,23 @@ actor DownloadService: DownloadServiceProtocol {
         }
 
         let task = Task<Void, Error> {
-            try await self._downloadSong(song, serverId: serverId, key: key)
+            try await self._downloadSong(
+                song,
+                serverId: serverId,
+                key: key,
+                albumCoverArtID: albumCoverArtID
+            )
         }
         inFlightTasks[key] = task
         try await task.value
     }
 
-    private func _downloadSong(_ song: Song, serverId: UUID, key: String) async throws {
+    private func _downloadSong(
+        _ song: Song,
+        serverId: UUID,
+        key: String,
+        albumCoverArtID: String?
+    ) async throws {
         defer { inFlightTasks.removeValue(forKey: key) }
 
         let creds = try await serverService.activeCredentials()
@@ -516,7 +537,7 @@ actor DownloadService: DownloadServiceProtocol {
         let mediaPath = song.path
         let musicBrainzID = song.musicBrainzId
         let isrc = song.isrc?.first
-        let coverArtId = song.coverArt
+        let coverArtId = song.coverArt ?? albumCoverArtID
         let isTranscoded = requestedFormat.subsonicMaxBitRate != nil
         let suffix = ext
         let bitRate = isTranscoded ? requestedFormat.subsonicMaxBitRate : song.bitRate
@@ -524,6 +545,7 @@ actor DownloadService: DownloadServiceProtocol {
         let samplingRate = isTranscoded ? nil : song.samplingRate
         let channelCount = isTranscoded ? nil : song.channelCount
         let comment = song.comment
+        let explicitStatus = song.explicitStatus
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int64) ?? 0
         let rgTrackGain    = song.replayGain?.trackGain
         let rgTrackPeak    = song.replayGain?.trackPeak
@@ -568,6 +590,7 @@ actor DownloadService: DownloadServiceProtocol {
                 samplingRate: samplingRate,
                 channelCount: channelCount,
                 comment: comment,
+                explicitStatus: explicitStatus,
                 replayGainTrackGain: rgTrackGain,
                 replayGainTrackPeak: rgTrackPeak,
                 replayGainAlbumGain: rgAlbumGain,
@@ -592,11 +615,6 @@ actor DownloadService: DownloadServiceProtocol {
 
         emit(progress: DownloadProgress(songId: song.id, serverId: serverId, progress: 1.0, totalBytes: fileSize, receivedBytes: fileSize))
         Logger.download.info("Downloaded '\(song.id, privacy: .public)' (\(fileSize) bytes)")
-        do {
-            try await _downloadCoverArt(id: coverArtId ?? songId)
-        } catch {
-            Logger.download.error("Cover art download failed for '\(songId, privacy: .public)': \(error, privacy: .public)")
-        }
     }
 
     // MARK: - Album download
@@ -608,6 +626,8 @@ actor DownloadService: DownloadServiceProtocol {
         let total = songs.count
         var succeeded = 0
         let aid = album.id
+        let albumCoverArtID = album.coverArt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAlbumCoverArtID = albumCoverArtID?.isEmpty == false ? albumCoverArtID : nil
 
         let maxConcurrent = 3
         await withTaskGroup(of: Bool.self) { group in
@@ -617,7 +637,11 @@ actor DownloadService: DownloadServiceProtocol {
                 guard let song = iterator.next() else { break }
                 group.addTask {
                     do {
-                        try await self.download(song: song, serverId: serverId)
+                        try await self.downloadAudio(
+                            song: song,
+                            serverId: serverId,
+                            albumCoverArtID: normalizedAlbumCoverArtID
+                        )
                         return true
                     } catch {
                         Logger.download.error("Failed song '\(song.id, privacy: .public)' in album '\(aid, privacy: .public)': \(error, privacy: .public)")
@@ -631,7 +655,11 @@ actor DownloadService: DownloadServiceProtocol {
                 if let song = iterator.next() {
                     group.addTask {
                         do {
-                            try await self.download(song: song, serverId: serverId)
+                            try await self.downloadAudio(
+                                song: song,
+                                serverId: serverId,
+                                albumCoverArtID: normalizedAlbumCoverArtID
+                            )
                             return true
                         } catch {
                             Logger.download.error("Failed song '\(song.id, privacy: .public)' in album '\(aid, privacy: .public)': \(error, privacy: .public)")
@@ -643,10 +671,14 @@ actor DownloadService: DownloadServiceProtocol {
         }
 
         var localCoverPath: String? = nil
-        if let coverArtId = album.coverArt {
+        let coverArtIDs = Self.albumCoverArtIDs(
+            albumCoverArtID: normalizedAlbumCoverArtID,
+            songCoverArtIDs: songs.map(\.coverArt)
+        )
+        for coverArtId in coverArtIDs {
             do {
                 try await _downloadCoverArt(id: coverArtId)
-                localCoverPath = coverArtId
+                if coverArtId == normalizedAlbumCoverArtID { localCoverPath = coverArtId }
             } catch {
                 Logger.download.error("Cover art download failed for album '\(album.id, privacy: .public)' (coverArtId: \(coverArtId, privacy: .public)): \(error, privacy: .public)")
             }
@@ -996,6 +1028,21 @@ actor DownloadService: DownloadServiceProtocol {
         "\(songId)::\(serverId.uuidString)"
     }
 
+    /// Returns one stable request per artwork identity, preserving album-first ordering. A track
+    /// whose cover equals the album cover adds no work; only genuinely different track covers do.
+    nonisolated static func albumCoverArtIDs(
+        albumCoverArtID: String?,
+        songCoverArtIDs: [String?]
+    ) -> [String] {
+        var seen = Set<String>()
+        return ([albumCoverArtID] + songCoverArtIDs).compactMap { value in
+            guard let value else { return nil }
+            let id = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, seen.insert(id).inserted else { return nil }
+            return id
+        }
+    }
+
     private func emit(progress: DownloadProgress) {
         progressContinuation?.yield([progress])
         if progress.progress >= 1 {
@@ -1008,11 +1055,31 @@ actor DownloadService: DownloadServiceProtocol {
     /// Downloads original bytes to `coverArtsDirectory/<id>@original-v1`, independently of streaming caches.
     /// Throws on network or write error — callers must catch and treat as best-effort.
     private func _downloadCoverArt(id: String) async throws {
-        let fileURL = coverArtsDirectory.appendingPathComponent(OriginalArtwork.storageID(id))
+        let normalizedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedID.isEmpty else { return }
+        let fileURL = coverArtsDirectory.appendingPathComponent(OriginalArtwork.storageID(normalizedID))
         guard !FileManager.default.fileExists(atPath: fileURL.path) else {
-            Logger.download.debug("Cover art '\(id, privacy: .public)' already on disk — skipping.")
+            Logger.download.debug("Cover art '\(normalizedID, privacy: .public)' already on disk — skipping.")
             return
         }
+
+        if let existing = inFlightCoverTasks[normalizedID] {
+            try await existing.value
+            return
+        }
+
+        let task = Task<Void, Error> {
+            try await self._fetchAndStoreCoverArt(id: normalizedID, fileURL: fileURL)
+        }
+        inFlightCoverTasks[normalizedID] = task
+        defer { inFlightCoverTasks.removeValue(forKey: normalizedID) }
+        try await task.value
+    }
+
+    private func _fetchAndStoreCoverArt(id: String, fileURL: URL) async throws {
+        // Another completed request may have installed the file while this task waited to enter
+        // the actor. Recheck immediately before performing network work.
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else { return }
 
         let creds = try await serverService.activeCredentials()
         let client = try await serverService.makeSwiftSonicClient()

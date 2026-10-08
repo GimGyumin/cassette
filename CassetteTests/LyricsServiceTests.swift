@@ -14,6 +14,7 @@ import SwiftSonic
 @MainActor
 final class MockLyricsServerService: ServerServiceProtocol {
     let state: ServerState = ServerState()
+    var lyricsClient: SwiftSonicClient?
     func addServer(displayName: String, baseURL: String, username: String, password: String, customHeaders: [String: String]) async throws {}
     func addServerWithJellyfinToken(displayName: String, baseURL: String, username: String, jellyfinAccessToken: String, customHeaders: [String: String]) async throws {}
     func removeServer(id: UUID) async throws {}
@@ -22,7 +23,10 @@ final class MockLyricsServerService: ServerServiceProtocol {
     func updateServer(id: UUID, displayName: String, baseURL: String, username: String, password: String, customHeaders: [String: String]) async throws {}
     func testConnection() async throws {}
     func testConnection(url: String, username: String, password: String, customHeaders: [String: String]) async throws {}
-    func makeSwiftSonicClient() async throws -> SwiftSonicClient { throw CassetteError.notImplemented }
+    func makeSwiftSonicClient() async throws -> SwiftSonicClient {
+        guard let lyricsClient else { throw CassetteError.notImplemented }
+        return lyricsClient
+    }
     func activeCredentials() async throws -> ServerCredentials { throw CassetteError.notImplemented }
     func loadPersistedState() async {}
     func preWarmClient() async {}
@@ -265,6 +269,21 @@ private final class LyricsGenLibraryStub: LibraryServiceProtocol {
 
 @Suite("LyricsService — lyric kind classification")
 struct LyricsKindTests {
+    @Test func libraryPassRechecksLRCAndTextButKeepsKaraoke() {
+        let lrc = LyricsList(structuredLyrics: [StructuredLyrics(lang: "en", synced: true,
+            line: [Line(value: "Hello", start: 0)])])
+        let text = LyricsList(structuredLyrics: [StructuredLyrics(lang: "en", synced: false,
+            line: [Line(value: "Hello")])])
+        let karaoke = LyricsList(structuredLyrics: [StructuredLyrics(lang: "en", synced: true,
+            line: [Line(value: "Hello", start: 0)], cueLine: [CueLine(index: 0, value: "Hello",
+            cue: [LyricCue(start: 0, value: "Hello", byteStart: 0, byteEnd: 5)])])])
+        for preference in [LyricsSourcePreference.embedded, .embeddedWithFallback] {
+            #expect(!LyricsService.shouldSkipLibraryCache(lrc, preference: preference))
+            #expect(!LyricsService.shouldSkipLibraryCache(text, preference: preference))
+            #expect(LyricsService.shouldSkipLibraryCache(karaoke, preference: preference))
+        }
+        #expect(LyricsService.shouldSkipLibraryCache(lrc, preference: .external))
+    }
     @Test func karaokeCuesClassifyAsKaraoke() {
         let cue = LyricCue(start: 0, value: "Hello", byteStart: 0, byteEnd: 4)
         let list = LyricsList(structuredLyrics: [
@@ -304,7 +323,10 @@ struct LyricsLibraryGenerationTests {
         let serverId = UUID()
 
         let cachedList = LyricsList(structuredLyrics: [
-            StructuredLyrics(lang: "en", synced: true, line: [Line(value: "Hello", start: 0)])
+            StructuredLyrics(lang: "en", synced: true, line: [Line(value: "Hello", start: 0)],
+                cueLine: [CueLine(index: 0, value: "Hello", cue: [
+                    LyricCue(start: 0, value: "Hello", byteStart: 0, byteEnd: 5)
+                ])])
         ])
         let data = try JSONEncoder().encode(cachedList)
         await MainActor.run {
@@ -338,5 +360,157 @@ struct LyricsLibraryGenerationTests {
         #expect(events.last?.progress.found == 0)
         #expect(events.last?.progress.skipped == 1)
         #expect(events.last?.progress.missing == 1)
+    }
+}
+
+private actor SlowEnhancedLyricsTransport: HTTPTransport {
+    private(set) var requestedEnhanced = false
+    private(set) var requestedSongIDs: [String] = []
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let url = try #require(request.url)
+        let body: String
+        if url.path.contains("/ping.") {
+            body = #"{"subsonic-response":{"status":"ok","version":"1.16.1","openSubsonic":true}}"#
+        } else if url.path.contains("getOpenSubsonicExtensions") {
+            body = #"{"subsonic-response":{"status":"ok","version":"1.16.1","openSubsonicExtensions":[{"name":"songLyrics","versions":[1,2]}]}}"#
+        } else {
+            requestedEnhanced = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                .contains { $0.name == "enhanced" && $0.value == "true" } == true
+            let songID = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value ?? ""
+            requestedSongIDs.append(songID)
+            if songID == "failed" { throw URLError(.timedOut) }
+            if songID == "missing" {
+                let empty = Data(#"{"subsonic-response":{"status":"ok","version":"1.16.1","lyricsList":{"structuredLyrics":[]}}}"#.utf8)
+                return (empty, try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
+            }
+            try await Task.sleep(for: .seconds(2))
+            body = #"{"subsonic-response":{"status":"ok","version":"1.16.1","lyricsList":{"structuredLyrics":[{"lang":"en","synced":true,"line":[{"value":"Hello world","start":0}],"cueLine":[{"index":0,"value":"Hello world","cue":[{"start":0,"end":500,"value":"Hello ","byteStart":0,"byteEnd":6},{"start":500,"end":1000,"value":"world","byteStart":6,"byteEnd":11}]}]}]}}}"#
+        }
+        return (Data(body.utf8), try #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
+    }
+}
+
+nonisolated private final class RawEnhancedLyricsProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url,
+              url.path == "/music/rest/getLyricsBySongId.view",
+              URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                .contains(where: { $0.name == "enhanced" && $0.value == "true" }) == true else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        let body = #"<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="0s" end="1s"><span begin="0s" end="0.5s">Hello </span><span begin="0.5s" end="1s">world</span></p></div></body></tt>"#
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/ttml+xml"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+private struct FastLineLyricsProvider: ExternalLyricsProviding {
+    func fetchLyrics(match: LyricsMatchInfo) async throws -> LyricsList {
+        LyricsList(structuredLyrics: [StructuredLyrics(lang: "en", synced: true,
+            line: [Line(value: "Hello world", start: 0)])])
+    }
+}
+
+@MainActor
+@Suite("Library enhanced lyrics upgrades")
+struct LibraryEnhancedLyricsUpgradeTests {
+    @Test func cachedLRCIsUpgradedEvenWhenTTMLArrivesAfterHeadStart() async throws {
+        let container = try ModelContainer(for: Schema([CachedLyrics.self]),
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let server = MockLyricsServerService()
+        let snapshot = ServerSnapshot(from: ServerConfig(displayName: "Lyrics", baseURL: "https://lyrics.test/music", username: "test"))
+        server.state.activeServer = snapshot
+        let transport = SlowEnhancedLyricsTransport()
+        server.lyricsClient = SwiftSonicClient(configuration: ServerConfiguration(
+            serverURL: URL(string: snapshot.baseURL)!, username: "test", password: "test"
+        ), transport: transport, retryPolicy: .none)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RawEnhancedLyricsProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let service = LyricsService(serverService: server, modelContainer: container,
+            externalProvider: FastLineLyricsProvider(), rawLyricsSession: session)
+        let list = LyricsList(structuredLyrics: [StructuredLyrics(lang: "en", synced: true,
+            line: [Line(value: "Hello world", start: 0)])])
+        let context = ModelContext(container)
+        context.insert(CachedLyrics(songId: "upgrade", serverId: snapshot.id,
+            jsonPayload: try JSONEncoder().encode(list)))
+        try context.save()
+        let library = LyricsGenLibraryStub()
+        library.songPages[0] = [Song(id: "upgrade", title: "Hello world", artist: "Artist")]
+        var outcomes: [LyricsService.LibraryLyricsEvent.Outcome] = []
+        for try await event in await service.generateLibraryLyrics(library: library, serverId: snapshot.id) {
+            outcomes.append(event.outcome)
+        }
+        #expect(outcomes == [.found(.karaoke)])
+        let enhanced = await transport.requestedEnhanced
+        #expect(enhanced)
+        let raw = try #require(await service.fetchRawTTML(songId: "upgrade", serverId: snapshot.id))
+        #expect(try AppleLyricTTMLParser.parse(data: raw).timing == .word)
+        let cached = try await service.fetchLyrics(forSongId: "upgrade", serverId: snapshot.id)
+        #expect(LyricsService.kind(of: cached) == .karaoke)
+    }
+}
+
+
+@MainActor
+private final class CountingExternalLyricsProvider: ExternalLyricsProviding {
+    private(set) var calls = 0
+    func fetchLyrics(match: LyricsMatchInfo) async throws -> LyricsList {
+        calls += 1
+        throw LyricsError.notFound
+    }
+}
+
+@MainActor
+@Suite("Server lyrics file generation")
+struct ServerLyricsFileGenerationTests {
+    @Test func requestsEveryTrackDespiteCacheAndNeverUsesExternalFallback() async throws {
+        let container = try ModelContainer(for: Schema([CachedLyrics.self]),
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let server = MockLyricsServerService()
+        let snapshot = ServerSnapshot(from: ServerConfig(displayName: "Lyrics", baseURL: "https://lyrics.test/music", username: "test"))
+        server.state.activeServer = snapshot
+        let transport = SlowEnhancedLyricsTransport()
+        server.lyricsClient = SwiftSonicClient(configuration: ServerConfiguration(
+            serverURL: URL(string: snapshot.baseURL)!, username: "test", password: "test"
+        ), transport: transport, retryPolicy: .none)
+        let provider = CountingExternalLyricsProvider()
+        let service = LyricsService(serverService: server, modelContainer: container, externalProvider: provider)
+        let cached = LyricsList(structuredLyrics: [StructuredLyrics(lang: "en", synced: true,
+            line: [Line(value: "Cached", start: 0)], cueLine: [CueLine(index: 0, value: "Cached", cue: [LyricCue(start: 0, value: "Cached", byteStart: 0, byteEnd: 6)])])])
+        let context = ModelContext(container)
+        context.insert(CachedLyrics(songId: "cached", serverId: snapshot.id, jsonPayload: try JSONEncoder().encode(cached)))
+        try context.save()
+        let library = LyricsGenLibraryStub()
+        library.songPages[0] = ["cached", "missing", "failed"].map { Song(id: $0, title: $0, artist: "Artist") }
+        var events: [LyricsService.LibraryLyricsEvent] = []
+        for try await event in await service.generateLibraryLyrics(library: library, serverId: snapshot.id, mode: .serverFiles) {
+            events.append(event)
+        }
+        #expect(await transport.requestedSongIDs == ["cached", "missing", "failed"])
+        #expect(await transport.requestedEnhanced)
+        #expect(provider.calls == 0)
+        #expect(events[0].outcome == .found(.karaoke))
+        #expect(events[1].outcome == .missing)
+        guard case .failed = events[2].outcome else { Issue.record("Timeout must be shown as a request failure"); return }
+        #expect(events.last?.progress.skipped == 0)
+        #expect(events.last?.progress.found == 1)
+        #expect(events.last?.progress.missing == 1)
+        #expect(events.last?.progress.failed == 1)
+
+        // A queued run for an account that is no longer active must send nothing.
+        server.state.activeServer = ServerSnapshot(from: ServerConfig(displayName: "Other", baseURL: "https://other.test", username: "test"))
+        do {
+            for try await _ in await service.generateLibraryLyrics(library: library, serverId: snapshot.id, mode: .serverFiles) {}
+            Issue.record("An inactive server's run must cancel")
+        } catch is CancellationError {
+            #expect(await transport.requestedSongIDs.count == 3)
+        }
     }
 }

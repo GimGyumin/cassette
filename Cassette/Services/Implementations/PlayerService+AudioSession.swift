@@ -154,7 +154,7 @@ extension PlayerService {
                 "[INTERRUPTION] setActive(true) failed: \(error.localizedDescription, privacy: .public) — resetting category"
             )
             audioSessionConfigured = false
-            configureAudioSessionIfNeeded(preferMultichannel: usingSystemPlayer)
+            configureAudioSessionIfNeeded(preferMultichannel: systemPlayback.isActive)
         }
 
         await MainActor.run {
@@ -163,7 +163,7 @@ extension PlayerService {
             }
         }
 
-        if usingSystemPlayer {
+        if systemPlayback.isActive {
             if systemEngine.state != .playing {
                 systemEngine.resume()
                 Logger.player.info("[INTERRUPTION] AVPlayer resumed")
@@ -196,18 +196,18 @@ extension PlayerService {
     private func verifyPlaybackHealthyOrRebuild() async {
         // The inactive AudioStreaming engine reports zero progress while AVPlayer
         // is playing. Resuming/rebuilding it here starts a second audible engine.
-        guard !usingSystemPlayer else { return }
+        guard !systemPlayback.isActive else { return }
         let checkedEpoch = playbackEpoch
         // Ignore while a restore seek is still pending — progress is expected to stall briefly.
         if pendingRestoreInfo != nil { return }
 
         let (uiPos, songId) = await MainActor.run { (state.position, state.currentTrack?.id) }
-        guard !usingSystemPlayer, checkedEpoch == playbackEpoch, !Task.isCancelled else { return }
+        guard !systemPlayback.isActive, checkedEpoch == playbackEpoch, !Task.isCancelled else { return }
         // Only reuse the background checkpoint for the same song — auto-skip in background
         // leaves a stale high anchor that looks like "engine reset".
         let bgAnchor = (songId != nil && songId == lastForegroundProgressSongId)
             ? lastForegroundProgress : 0
-        let anchored = max(engine.progress, uiPos, bgAnchor)
+        let anchored = max(engineProgress(), uiPos, bgAnchor)
 
         // Soft nudge when the engine woke paused/stopped/buffering after suspend.
         let wakeState = engine.state
@@ -223,14 +223,14 @@ extension PlayerService {
             try? await Task.sleep(for: .milliseconds(700))
         }
 
-        guard !usingSystemPlayer, checkedEpoch == playbackEpoch, !Task.isCancelled else { return }
+        guard !systemPlayback.isActive, checkedEpoch == playbackEpoch, !Task.isCancelled else { return }
 
-        let sampleA = engine.progress
+        let sampleA = engineProgress()
         try? await Task.sleep(for: .milliseconds(1000))
         let stillPlaying = await MainActor.run { state.playbackState == .playing }
-        guard stillPlaying, !usingSystemPlayer, checkedEpoch == playbackEpoch,
-              pendingRestoreInfo == nil, pendingSeekTarget == nil, !Task.isCancelled else { return }
-        let sampleB = engine.progress
+        guard stillPlaying, !systemPlayback.isActive, checkedEpoch == playbackEpoch,
+              pendingRestoreInfo == nil, seekState == .idle, !Task.isCancelled else { return }
+        let sampleB = engineProgress()
         let engineState = engine.state
 
         // Engine progress collapsed under us after suspend (classic HTTP stream drop).
@@ -250,7 +250,8 @@ extension PlayerService {
     /// Uses the in-memory source only — never awaits network — so rapid app switching cannot
     /// stall the entire PlayerService actor.
     private func rebuildAudioStreaming(at position: TimeInterval) async {
-        guard !usingSystemPlayer, !Task.isCancelled else { return }
+        let epoch = playbackEpoch
+        guard !systemPlayback.isActive, !Task.isCancelled else { return }
         guard !isRebuildingEngine else {
             Logger.player.debug("[ACTIVE] rebuild skipped — already in progress")
             return
@@ -271,6 +272,7 @@ extension PlayerService {
         Logger.player.info(
             "[ACTIVE] rebuilding AudioStreaming from \(seekTo, format: .fixed(precision: 1))s after suspend"
         )
+        guard await publishEngineRecovery(), epoch == playbackEpoch, !systemPlayback.isActive else { return }
         pendingRestoreInfo = (seekTime: seekTo, pause: false)
         do {
             try AVAudioSession.sharedInstance().setActive(true)
@@ -279,7 +281,7 @@ extension PlayerService {
             configureAudioSessionIfNeeded(preferMultichannel: false)
         }
         engine.stop()
-        engine.play(url: source.url, headers: source.customHeaders)
+        startEnginePlayback(url: source.url, headers: source.customHeaders, useSystemPlayer: false)
         Task { @MainActor in PlaybackBeatMeter.shared.setEnabled(true) }
     }
 
@@ -292,14 +294,14 @@ extension PlayerService {
         deferredInterruptionPauseTask?.cancel()
         deferredInterruptionPauseTask = nil
         hardPausedForCurrentInterruption = false
-        let wasPlaying = await MainActor.run { state.playbackState == .playing }
+        let wasPlaying = await MainActor.run { state.playbackState.hasPlaybackIntent }
         // Save the current playback position so we can restore it after
         // the audio session is reclaimed (prevents the "lost position / silence" glitch).
         let savedPosition = await MainActor.run { state.position }
         // Release then reclaim — media-services reset can leave the route silent for every app
         // until someone cycles activation with notifyOthersOnDeactivation.
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        configureAudioSessionIfNeeded(preferMultichannel: usingSystemPlayer)
+        configureAudioSessionIfNeeded(preferMultichannel: systemPlayback.isActive)
         if wasPlaying {
             // Restore playback at the saved position so audio picks up
             // where it left off instead of starting over or going silent.
@@ -320,7 +322,7 @@ extension PlayerService {
         guard audioInterruptionActive, interruptedWhilePlaying, !interruptionWasRouteDisconnect else { return }
         deferredInterruptionPauseTask?.cancel()
         deferredInterruptionPauseTask = nil
-        let wantsPlay = await MainActor.run { state.playbackState == .playing } || interruptedWhilePlaying
+        let wantsPlay = await MainActor.run { state.playbackState.hasPlaybackIntent } || interruptedWhilePlaying
         guard wantsPlay else { return }
         pendingScreenshotResume = true
         interruptedWhilePlaying = true
@@ -362,7 +364,7 @@ extension PlayerService {
             interruptionWasRouteDisconnect = (notification.userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt)
                 .flatMap(AVAudioSession.InterruptionReason.init(rawValue:)) == .routeDisconnected
 
-            let wasPlaying = await MainActor.run { state.playbackState == .playing }
+            let wasPlaying = await MainActor.run { state.playbackState.hasPlaybackIntent }
             guard wasPlaying || interruptedWhilePlaying else { return }
 
             interruptedWhilePlaying = true
@@ -500,20 +502,23 @@ extension PlayerService {
 
     /// When a wireless system route becomes active mid-track, rebuild on AVPlayer at the current position.
     private func migrateToSystemPlayerIfWirelessRoute() async {
+        let epoch = playbackEpoch
         guard PlayerService.isWirelessSystemRouteActive() else { return }
-        guard !usingSystemPlayer else { return }
+        guard !systemPlayback.isActive else { return }
         let (isPlaying, hasTrack) = await MainActor.run {
-            (state.playbackState == .playing, state.currentTrack != nil)
+            (state.playbackState.hasPlaybackIntent, state.currentTrack != nil)
         }
-        guard isPlaying, hasTrack, let source = currentSource else { return }
+        guard epoch == playbackEpoch, isPlaying, hasTrack, let source = currentSource else { return }
 
         // Route callbacks can arrive while AudioStreaming momentarily reports zero. Keep the
         // last UI checkpoint as a second anchor so migration never restarts the song at 0:00.
         let uiPosition = await MainActor.run { state.position }
+        guard epoch == playbackEpoch, !systemPlayback.isActive else { return }
         let position = max(0, engineProgress(), uiPosition)
         Logger.player.info(
             "[ROUTE] migrating AudioStreaming → AVPlayer at \(position, format: .fixed(precision: 1))s"
         )
+        guard await publishEngineRecovery(), epoch == playbackEpoch, !systemPlayback.isActive else { return }
         pendingRestoreInfo = (seekTime: position, pause: false)
         startEnginePlayback(
             url: source.url,

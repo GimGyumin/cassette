@@ -129,7 +129,7 @@ extension PlayerService {
                     // a slow stream can still be opening then. Bailing out here would silently drop
                     // the remaining nudges for that track.
                     self.state.currentTrack?.id == songId
-                        && (self.state.playbackState == .playing || self.state.playbackState == .loading)
+                        && self.state.playbackState.hasPlaybackIntent
                 }
                 guard stillPlaying else { return }
                 await self.nowPlayingService?.setISRC(isrc)

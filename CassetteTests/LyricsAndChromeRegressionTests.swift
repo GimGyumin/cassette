@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Testing
+import Translation
 @testable import Cassette
 
 @Suite("Lyrics and chrome regressions")
@@ -42,6 +43,61 @@ struct LyricsAndChromeRegressionTests {
             #expect(cache.get(songID: songID, sourceLang: "en", targetLang: "ko", provider: provider, originalLines: ["Changed"]) == nil)
             #expect(cache.get(songID: songID, sourceLang: "en", targetLang: "ja", provider: provider, originalLines: rows.map(\.originalText)) == nil)
         }
+    }
+
+    @Test func appleTranslationBatchDeduplicatesAndRestoresLineIndices() {
+        let lines = (0..<100).map { index in
+            if index % 10 == 0 { return "" }
+            return index % 3 == 0 ? "Repeated chorus" : "Line \(index)"
+        }
+        let batch = LyricsTranslationService.makeBatch(lines: lines)
+
+        #expect(batch.requests.count < lines.filter { !$0.isEmpty }.count)
+        #expect(batch.sourceIndexByLine.count == lines.count)
+        #expect(batch.sourceIndexByLine[0] == nil)
+
+        var translations: [String: String] = [:]
+        for request in batch.requests {
+            guard let identifier = request.clientIdentifier else { continue }
+            translations[identifier] = "translated-\(identifier)"
+        }
+        let merged = LyricsTranslationService.merge(
+            batch: batch,
+            translatedByIdentifier: translations
+        )
+
+        #expect(merged.count == lines.count)
+        #expect(merged[0].isEmpty)
+        #expect(merged[3] == merged[6])
+        #expect(!merged[1].isEmpty)
+    }
+
+    @Test func missingBatchResponseFailsOnlyItsMappedLines() {
+        let batch = LyricsTranslationService.makeBatch(lines: ["Verse", "Chorus", "Chorus"])
+        let merged = LyricsTranslationService.merge(
+            batch: batch,
+            translatedByIdentifier: ["0": "절"]
+        )
+
+        #expect(merged == ["절", "", ""])
+    }
+
+    @Test func appleTranslationStrategyConfigurationsUseCurrentSDKAPI() {
+        guard #available(iOS 26.4, macOS 26.4, *) else { return }
+        let service = LyricsTranslationService.shared
+        let high = service.configuration(
+            sourceLanguageCode: "en",
+            targetLanguageCode: "ko",
+            strategy: .highFidelity
+        )
+        let low = service.configuration(
+            sourceLanguageCode: "en",
+            targetLanguageCode: "ko",
+            strategy: .lowLatency
+        )
+
+        #expect(high.preferredStrategy == .highFidelity)
+        #expect(low.preferredStrategy == .lowLatency)
     }
 
     @Test func departingPageCannotClearNewPageChrome() {

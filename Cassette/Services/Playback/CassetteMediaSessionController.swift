@@ -74,7 +74,7 @@ final class CassetteMediaSessionController {
         let resolvedArtworkHeaders = snapshot.artworkURL != nil
             ? snapshot.artworkHeaders
             : (isSameTrack ? (previousKey?.artworkHeaders ?? [:]) : snapshot.artworkHeaders)
-        let resolvedCoverArtId = preparedCoverIdProvider?(snapshot.albumId) ?? snapshot.effectiveCoverArtId
+        let resolvedCoverArtId = snapshot.effectiveCoverArtId ?? preparedCoverIdProvider?(snapshot.albumId)
             ?? (isSameTrack ? previousKey?.coverArtId : nil)
 
         let contentKey = ContentKey(

@@ -14,6 +14,7 @@ import SwiftUI
 struct AccountSheetView: View {
     @Environment(\.appContainer) private var container
     @Environment(\.dismiss) private var dismiss
+    @State private var verificationServer: ServerSnapshot?
 
     private var server: ServerSnapshot? { container?.serverState.activeServer }
     private var hasServerService: Bool { container?.serverService != nil }
@@ -33,6 +34,15 @@ struct AccountSheetView: View {
         NavigationStack {
             List {
                 identitySection
+                if let server, container?.serverState.needsSubsonicVerification == true {
+                    Section {
+                        Button { verificationServer = server } label: {
+                            Label("Account Verification Required", systemImage: "person.crop.circle.badge.exclamationmark")
+                                .padding(.vertical, 8)
+                        }
+                    }
+                }
+                LibraryPreparationAccountSection()
                 if server != nil, hasServerService {
                     Section {
                         accountRow(title: "Server", value: serverHost, destination: .server)
@@ -79,6 +89,7 @@ struct AccountSheetView: View {
             }
         }
         .modifier(SettingsSubpageStyle())
+        .modifier(SubsonicAccountVerificationAlert(server: $verificationServer))
     }
 
     // MARK: - 계정
@@ -124,8 +135,8 @@ struct AccountSheetView: View {
             )
 
             accountRow(
-                title: "Open Releases In",
-                subtitle: "External apps",
+                title: "External Apps",
+                subtitle: "Open releases in another app",
                 destination: .externalProviders
             )
         } header: {

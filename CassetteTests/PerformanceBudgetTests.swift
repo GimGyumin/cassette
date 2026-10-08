@@ -38,8 +38,7 @@ struct PerformanceBudgetTests {
         #expect(b.beatPublishInterval == 0.25)
         #expect(b.lyricsTickIntervalNs(karaokePlayback: true) == 16_666_666)
         #expect(b.lyricsTickIntervalNs(karaokePlayback: false) == 33_333_333)
-        // Flat chrome is the shipping default; Liquid Glass is a QA override.
-        #expect(b.prefersCheapChrome)
+        #expect(!b.prefersCheapChrome)
         // Gapless pre-buffering is a core playback behaviour, so it stays on here.
         #expect(b.allowsGaplessPrebuffer)
     }
@@ -56,7 +55,7 @@ struct PerformanceBudgetTests {
         #expect(b.meshFrameInterval == 1.0 / 8.0)
         #expect(b.lyricsTickIntervalNs(karaokePlayback: true) == 33_333_333)
         #expect(b.lyricsTickIntervalNs(karaokePlayback: false) == 50_000_000)
-        #expect(b.prefersCheapChrome)
+        #expect(!b.prefersCheapChrome)
         // Deliberate: Low Power Mode must not cost the user gapless playback (it is a listening
         // behaviour, not decoration) — the bridge usually reads an already-cached file.
         #expect(b.allowsGaplessPrebuffer)
@@ -121,10 +120,11 @@ struct PerformanceBudgetTests {
         #expect(!b.allowsGaplessPrebuffer)
     }
 
-    @Test("Liquid Glass QA override never wins on a hot or power-saving device")
+    @Test("Liquid Glass is standard chrome but yields on constrained devices")
     func glassOverrideRespectsDevice() {
+        #expect(!budget().prefersCheapChrome)
         #expect(!budget(glassOverride: true).prefersCheapChrome)
-        #expect(budget(lowPower: true, glassOverride: true).prefersCheapChrome)
+        #expect(!budget(lowPower: true, glassOverride: true).prefersCheapChrome)
         #expect(budget(thermal: .serious, glassOverride: true).prefersCheapChrome)
         #expect(budget(active: false, glassOverride: true).prefersCheapChrome)
     }

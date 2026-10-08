@@ -140,11 +140,10 @@ nonisolated struct PerformanceBudget: Equatable, Sendable {
 
     // MARK: Chrome
 
-    /// Liquid Glass compositing is a deliberate design/QA choice, not a default: continuous glass
-    /// passes were measured to compete with audio streaming for the compositor. The override flag
-    /// can enable it for design QA, but never on a hot or power-saving device.
+    /// Liquid Glass is the normal foreground chrome, including in Low Power Mode. It falls back
+    /// only while backgrounded or under serious thermal load, where compositing is unsafe.
     var liquidGlassAllowed: Bool {
-        liquidGlassOverride && isAppActive && !isConstrained
+        isAppActive && !thermalPressure.requiresBackOff
     }
 
     var prefersCheapChrome: Bool { !liquidGlassAllowed }

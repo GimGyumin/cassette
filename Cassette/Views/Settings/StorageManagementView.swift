@@ -12,6 +12,7 @@ struct StorageManagementView: View {
     @State private var viewModel: StorageManagementViewModel?
     @State private var categoryToClear: StorageCategorySnapshot?
     @State private var showResetConfirmation = false
+    @AppStorage(BulkArtworkPreference.key) private var autoDownloadFullCovers = false
 
     var body: some View {
         Group {
@@ -41,6 +42,17 @@ struct StorageManagementView: View {
         }
         .refreshable {
             await viewModel?.refresh()
+        }
+        .onChange(of: autoDownloadFullCovers) { _, enabled in
+            guard let preload = container?.albumCoverPreloadService else { return }
+            if enabled {
+                Task {
+                    await preload.downloadAllCovers()
+                    await viewModel?.refresh()
+                }
+            } else {
+                preload.pauseAutomaticDownloads()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .cassetteDownloadCompleted)
             .debounce(for: .milliseconds(300), scheduler: RunLoop.main)) { _ in
@@ -102,37 +114,42 @@ struct StorageManagementView: View {
                 .padding(.vertical, CassetteSpacing.xs)
             }
 
-            if let preload = container?.albumCoverPreloadService, !preload.state.isComplete {
-                Section(String(localized: "Album Covers", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
-                    HStack(alignment: .center, spacing: CassetteSpacing.m) {
-                        SettingsIcon(systemImage: "photo.on.rectangle.angled", color: .indigo)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(String(localized: "Download all album covers", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                                .font(.body)
-                            Text(String(localized: "Store high-resolution artwork for your whole library.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: CassetteSpacing.s)
-                        if preload.state.isDownloading {
-                            if preload.state.total == 0 {
-                                ProgressView()
-                            } else {
-                                ProgressView(value: preload.state.fraction)
-                                    .frame(width: 48)
-                            }
-                        } else {
-                            Button(String(localized: "Download", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
-                                Task {
-                                    await preload.downloadAllCovers()
-                                    await viewModel.refresh()
-                                }
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .buttonStyle(.borderless)
-                        }
+            if let preload = container?.albumCoverPreloadService {
+                Section {
+                    Toggle(isOn: $autoDownloadFullCovers) {
+                        Text(String(localized: "Automatically download all covers", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                     }
-                    .padding(.vertical, 2)
+                    if !preload.state.isComplete {
+                        HStack(alignment: .center, spacing: CassetteSpacing.m) {
+                            SettingsIcon(systemImage: "photo.on.rectangle.angled", color: .indigo)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(String(localized: "Download all album covers", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                                    .font(.body)
+                                Text(String(localized: "Store high-resolution artwork for your whole library.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: CassetteSpacing.s)
+                            if preload.state.isDownloading {
+                                if preload.state.total == 0 {
+                                    ProgressView()
+                                } else {
+                                    ProgressView(value: preload.state.fraction)
+                                        .frame(width: 48)
+                                }
+                            } else {
+                                Button(String(localized: "Download", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+                                    Task {
+                                        await preload.downloadAllCovers()
+                                        await viewModel.refresh()
+                                    }
+                                }
+                                .font(.subheadline.weight(.semibold))
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
                     if let error = preload.state.errorMessage {
                         Text(error)
                             .font(.caption)
@@ -148,6 +165,10 @@ struct StorageManagementView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                } header: {
+                    Text(String(localized: "Album Covers", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } footer: {
+                    Text(String(localized: "Covers you view load as needed. Downloading the whole library uses additional storage and network data.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 }
             }
 

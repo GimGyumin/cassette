@@ -6,8 +6,7 @@
 import SwiftUI
 
 /// Onboarding step that downloads full-resolution cover art for the entire library.
-/// The download starts automatically so the user can simply continue once it finishes
-/// (or skip and let covers lazy-load on demand later).
+/// A full-library download starts only when the user chooses Download Now.
 struct OnboardingAlbumCoversStepView: View {
     let onSkip: () -> Void
     let onContinue: () -> Void
@@ -24,10 +23,10 @@ struct OnboardingAlbumCoversStepView: View {
             title: String(localized: "Album Covers", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
             subtitle: String(localized: "Download high-resolution cover art for your whole library so every page looks its best.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
             stepIndex: 1,
-            totalSteps: 4,
+            totalSteps: 3,
             onSkip: {
                 guard hasActiveServer else { onReconnect(); return }
-                container?.albumCoverPreloadService.deferRemainingDownloads()
+                container?.albumCoverPreloadService.pauseAutomaticDownloads()
                 container?.libraryPreparationService.deferPresentation()
                 onSkip()
             },
@@ -89,7 +88,7 @@ struct OnboardingAlbumCoversStepView: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        Text(String(localized: "Covers are stored in the Artwork Cache. You can clear them anytime from Settings → Storage. Album art changes are detected automatically.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        Text(String(localized: "Covers are stored in the Artwork Cache. You can manage full-library downloads from Settings → Storage.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -98,8 +97,7 @@ struct OnboardingAlbumCoversStepView: View {
             }
         }
         .task(id: downloadAttempt) {
-            // The preparation step may already have completed this pass.
-            guard let container, container.serverState.activeServer != nil,
+            guard downloadAttempt > 0, let container, container.serverState.activeServer != nil,
                   !container.albumCoverPreloadService.state.isComplete else { return }
             await container.albumCoverPreloadService.downloadAllCovers()
         }

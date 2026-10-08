@@ -19,6 +19,7 @@ struct AccountSettingsView: View {
     @State private var isSyncing = false
     @State private var isScanning = false
     @State private var isGeneratingLyrics = false
+    @State private var isGeneratingServerFiles = false
     @State private var lyricsGenerationTask: Task<Void, Never>?
     @State private var lyricsGenerationProgress: LyricsService.LibraryLyricsProgress?
     @State private var lyricsGenerationLog: [LyricsService.LibraryLyricsEvent] = []
@@ -561,6 +562,16 @@ struct AccountSettingsView: View {
                     }
                 }
                 .disabled(isScanning || isSyncing)
+
+                Button {
+                    startGeneratingLyrics(serverFiles: true)
+                } label: {
+                    Label(String(localized: "Generate Server TTML Files", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "doc.badge.gearshape")
+                }
+                .disabled(isScanning || isSyncing)
+                Text(String(localized: "Configure nd-lyrics with Apple Music, TTML, Write lyrics to sidecar files and library write access. Every song is requested from the server. File creation is handled by the plugin; check server logs for write errors.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if let scanStatus {
@@ -674,12 +685,14 @@ struct AccountSettingsView: View {
         }
     }
 
-    private func startGeneratingLyrics() {
+    private func startGeneratingLyrics(serverFiles: Bool = false) {
         guard let container, let server else { return }
         let lyricsService = container.lyricsService
         let libraryService = container.libraryService
         let serverId = server.id
 
+        guard !isGeneratingLyrics else { return }
+        isGeneratingServerFiles = serverFiles
         isGeneratingLyrics = true
         lyricsGenerationProgress = nil
         lyricsGenerationLog = []
@@ -687,7 +700,8 @@ struct AccountSettingsView: View {
         lyricsGenerationTask = Task { @MainActor in
             let stream = await lyricsService.generateLibraryLyrics(
                 library: libraryService,
-                serverId: serverId
+                serverId: serverId,
+                mode: serverFiles ? .serverFiles : .appCache
             )
             do {
                 for try await event in stream {
@@ -701,7 +715,9 @@ struct AccountSettingsView: View {
                     present(String(localized: "Lyrics generation cancelled.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), error: false)
                 } else if let progress = lyricsGenerationProgress {
                     present(
-                        String(localized: "Library lyrics generation complete.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                        (serverFiles
+                            ? String(localized: "Server lyrics requests complete.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                            : String(localized: "Library lyrics generation complete.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                             + "  \(progress.found) / \(progress.total)",
                         error: false
                     )
@@ -743,6 +759,11 @@ struct AccountSettingsView: View {
             }
 
             if let progress = lyricsGenerationProgress, progress.total > 0 {
+                if isGeneratingServerFiles {
+                    Text(String(localized: "Server responses", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) + "  ✓ \(progress.found) · × \(progress.missing + progress.failed)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 ProgressView(value: Double(progress.processed), total: Double(progress.total))
             }
 
@@ -779,7 +800,7 @@ struct AccountSettingsView: View {
         case .found(.karaoke): return "✓"
         case .found(.synced), .found(.unsynced): return "○"
         case .skipped: return "–"
-        case .missing: return "×"
+        case .missing, .failed: return "×"
         }
     }
 
@@ -789,18 +810,19 @@ struct AccountSettingsView: View {
         case .found(.synced): return .orange
         case .found(.unsynced): return .gray
         case .skipped: return .gray
-        case .missing: return .red
+        case .missing, .failed: return .red
         }
     }
 
     private func outcomeLabel(_ outcome: LyricsService.LibraryLyricsEvent.Outcome) -> String {
         switch outcome {
-        case .found(.karaoke): return "TTML"
+        case .found(.karaoke): return isGeneratingServerFiles ? String(localized: "Word-synced", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : "TTML"
         case .found(.synced): return "LRC"
         case .found(.unsynced):
             return String(localized: "Text", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         case .skipped:
             return String(localized: "Skipped", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        case .failed(let message): return message
         case .missing:
             return String(localized: "No lyrics found", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         }

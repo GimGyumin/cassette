@@ -45,6 +45,22 @@ nonisolated final class JellyfinMusicTransport: HTTPTransport, Sendable {
                                      headerFields: ["Content-Type": "application/json"])!)
     }
 
+    /// Album navigation must not wait for a slow optional quality probe.
+    private func representativeMediaSource(itemID: String) async -> JellyfinMediaSource? {
+        await withTaskGroup(of: JellyfinMediaSource?.self) { group in
+            group.addTask { [client, user] in
+                try? await client.playbackInfo(itemID: itemID, userID: user.id).mediaSources.first
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(2))
+                return nil
+            }
+            let result = await group.next() ?? nil
+            group.cancelAll()
+            return result
+        }
+    }
+
     private func payload(_ endpoint: String, _ p: [String: [String]]) async throws -> [String: Any] {
         @Sendable func value(_ key: String) -> String? { p[key]?.first }
         @Sendable func count(_ key: String, _ fallback: Int) -> Int { max(0, value(key).flatMap(Int.init) ?? fallback) }
@@ -101,12 +117,25 @@ nonisolated final class JellyfinMusicTransport: HTTPTransport, Sendable {
             query.sortBy = ["ParentIndexNumber", "IndexNumber", "SortName"]
             let songs = try await all(query)
             var result = Self.album(item)
-            result["song"] = songs.map(Self.song)
+            var mappedSongs = songs.map { Self.song($0) }
+            // Navidrome can omit MediaSources from Audio list items even when requested.
+            // Probe one representative song for the album-quality badge; probing every track
+            // here would turn album navigation into an expensive N+1 request waterfall.
+            if let first = songs.first, first.mediaSources?.first == nil,
+               let source = await representativeMediaSource(itemID: first.id) {
+                mappedSongs[0] = Self.song(first, mediaSource: source)
+            }
+            result["song"] = mappedSongs
             result["songCount"] = songs.count
             result["duration"] = songs.reduce(0) { $0 + Self.seconds($1) }
             return ["album": result]
         case "getSong":
-            return ["song": Self.song(try await client.item(itemID: id, userID: user.id))]
+            let item = try await client.item(itemID: id, userID: user.id)
+            if item.mediaSources?.first == nil,
+               let source = await representativeMediaSource(itemID: id) {
+                return ["song": Self.song(item, mediaSource: source)]
+            }
+            return ["song": Self.song(item)]
         case "getAlbumInfo2", "getArtistInfo2":
             let item = try await client.item(itemID: id, userID: user.id)
             return [endpoint == "getAlbumInfo2" ? "albumInfo" : "artistInfo2":

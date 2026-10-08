@@ -67,10 +67,10 @@ struct LyricsPlaybackLineRow: View {
         }
     }
     private var emphasisScale: CGFloat { guard followsPlayback else { return 1 }; return isCurrent ? 1.0 : 0.985 }
-    /// Apple Music-style depth: the active phrase stays crisp while surrounding TTML cues
-    /// soften progressively. The blur is applied per row so it never creates a frosted viewport band.
+    /// Keep word-timed TTML text out of a blur render pass. Its per-word masks update every
+    /// playback tick, and animating a blurred row while scrolling can leave stale glyph textures.
     private var emphasisBlur: CGFloat {
-        guard followsPlayback, !isCurrent, let currentLineIndex else { return 0 }
+        guard !isTTMLWordTiming, followsPlayback, !isCurrent, let currentLineIndex else { return 0 }
         if isSecondary { return 1.4 }
         switch abs(index - currentLineIndex) {
         case 1: return 0.8
@@ -225,8 +225,7 @@ struct LyricsPlaybackLineRow: View {
             .blur(radius: emphasisBlur)
             .scaleEffect(emphasisScale, anchor: scaleAnchor)
             .offset(y: isCurrent ? -6 : 0)
-            .animation(reduceMotion ? nil : CassetteAnimation.lyricLine, value: isCurrent)
-            .animation(reduceMotion ? nil : CassetteAnimation.lyricLine, value: currentLineIndex)
+            .animation(reduceMotion || isTTMLWordTiming ? nil : CassetteAnimation.lyricLine, value: isCurrent)
             .animation(translationAnimation, value: showTranslation)
             .padding(.horizontal, usesSpeakerLayout ? 18 : 16)
             .padding(.leading, { if alignment == .trailing { return speakerSideInset }; if isSecondary { return usesSpeakerLayout ? 12 : 20 }; return 0 }())

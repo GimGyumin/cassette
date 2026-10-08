@@ -17,7 +17,7 @@ struct MiniPlayerWindowView: View {
     private var playerState: PlayerState? { container?.playerState }
     private var currentTrack: DisplayableSong? { playerState?.currentTrack }
     private var isPlaying: Bool { playerState?.playbackState == .playing }
-    private var isLoading: Bool { playerState?.playbackState == .loading }
+    private var isLoading: Bool { playerState?.playbackState.isAwaitingAudio == true }
     private var noTrack: Bool { currentTrack == nil }
 
     private var playbackQuality: AudioQualityKind? {

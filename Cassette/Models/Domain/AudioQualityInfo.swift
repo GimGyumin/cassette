@@ -102,8 +102,8 @@ nonisolated enum AudioQualityClassifier {
         return .lossless(bitDepth: bitDepth, sampleRate: sampleRate, formatLabel: formatLabel)
     }
 
-    /// Now-playing badge: hide Lossless / Hi-Res when on cellular or when the stream is
-    /// lossy-transcoded. Dolby and multichannel are always shown — those streams are
+    /// Now-playing badge: hide Lossless / Hi-Res when the stream is lossy-transcoded.
+    /// Dolby and multichannel are always shown — those streams are
     /// bitstreamed raw, and the request is often still labelled as transcoded while the
     /// player is handing the track to AVPlayer.
     static func displayablePlaybackQuality(
@@ -116,17 +116,27 @@ nonisolated enum AudioQualityClassifier {
         case .dolbyAtmos, .dolby, .multichannel:
             return kind
         case .lossless, .hiResLossless:
-            if isExpensive || isTranscoding { return nil }
+            // Network cost says nothing about the codec actually being delivered.
+            if isTranscoding { return nil }
             return kind
         }
     }
 
-    /// True when a resolved stream URL requests a lossy Subsonic `format` (mp3 / opus / aac).
+    /// True when the resolved route asks for a lossy Jellyfin or Subsonic stream.
     static func isLossyTranscodeStream(_ source: MediaSource) -> Bool {
-        guard case .stream(let url, _, _) = source else { return false }
+        guard case .stream(let url, _, _, _) = source else { return false }
+        if source.jellyfinPlaybackContext?.playMethod == .transcode { return true }
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        if query.contains(where: { $0.name.lowercased() == "static" && $0.value?.lowercased() == "true" }) { return false }
         let lowerPath = url.path.lowercased()
+        // This server's Jellyfin Universal and HLS routes are lossy even if a legacy
+        // request happens to carry AudioCodec=flac. A parameter is not delivered audio.
         if lowerPath.contains("/audio/") && (lowerPath.hasSuffix("/universal") || lowerPath.hasSuffix("/main.m3u8")) {
             return true
+        }
+        if let codec = query.first(where: { $0.name.lowercased() == "audiocodec" })?.value?.lowercased() {
+            if ["flac", "alac", "pcm", "pcm_s16le", "pcm_s24le"].contains(codec) { return false }
+            if ["aac", "mp3", "opus", "vorbis", "ac3", "eac3"].contains(codec) { return true }
         }
         let format = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?
@@ -137,9 +147,11 @@ nonisolated enum AudioQualityClassifier {
         return ["mp3", "opus", "aac", "m4a"].contains(format)
     }
 
-    /// Dolby / multichannel must stay raw so Spatial Audio and surround routes receive the original stream.
+    /// Preserve spatial/multichannel bitstreams and ambiguous MP4 audio. Missing FLAC channel
+    /// metadata is common in Navidrome's Jellyfin items and must not force a requested AAC raw.
     static func shouldSkipTranscoding(_ song: DisplayableSong) -> Bool {
-        requiresSystemPlayer(song)
+        isDolbyAtmos(song) || hasSurroundCodec(song) || (song.channelCount ?? 0) > 2
+            || (hasUnspecifiedChannelLayout(song) && ["m4a", "mp4"].contains(normalizedSuffix(song)))
     }
 
     /// Formats that need AVPlayer (E-AC-3 / Atmos / >2ch) rather than AudioStreaming.
@@ -181,6 +193,29 @@ nonisolated enum AudioQualityClassifier {
 
     static func bestQuality(in songs: [DisplayableSong]) -> AudioQualityKind? {
         songs.compactMap(classify).max(by: qualityRank)
+    }
+
+    /// Album headers can advertise a spatial mix and a lossless master together, as
+    /// Music does. Keep the strongest spatial badge and strongest lossless badge.
+    static func albumQualities(in songs: [DisplayableSong]) -> [AudioQualityKind] {
+        let qualities = songs.compactMap(classify)
+        let spatial = qualities
+            .filter {
+                switch $0 {
+                case .dolbyAtmos, .dolby, .multichannel: return true
+                case .hiResLossless, .lossless: return false
+                }
+            }
+            .max(by: qualityRank)
+        let lossless = qualities
+            .filter {
+                switch $0 {
+                case .dolbyAtmos, .dolby, .multichannel: return false
+                case .hiResLossless, .lossless: return true
+                }
+            }
+            .max(by: qualityRank)
+        return [spatial, lossless].compactMap { $0 }
     }
 
     private static func qualityRank(_ lhs: AudioQualityKind, _ rhs: AudioQualityKind) -> Bool {
@@ -423,7 +458,9 @@ nonisolated enum ArtistAlbumCategorizer {
         }
 
         return Section.allCases.compactMap { section in
-            guard let items = buckets[section], !items.isEmpty else { return nil }
+            let items = buckets[section] ?? []
+            // Keep the compilation shelf discoverable even when a server omits its release tags.
+            guard !items.isEmpty || section == .compilations else { return nil }
             // Deduplicate: hide edition/remaster duplicates from the main list.
             // Only the original release per canonical title is shown; alternate
             // versions belong in the album detail "Other Versions" tab.
@@ -482,19 +519,28 @@ nonisolated enum ArtistAlbumCategorizer {
         let name = album.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let genre = (album.genre ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let releaseTypes = (album.releaseTypes ?? []).map { $0.lowercased() }
+        let genres = [genre] + (album.genres ?? []).map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let artistNames = [album.artist, album.displayArtist].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 
-        // Genre "Live Album" (Navidrome / tag editors) → dedicated Live Album shelf.
-        if isLiveGenre(genre)
-            || releaseTypes.contains(where: { $0.contains("live") })
-            || name.contains("live at")
-            || name.contains("live in")
-            || name.hasSuffix(" (live)")
-            || name.hasSuffix(" - live") {
+        // Live is often a secondary genre/release type, and may coexist with compilation.
+        // Match bounded title markers so "Live Through This" / "Alive" stay studio albums.
+        if genres.contains(where: isLiveGenre)
+            || releaseTypes.contains(where: { $0.range(of: #"\blive\b"#, options: .regularExpression) != nil })
+            || name.range(of: #"\blive\s+(at|in|from|on)\b|[\[(]\s*live\b|(?:^|\s-\s)live$|^live\s+\d{4}\b"#, options: .regularExpression) != nil {
             return .live
         }
-        if album.isCompilation == true || releaseTypes.contains(where: { $0.contains("compilation") }) {
+
+        // Jellyfin and some OpenSubsonic servers omit isCompilation/releaseTypes but retain
+        // the album artist. Do not rely on song count or multiple credited artists: those
+        // would incorrectly turn ordinary collaborations into compilations.
+        if album.isCompilation == true
+            || releaseTypes.contains(where: { $0.contains("compilation") })
+            || genres.contains(where: { ["compilation", "compilations", "compilation album", "compilation albums", "컴필레이션"].contains($0) })
+            || artistNames.contains(where: { ["various artists", "various artist", "various", "v.a.", "v.a", "va", "여러 아티스트", "다양한 아티스트"].contains($0) })
+            || name.contains("compilation") || name.contains("컴필레이션") {
             return .compilations
         }
+
         if releaseTypes.contains(where: { $0.contains("single") || $0.contains("ep") }) {
             return .singles
         }
@@ -515,7 +561,8 @@ nonisolated enum ArtistAlbumCategorizer {
     /// Matches tagged genres like "Live Album", "Live", "Live Albums".
     private static func isLiveGenre(_ genre: String) -> Bool {
         guard !genre.isEmpty else { return false }
-        if genre == "live" || genre == "live album" || genre == "live albums" { return true }
-        return genre.contains("live album")
+        return genre.components(separatedBy: CharacterSet(charactersIn: ";,/|"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .contains { ["live", "live album", "live albums", "라이브", "라이브 앨범"].contains($0) }
     }
 }

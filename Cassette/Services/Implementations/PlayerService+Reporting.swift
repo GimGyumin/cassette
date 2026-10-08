@@ -21,6 +21,10 @@ extension PlayerService {
     func cancelPendingScrobble() {
         playingNowTask?.cancel()
         playingNowTask = nil
+        periodicPlaybackReportTask?.cancel()
+        periodicPlaybackReportTask = nil
+        gaplessMetadataTask?.cancel()
+        gaplessMetadataTask = nil
     }
 
     func checkScrobbleThreshold() async {
@@ -74,6 +78,11 @@ extension PlayerService {
         overridingTrack: DisplayableSong? = nil
     ) async {
         guard Self.isListeningHistoryEnabled else { return }
+        // Capture the outgoing counters before any suspension or track publication.
+        let startDate = trackPlayStartDate
+        let completed = wasTrackCompletedNaturally
+        let segmentContrib = currentPlaySegmentStart.map { Date().timeIntervalSince($0) } ?? 0
+        let durationListened = accumulatedPlayedSeconds + segmentContrib
         let recordedTrack: DisplayableSong?
         if let overridingTrack {
             recordedTrack = overridingTrack
@@ -81,17 +90,15 @@ extension PlayerService {
             recordedTrack = await MainActor.run { state.currentTrack }
         }
         guard let song = recordedTrack,
-              let startDate = trackPlayStartDate else { return }
+              let startDate else { return }
         guard let serverId = await MainActor.run(body: { serverService.state.activeServer?.id }) else { return }
 
-        let segmentContrib = currentPlaySegmentStart.map { Date().timeIntervalSince($0) } ?? 0
-        let durationListened = accumulatedPlayedSeconds + segmentContrib
         guard durationListened >= 30 else {
             Logger.player.debug("[STATS] Skip — durationListened=\(durationListened)s < 30s")
             return
         }
 
-        let trackDuration = await MainActor.run { state.duration }
+        let trackDuration = song.duration
         let dto = PlaybackEventDTO(
             trackId: song.id,
             trackTitle: song.title,
@@ -103,10 +110,16 @@ extension PlayerService {
             timestamp: startDate,
             durationListened: durationListened,
             trackDuration: trackDuration,
-            wasCompleted: wasTrackCompletedNaturally,
+            wasCompleted: completed,
             serverId: serverId.uuidString
         )
-        await statsService.recordPlayback(dto, trigger: trigger)
+        // Persistence is ordered, but no longer holds up audio startup. The immutable DTO
+        // keeps delayed writes attributed to the outgoing song, never the newly visible one.
+        let previousWrite = historyWriteTask
+        historyWriteTask = Task { [statsService] in
+            await previousWrite?.value
+            await statsService.recordPlayback(dto, trigger: trigger)
+        }
     }
 
     // MARK: - Cache download helpers
@@ -134,12 +147,12 @@ extension PlayerService {
 
         try AudioResponseValidator.validate(fileAt: tempURL, response: response, songId: songId, logger: Logger.cache)
 
-        let data = try Data(contentsOf: tempURL)
+        try Task.checkCancellation()
         let ext = streamURL.pathExtension
         let mimeType = response.mimeType ?? (ext.isEmpty ? "audio/mpeg" : "audio/\(ext)")
 
         _ = try await cacheService.store(
-            data: data,
+            fileAt: tempURL,
             forSongId: songId,
             serverId: serverId,
             mimeType: mimeType

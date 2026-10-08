@@ -160,7 +160,12 @@ final class AppContainer {
             dominantColorExtractor: dominantColorExtractor,
             playerState: playerState,
             serverState: serverState,
-            coversDirectory: coversDir
+            coversDirectory: coversDir,
+            songCoverProvider: { [libraryIndexService] in
+                await libraryIndexService.ensureIndexedAndWait(using: library)
+                guard libraryIndexService.lastIndexedAt != nil else { throw CassetteError.timeout }
+                return libraryIndexService.songArtworkSnapshot
+            }
         )
 
         storageManagementService = StorageManagementService(
@@ -251,6 +256,11 @@ final class AppContainer {
         albumCoverPreloadService.reportPreparation = { [libraryPreparationService] snapshot in
             libraryPreparationService.receiveExternalProgress(snapshot)
         }
+        albumCoverPreloadService.requestBackgroundContinuation = {
+            #if os(iOS)
+            CassetteApp.scheduleLibraryPreparation()
+            #endif
+        }
 
         NowPlayingBridge.performTogglePlayPause = { [weak player] in await player?.togglePlayPause() }
 
@@ -332,6 +342,7 @@ final class AppContainer {
         await radioService.invalidateClientCache()
         DiscoverSectionsCache.clear()
         libraryIndexService.rebuild(using: libraryService)
+        albumCoverPreloadService.reconcileChangedCovers()
         if #available(iOS 27.0, macOS 27.0, *) {
             await warmSiriLibrary()
         }
@@ -347,29 +358,19 @@ final class AppContainer {
     /// Rebuilds the in-memory library index (artists/albums/playlists) and warms the
     /// Siri catalog. The onboarding preparation screen drives this and shows progress
     /// via libraryIndexService.progress.
-    func indexLibraryForOnboarding() async {
-        await libraryIndexService.rebuildAndWait(using: libraryService)
+    @discardableResult
+    func indexLibraryForOnboarding() async -> Bool {
+        let ready = await libraryIndexService.rebuildAndWait(using: libraryService)
+        guard ready else { return false }
         if #available(iOS 27.0, macOS 27.0, *) {
             await warmSiriLibrary()
         }
+        return true
     }
 
-    /// The cover id every playback surface should use.
-    ///
-    /// A downloaded album stores its cover under the id recorded during library preparation, which
-    /// is not always the song's own media-file cover id. Preferring that prepared id in the player,
-    /// mini player and lock screen is what makes the **downloaded** cover win over a server fetch
-    /// while the album is being played.
+    /// Each track may carry distinct embedded artwork, even within one album.
     func playbackCoverId(for song: DisplayableSong?) -> String? {
-        guard let song else { return nil }
-        if let prepared = albumCoverPreloadService.preparedCoverArtId(forAlbumId: song.albumId)?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !prepared.isEmpty {
-            return prepared
-        }
-        // The song's own media-file cover id — never the bare song id: `getCoverArt?id=<song>` is a
-        // different request from the one the artwork cache and the preloader use, so it could never
-        // hit the cover already on disk.
-        return song.effectiveCoverArtId
+        song?.effectiveCoverArtId
     }
 
     /// Album-id → prepared cover id, for surfaces that only carry the album id (lock screen).
@@ -428,6 +429,9 @@ final class AppContainer {
             "cassette.download.automaticOverCellular",
             "cassette.lyrics.largerText",
             "cassette.visuals.animatedArtwork",
+            BulkArtworkPreference.key,
+            IntegrationIntroPreference.listenBrainzKey,
+            IntegrationIntroPreference.externalAppsKey,
             "cassette.history.enabled",
             "cassette.replayGain.enabled",
             "cassette.replayGain.mode",
@@ -443,6 +447,7 @@ final class AppContainer {
             "isAutoTranslateEnabled",
             "translationProvider",
             "targetLanguage",
+            "translationStrategyPreference",
             "openAIAPIKey",
             LyricsSourcePreference.userDefaultsKey,
             "cassette.player.autoExtendEnabled",

@@ -5,8 +5,8 @@
 import SwiftUI
 
 /// Deferrable one-time preparation shown immediately after the first server sign-in.
-/// It warms the authenticated client, downloads album artwork, and generates the
-/// cover-derived page palettes before Home is presented.
+/// It warms the authenticated client and indexes the library before Home is presented.
+/// Full artwork preparation runs here only when the user has enabled it.
 struct EssentialSupportPreparationView: View {
     let onComplete: () -> Void
     let onReconnect: () -> Void
@@ -25,7 +25,9 @@ struct EssentialSupportPreparationView: View {
     private var libraryIndex: LibraryIndexService? { container?.libraryIndexService }
 
     private var preparationError: String? {
-        hasActiveServer ? preload?.state.errorMessage : CassetteError.serverNotConfigured.localizedDescription
+        guard hasActiveServer else { return CassetteError.serverNotConfigured.localizedDescription }
+        if let error = libraryIndex?.lastError { return error.displayMessage }
+        return BulkArtworkPreference.isEnabled ? preload?.state.errorMessage : nil
     }
 
     var body: some View {
@@ -49,7 +51,9 @@ struct EssentialSupportPreparationView: View {
                     Text(String(localized: "Preparing Cassette", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                         .font(.largeTitle.bold())
                         .multilineTextAlignment(.center)
-                    Text(String(localized: "Downloading album artwork and preparing page colors for your first listening session.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    Text(BulkArtworkPreference.isEnabled
+                        ? String(localized: "Downloading album artwork and preparing page colors for your first listening session.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                        : String(localized: "Preparing your library for fast local search.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                         .font(.body)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -64,20 +68,24 @@ struct EssentialSupportPreparationView: View {
                     )
                     preparationRow(
                         title: String(localized: "Library information", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
-                        complete: (preload?.state.total ?? 0) > 0 || preload?.state.isComplete == true
+                        complete: libraryIndex?.hasUsableIndex == true
                     )
-                    preparationRow(
-                        title: String(localized: "Album covers and background colors", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
-                        complete: preload?.state.isComplete == true
-                    )
+                    if BulkArtworkPreference.isEnabled {
+                        preparationRow(
+                            title: String(localized: "Album covers and background colors", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                            complete: preload?.state.isComplete == true
+                        )
+                    }
                     preparationRow(
                         title: String(localized: "Library indexing", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
-                        complete: (libraryIndex?.entryCount ?? 0) > 0
+                        complete: libraryIndex?.hasUsableIndex == true
                     )
 
-                    ProgressView(value: preload?.state.fraction ?? 0)
-                        .progressViewStyle(.linear)
-                        .tint(Color.cassetteAccent)
+                    if BulkArtworkPreference.isEnabled {
+                        ProgressView(value: preload?.state.fraction ?? 0)
+                            .progressViewStyle(.linear)
+                            .tint(Color.cassetteAccent)
+                    }
 
                     if libraryIndex?.isIndexing == true {
                         ProgressView(value: libraryIndex?.progress ?? 0)
@@ -132,7 +140,7 @@ struct EssentialSupportPreparationView: View {
                         .buttonStyle(SetupPrimaryButtonStyle())
                         .accessibilityIdentifier("onboarding.preparation.downloadLater")
                         .disabled(hasContinued)
-                    Text(String(localized: "You can download the remaining album covers in Storage settings.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    Text(String(localized: "Preparation continues in the background. Check progress in Account.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 .padding(24)
@@ -144,6 +152,11 @@ struct EssentialSupportPreparationView: View {
     }
 
     private var progressText: String {
+        if !BulkArtworkPreference.isEnabled {
+            return libraryIndex?.isPreparing == true
+                ? String(localized: "Library indexing", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                : String(localized: "Preparing Cassette", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        }
         guard let state = preload?.state else {
             return String(localized: "Connecting…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         }
@@ -170,18 +183,21 @@ struct EssentialSupportPreparationView: View {
     @MainActor
     private func prepare() async {
         guard let container, hasActiveServer, !Task.isCancelled, !hasContinued else { return }
-        if container.albumCoverPreloadService.isDeferred {
+        if BulkArtworkPreference.isEnabled && container.albumCoverPreloadService.isDeferred {
             deferPreparation()
             return
         }
         await container.serverService.preWarmClient()
         guard !hasContinued, !Task.isCancelled, hasActiveServer else { return }
-        await container.albumCoverPreloadService.downloadAllCovers()
+        if BulkArtworkPreference.isEnabled {
+            await container.albumCoverPreloadService.downloadAllCovers()
+        }
         guard !hasContinued, !Task.isCancelled, hasActiveServer else { return }
-        await container.indexLibraryForOnboarding()
+        let indexReady = await container.indexLibraryForOnboarding()
 
         guard !hasContinued, !Task.isCancelled, hasActiveServer,
-              container.albumCoverPreloadService.state.isComplete else { return }
+              indexReady,
+              !BulkArtworkPreference.isEnabled || container.albumCoverPreloadService.state.isComplete else { return }
         if !reduceMotion {
             try? await Task.sleep(for: .milliseconds(350))
         }
@@ -195,7 +211,9 @@ struct EssentialSupportPreparationView: View {
         guard let container, hasActiveServer, !hasContinued else { return }
         hasContinued = true
         container.libraryPreparationService.deferPresentation()
-        container.albumCoverPreloadService.deferRemainingDownloads()
+        if BulkArtworkPreference.isEnabled {
+            container.albumCoverPreloadService.deferRemainingDownloads()
+        }
         // The index owns its task and can finish after this view disappears.
         container.libraryIndexService.ensureIndexed(using: container.libraryService)
         onComplete()

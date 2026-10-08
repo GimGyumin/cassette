@@ -57,6 +57,7 @@ extension AppContainer {
         // download preferences and integration settings belong to the user.
         UserDefaults.standard.set(false, forKey: "onboardingComplete")
         serverState.needsCredentialReentry = false
+        serverState.needsSubsonicVerification = false
     }
 }
 

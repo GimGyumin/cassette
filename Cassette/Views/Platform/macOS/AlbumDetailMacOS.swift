@@ -19,8 +19,11 @@ struct AlbumDetailMacOS: View {
         self.albumName = albumName
         self.coverArtId = coverArtId
         self.showBackButton = showBackButton
-        let cid = "album:\(albumId)"
-        _albumFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> { $0.id == cid })
+        let itemId = albumId
+        let type = FavoriteType.album.rawValue
+        _albumFavoriteMatches = Query(filter: #Predicate<FavoriteRecord> {
+            $0.itemId == itemId && $0.itemType == type
+        })
     }
 
     @Environment(\.appContainer) private var container
@@ -31,7 +34,10 @@ struct AlbumDetailMacOS: View {
     @State private var showFullDescription = false
     @Query private var albumFavoriteMatches: [FavoriteRecord]
 
-    private var isAlbumFavorite: Bool { !albumFavoriteMatches.isEmpty }
+    private var isAlbumFavorite: Bool {
+        guard let serverId = container?.serverState.activeServer?.id else { return false }
+        return albumFavoriteMatches.contains { $0.serverId == serverId }
+    }
 
     var body: some View {
         Group {
@@ -339,11 +345,17 @@ struct AlbumDetailMacOS: View {
 
         ToolbarItem(placement: .primaryAction) {
             Button {
+                let wasFavorite = isAlbumFavorite
                 Task {
-                    if isAlbumFavorite {
-                        try? await container?.favoritesService.unstar(itemType: .album, itemId: albumId)
-                    } else {
-                        try? await container?.favoritesService.star(itemType: .album, itemId: albumId)
+                    guard let container else { return }
+                    do {
+                        if wasFavorite {
+                            try await container.favoritesService.unstar(itemType: .album, itemId: albumId)
+                        } else {
+                            try await container.favoritesService.star(itemType: .album, itemId: albumId)
+                        }
+                    } catch {
+                        container.toastService.showError(error.localizedDescription)
                     }
                 }
             } label: {

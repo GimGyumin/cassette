@@ -59,8 +59,7 @@ extension AlbumDetailContentView {
                 navChromeProgress = progress
             }
         }
-        // Same as playlist List — bleed the hero under the transparent nav / status bar.
-        .ignoresSafeArea(.container, edges: .top)
+        // The inset album cover starts below the navigation bar, unlike full-bleed artist art.
     }
 
     // MARK: - Desktop (macOS / iPad regular) body

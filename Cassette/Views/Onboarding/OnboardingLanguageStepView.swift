@@ -58,6 +58,7 @@ struct OnboardingLanguageStepView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(SetupPrimaryButtonStyle())
+                .accessibilityIdentifier("onboarding.language.continue")
                 .padding(.horizontal, 24)
                 .padding(.top, 12)
                 .padding(.bottom, 16)

@@ -276,7 +276,8 @@ struct HomeView: View {
             if !vm.starredArtists.isEmpty {
                 favoritesHorizontalShelf(title: String(localized: "Artists", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
                     ForEach(vm.starredArtists) { artist in
-                        NavigationLink(value: HomeDestination.artist(artist)) {
+                        NavigationLink(value: HomeDestination.artistById(id: artist.id, name: artist.name,
+                                                                          coverArtId: artist.coverArt)) {
                             LibraryFavoriteTile(
                                 title: artist.name,
                                 subtitle: nil,
@@ -506,7 +507,7 @@ struct HomeView: View {
             .buttonStyle(.plain)
             Divider().padding(.leading, 40)
             NavigationLink(value: HomeDestination.libraryArtists) {
-                HomeLibraryRowLabel(title: String(localized: "Album Artists", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "music.mic")
+                HomeLibraryRowLabel(title: String(localized: "Artists", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "music.mic")
             }
             .buttonStyle(.plain)
             Divider().padding(.leading, 40)
@@ -521,7 +522,7 @@ struct HomeView: View {
             .buttonStyle(.plain)
             Divider().padding(.leading, 40)
             NavigationLink(value: HomeDestination.libraryDownloads) {
-                HomeLibraryRowLabel(title: String(localized: "Downloads", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "arrow.down.circle")
+                HomeLibraryRowLabel(title: String(localized: "Downloaded", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "arrow.down.circle")
             }
             .buttonStyle(.plain)
         }
@@ -717,12 +718,6 @@ private struct HomePinnedCard: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if !item.displaySubtitle.isEmpty {
-                Text(item.displaySubtitle)
-                    .font(.cassetteCaption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
         }
     }
 
@@ -1034,6 +1029,8 @@ private struct HomeDestinationRegistrar: ViewModifier {
                     FavoritesView()
                 case .libraryDownloads:
                     DownloadedView()
+                case .albumPush(let id, let name, let coverArtId, _):
+                    AlbumDetailView(albumId: id, albumName: name, coverArtId: coverArtId)
                 case .album(let album):
                     AlbumDetailView(
                         album: album,

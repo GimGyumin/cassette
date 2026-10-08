@@ -22,6 +22,13 @@ final class CassetteAppDelegate: NSObject, UIApplicationDelegate {
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping () -> Void
     ) {
+        if identifier == CassetteBackgroundDownloads.artworkSessionIdentifier {
+            CassetteBackgroundDownloads.artwork.prepareForBackgroundEvents {
+                CassetteApp.scheduleLibraryPreparation()
+                completionHandler()
+            }
+            return
+        }
         guard identifier == CassetteBackgroundDownloads.sessionIdentifier else {
             completionHandler()
             return

@@ -6,7 +6,7 @@
 import SwiftUI
 
 private enum OnboardingStep {
-    case language, serverSignIn, preparing, cache, albumCovers, listenBrainz, externalProviders, complete
+    case language, serverSignIn, cache, albumCovers, about, welcome
 }
 
 struct OnboardingView: View {
@@ -16,8 +16,8 @@ struct OnboardingView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var step: OnboardingStep = .language
     @State private var serverViewModel: OnboardingViewModel?
-    @State private var skippedAlbumCovers = false
     @AppStorage("onboardingComplete") private var onboardingComplete = false
+    @AppStorage("cassette.onboarding.pendingWelcome") private var pendingWelcome = false
     @AppStorage(AppUILanguage.storageKey) private var appLanguageCode = ""
     /// Set by developer “show onboarding again” — bypasses the upgrade skip below.
     @AppStorage(AppContainer.DeveloperSettingsKey.forceOnboardingReplay)
@@ -38,8 +38,7 @@ struct OnboardingView: View {
     }
 
     private func advanceFromCache() {
-        skippedAlbumCovers = albumAssetsReady
-        step = skippedAlbumCovers ? .listenBrainz : .albumCovers
+        step = albumAssetsReady ? .about : .albumCovers
     }
 
     var body: some View {
@@ -55,9 +54,16 @@ struct OnboardingView: View {
                 if let serverViewModel {
                     OnboardingServerSignInView(
                         viewModel: serverViewModel,
-                        // The first signed-in session prepares the library and its visual
-                        // assets before exposing Home, avoiding a burst of placeholders.
-                        onConnected: { step = .cache },
+                        // Keep optional services in their own menus; first sign-in ends with
+                        // a short introduction before entering the library.
+                        onConnected: {
+                            if isReplay || forceOnboardingReplay {
+                                step = .cache
+                            } else {
+                                pendingWelcome = true
+                                step = .about
+                            }
+                        },
                         onBack: { step = .language }
                     )
                     .transition(stepTransition)
@@ -70,45 +76,24 @@ struct OnboardingView: View {
                 OnboardingCacheStepView(
                     onSkip: { advanceFromCache() },
                     onContinue: { advanceFromCache() },
-                    totalSteps: albumAssetsReady ? 3 : 4
+                    totalSteps: albumAssetsReady ? 2 : 3
                 )
                 .transition(stepTransition)
 
             case .albumCovers:
                 OnboardingAlbumCoversStepView(
-                    onSkip: { step = .listenBrainz },
-                    onContinue: { step = .listenBrainz },
+                    onSkip: { step = .about },
+                    onContinue: { step = .about },
                     onReconnect: { step = .serverSignIn }
                 )
                 .transition(stepTransition)
 
-            case .listenBrainz:
-                OnboardingListenBrainzStepView(
-                    onSkip: { step = .externalProviders },
-                    onContinue: { step = .externalProviders },
-                    stepIndex: skippedAlbumCovers ? 1 : 2,
-                    totalSteps: skippedAlbumCovers ? 3 : 4
-                )
-                .transition(stepTransition)
+            case .about:
+                OnboardingAboutView(onContinue: { step = .welcome })
+                    .transition(stepTransition)
 
-            case .externalProviders:
-                OnboardingExternalProvidersStepView(
-                    onSkip: { step = .preparing },
-                    onContinue: { step = .preparing },
-                    stepIndex: skippedAlbumCovers ? 2 : 3,
-                    totalSteps: skippedAlbumCovers ? 3 : 4
-                )
-                .transition(stepTransition)
-
-            case .preparing:
-                EssentialSupportPreparationView(
-                    onComplete: { step = .complete },
-                    onReconnect: { step = .serverSignIn }
-                )
-                .transition(stepTransition)
-
-            case .complete:
-                OnboardingCompleteView(onComplete: { finishOnboarding() })
+            case .welcome:
+                OnboardingWelcomeView(onComplete: { finishOnboarding() })
                     .transition(stepTransition)
             }
         }
@@ -125,7 +110,11 @@ struct OnboardingView: View {
             // Existing users upgrading: server already set, skip all onboarding steps.
             // Developer replay sets forceOnboardingReplay so this path must not fire.
             if !isReplay, !forceOnboardingReplay, container?.serverState.activeServer != nil {
-                onboardingComplete = true
+                if pendingWelcome {
+                    step = .about
+                } else {
+                    onboardingComplete = true
+                }
             }
         }
     }
@@ -148,6 +137,13 @@ struct OnboardingView: View {
             return
         }
         forceOnboardingReplay = false
+        pendingWelcome = false
+        // Users can listen as soon as sign-in succeeds. Search prepares in the
+        // background; full-library artwork can be requested from Storage.
+        container?.libraryPreparationService.deferPresentation()
+        if let container {
+            container.libraryIndexService.ensureIndexed(using: container.libraryService)
+        }
         onboardingComplete = true
     }
 }
