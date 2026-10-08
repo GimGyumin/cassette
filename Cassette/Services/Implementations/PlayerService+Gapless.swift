@@ -255,12 +255,20 @@ extension PlayerService {
                 fadeOutTask?.cancel(); fadeOutTask = nil
                 fadeInTask?.cancel(); fadeInTask = nil
                 isFadingOut = false
+                // The restart owns a new clock. Retaining the previous EOF sample makes the
+                // progress fallback interpret the first new sample as another completed loop.
+                lastObservedEngineProgress = 0
+                endOfTrackStallStartedAt = nil
+                progressStallMonitor = PlaybackStallMonitor()
+                systemPlayback.resetTrackRecovery()
                 setEngineVolume(restoredVolume)
-                await MainActor.run { state.playbackState = .loading }
+                await MainActor.run {
+                    state.position = 0
+                    state.playbackState = .loading
+                }
                 let song = await MainActor.run { state.currentTrack }
                 #if os(iOS)
-                let useSystem = song.map { AudioQualityClassifier.requiresSystemPlayer($0) } == true
-                    || PlayerService.isWirelessSystemRouteActive()
+                let useSystem = song.map { shouldUseSystemPlayer(for: $0, source: source) } == true
                     || systemPlayback.isActive
                 #else
                 let useSystem = true

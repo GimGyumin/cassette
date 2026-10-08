@@ -57,6 +57,27 @@ struct TranscodeSeekTests {
 
 @MainActor
 struct TranscodeClockTests {
+    @Test func repeatOneResetsThePreviousEOFClockBeforeReopening() async throws {
+        let engine = FakePlaybackEngine()
+        engine.progress = 180
+        engine.duration = 180
+        let container = try AppContainer(inMemory: true, engine: engine)
+        let service = try #require(container.playerService as? PlayerService)
+        let song = DisplayableSong(id: "repeat", title: "Repeat", duration: 180)
+        container.playerState.currentTrack = song
+        container.playerState.queue = [song]
+        container.playerState.duration = 180
+        container.playerState.position = 180
+        container.playerState.repeatMode = .one
+        container.playerState.playbackState = .playing
+        await service.prepareRepeatClockForTest()
+        await service.handleEndOfTrack(engineConfirmed: true)
+        #expect(container.playerState.position == 0)
+        #expect(await service.previousEOFClockForTest() == 0)
+        #expect(container.playerState.currentTrack?.id == song.id)
+        await service.stop()
+    }
+
     @Test func offsetResponsesKeepAbsoluteProgressDurationAndResetWhenStopped() async throws {
         let engine = FakePlaybackEngine()
         engine.progress = 1.5
@@ -78,6 +99,13 @@ struct TranscodeClockTests {
 }
 
 private extension PlayerService {
+    func prepareRepeatClockForTest() {
+        currentSource = .downloaded(URL(fileURLWithPath: "/tmp/cassette-repeat-clock-test.aac"))
+        lastObservedEngineProgress = 180
+    }
+
+    func previousEOFClockForTest() -> Double { lastObservedEngineProgress }
+
     func setTranscodeClockForTest(offset: Double) {
         currentSource = .stream(URL(string: "https://example.invalid/rest/stream?format=aac")!,
                                 customHeaders: [:], supportsTranscodeOffset: true)
