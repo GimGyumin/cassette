@@ -1,0 +1,75 @@
+# Selected verification evidence; failure history is retained.
+
+
+SOURCE: /tmp/cassette-phase8-final-verified-macos.log
+SHA256: eccf258e973735a7df6ca630552a8b4021113da187bb9a2c4dd2e884f8ab1031
+Gapless clock loss (native=false): -0.0009680615148659477 seconds
+Gapless clock loss (native=true): 1.1742657789692856e-05 seconds
+✔ Test run with 1121 tests in 193 suites passed after 63.835 seconds.
+** TEST SUCCEEDED **
+
+SOURCE: /tmp/cassette-phase8-final-current-macos.log
+SHA256: f91fb1d4aff7100dcf760054c1c40094e45ba55aa44b87d0e3b3f89c6fd65a0e
+Gapless clock loss (native=false): 0.004106688491449351 seconds
+Gapless clock loss (native=true): 0.2764875356725929 seconds
+✘ Test "Prepared tracks advance without a half-second transport pause" recorded an issue with 1 argument native → true at GaplessContinuityTests.swift:65:17: Expectation failed: missingTime < 0.08
+✘ Test run with 1121 tests in 193 suites failed after 72.084 seconds with 1 issue.
+** TEST FAILED **
+
+SOURCE: /tmp/cassette-phase8-swiftsonic.log
+SHA256: 32bc3d91a56a09e151784f3c7ffd90dae8edb2c26da7c8d8abbf76107c600449
+✔ Test run with 387 tests in 120 suites passed after 0.617 seconds.
+
+SOURCE: /tmp/cassette-phase8-ios.log
+SHA256: c2a465ef977059a612a2a94d023f3e1e35e566a67765083c8774f37aea1b83b7
+** BUILD SUCCEEDED **
+
+SOURCE: /tmp/cassette-phase8-ios-tests-retry.log
+SHA256: 82b6cbc6be5d338222169240217ac42e7362372226ec510e68072f0942e9527d
+✘ Test "Album separators retain their width and contrast on light and dark backgrounds" recorded an issue at AlbumDetailOfflineTests.swift:349:17: Expectation failed: image.height == 2
+✘ Test "Album separators retain their width and contrast on light and dark backgrounds" recorded an issue at AlbumDetailOfflineTests.swift:349:17: Expectation failed: image.height == 2
+✘ Test "Album separators retain their width and contrast on light and dark backgrounds" recorded an issue at AlbumDetailOfflineTests.swift:349:17: Expectation failed: image.height == 2
+✘ Test "Album separators retain their width and contrast on light and dark backgrounds" recorded an issue at AlbumDetailOfflineTests.swift:349:17: Expectation failed: image.height == 2
+Gapless clock loss (native=false): -0.002818144839691339 seconds
+Gapless clock loss (native=true): 4.74166582720148e-05 seconds
+✘ Test "AVPlayer PCM drives the meter, silence decays, and seek retains transport" recorded an issue at NativePlaybackMeterTests.swift:38:9: Expectation failed: meter.level > 0.1
+✘ Test "AVPlayer PCM drives the meter, silence decays, and seek retains transport" recorded an issue at NativePlaybackMeterTests.swift:45:9: Expectation failed: meter.level < peak * 0.25
+✘ Test progressiveHTTPPreparesTheNextStreamBeforeEOF(codec:) recorded an issue with 1 argument codec → "mp3" at TranscodeHTTPSeekTests.swift:178:9: Expectation failed: start.duration(to: .now) < .seconds(2)
+✘ Test progressiveHTTPPreparesTheNextStreamBeforeEOF(codec:) recorded an issue with 1 argument codec → "mp3" at TranscodeHTTPSeekTests.swift:294:13: Expectation failed: condition()
+✘ Test run with 1120 tests in 193 suites failed after 109.488 seconds with 8 issues.
+** TEST FAILED **
+
+SOURCE: /tmp/cassette-phase8-ios-audio-isolated.log
+SHA256: c488c3eabe458b58881b844e7e0dd92daf714abc6d07acf6ea0a0378a2d353a5
+✘ Test "AVPlayer PCM drives the meter, silence decays, and seek retains transport" recorded an issue at NativePlaybackMeterTests.swift:38:9: Expectation failed: meter.level > 0.1
+✘ Test "AVPlayer PCM drives the meter, silence decays, and seek retains transport" recorded an issue at NativePlaybackMeterTests.swift:45:9: Expectation failed: meter.level < peak * 0.25
+✘ Test run with 4 tests in 2 suites failed after 23.824 seconds with 2 issues.
+** TEST EXECUTE FAILED **
+
+SOURCE: /tmp/cassette-phase8-ios-fixtures.log
+SHA256: ac6a5ee892bc2abf78d948eef5e1769cd1f01c489e9848f9867c57188b7af83f
+✘ Test "AVPlayer PCM drives the meter, silence decays, and seek retains transport" recorded an issue at NativePlaybackMeterTests.swift:50:9: Expectation failed: meter.level > 0.1
+✘ Test "AVPlayer PCM drives the meter, silence decays, and seek retains transport" recorded an issue at NativePlaybackMeterTests.swift:57:9: Expectation failed: meter.level < peak * 0.25
+✘ Test run with 30 tests in 2 suites failed after 10.912 seconds with 2 issues.
+** TEST FAILED **
+
+SOURCE: /tmp/cassette-phase8-ios-native-cause-retry.log
+SHA256: 0822bdb0a0a24a8d59c673ac58f26e883c92ca3dd37d9b31d4fa7aa1d24a4e80
+✘ Test "AVPlayer PCM drives the meter, silence decays, and seek retains transport" recorded an issue at NativePlaybackMeterTests.swift:54:9: Expectation failed: meter.level > 0.1
+Native tap format probe: 0 clock: 0.0 budget: true state: bufferring duration: 0.0 codec: PCM
+✘ Test "AVPlayer PCM drives the meter, silence decays, and seek retains transport" recorded an issue at NativePlaybackMeterTests.swift:64:9: Expectation failed: meter.level < peak * 0.25
+✘ Test run with 1 test in 1 suite failed after 6.529 seconds with 2 issues.
+** TEST FAILED **
+
+SOURCE: /tmp/cassette-phase8-ios-native-mix-order.log
+SHA256: e0182475181844d2f3ea40fe2d080d27e17bf6a329a1886b21ad54d0f498975f
+	Test target CassetteTests encountered an error (Cannot test target “CassetteTests” on “Cassette Hardening Validation”: Cassette Hardening Validation’s iOS Simulator (null) doesn’t match CassetteTests’s iOS Simulator 18.6 deployment target.)
+** TEST FAILED **
+
+SOURCE: /tmp/cassette-phase8-core-tsan-current.log
+SHA256: 6752c0e9e529f1146e890eb6ece563f3239cca7638fda228dd222269ec0d1dc4
+✔ Test run with 8 tests in 3 suites passed after 0.026 seconds.
+
+SOURCE: /tmp/cassette-phase8-final-device-build.log
+SHA256: b1dcd4e4577ffb6b7b7bc24406e333940d1872726725f56fdad1940aca7a3177
+** BUILD SUCCEEDED **

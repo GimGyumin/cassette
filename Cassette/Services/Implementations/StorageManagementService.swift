@@ -55,9 +55,12 @@ private nonisolated enum StoragePaths {
         ) else { return 0 }
 
         var total: Int64 = 0
+        var seenFiles = Set<String>()
         for case let fileURL as URL in enumerator where predicate(fileURL) {
             let values = try? fileURL.resourceValues(forKeys: keys)
             if values?.isRegularFile == true {
+                if let identity = ArtworkContentStore.fileIdentity(fileURL),
+                   !seenFiles.insert(identity).inserted { continue }
                 total += Int64(values?.fileSize ?? 0)
             }
         }
@@ -90,6 +93,7 @@ actor StorageManagementService {
     private let artworkImageCache: ArtworkImageCache
     private let dominantColorExtractor: DominantColorExtractor
     private let albumCoverPreloadService: AlbumCoverPreloadService?
+    private let coverArtsDirectory: URL
 
     init(
         modelContainer: ModelContainer,
@@ -98,7 +102,8 @@ actor StorageManagementService {
         externalArtworkCache: ExternalArtworkCache,
         artworkImageCache: ArtworkImageCache,
         dominantColorExtractor: DominantColorExtractor,
-        albumCoverPreloadService: AlbumCoverPreloadService? = nil
+        albumCoverPreloadService: AlbumCoverPreloadService? = nil,
+        coverArtsDirectory: URL? = nil
     ) {
         self.modelContainer = modelContainer
         self.cacheService = cacheService
@@ -107,6 +112,7 @@ actor StorageManagementService {
         self.artworkImageCache = artworkImageCache
         self.dominantColorExtractor = dominantColorExtractor
         self.albumCoverPreloadService = albumCoverPreloadService
+        self.coverArtsDirectory = coverArtsDirectory ?? StoragePaths.streamingCoverArts
     }
 
     func categories() async -> [StorageCategorySnapshot] {
@@ -116,17 +122,17 @@ actor StorageManagementService {
         async let lyricsCount = cacheService.lyricsCount
         async let downloadTotals = downloadTotals()
 
-        let artworkBytes = StoragePaths.directoryByteCount(at: StoragePaths.streamingCoverArts) { url in
-            url.lastPathComponent.contains("@")
+        let artworkBytes = StoragePaths.directoryByteCount(at: coverArtsDirectory) { url in
+            !url.lastPathComponent.hasPrefix(".")
         } + StoragePaths.directoryByteCount(at: StoragePaths.externalCovers)
 
-        let (downloadBytes, downloadCount) = await downloadTotals
+        let (_, downloadCount) = await downloadTotals
 
         return [
             .init(
                 kind: .audioCache,
-                title: String(localized: "Streaming Audio Cache", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
-                subtitle: String(localized: "Recently played tracks for instant replay", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                title: String(localized: "Music", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                subtitle: String(localized: "\(downloadCount) saved songs · automatic storage and saved music", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
                 byteCount: await audioBytes,
                 itemCount: await audioCount
             ),
@@ -165,15 +171,11 @@ actor StorageManagementService {
                 byteCount: StoragePaths.fileByteCount(at: StoragePaths.discoverCache),
                 itemCount: nil
             ),
-            .init(
-                kind: .downloads,
-                title: String(localized: "Offline Downloads", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
-                subtitle: String(localized: "Music saved for offline playback", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
-                byteCount: downloadBytes,
-                itemCount: downloadCount
-            ),
+
         ]
     }
+
+    var reclaimableAudioBytes: Int64 { get async { await cacheService.reclaimableBytes } }
 
     func clear(_ kind: StorageCategorySnapshot.Kind) async {
         switch kind {
@@ -194,15 +196,28 @@ actor StorageManagementService {
         }
     }
 
+    nonisolated static func isCachedArtwork(_ url: URL) -> Bool {
+        ["@thumb", "@hero", "@original-v1"].contains { url.lastPathComponent.hasSuffix($0) }
+    }
+
     func clearArtworkCaches() async {
+        // Drain both foreground workers and the background daemon before deleting files.
+        do { try await albumCoverPreloadService?.suspendForAccountReset() }
+        catch {
+            await albumCoverPreloadService?.finishAccountReset()
+            return
+        }
         await MainActor.run {
             dominantColorExtractor.clearCache()
             artworkImageCache.clearCache()
-            albumCoverPreloadService?.resetBookkeeping()
         }
         await externalArtworkCache.clearAll()
-        StoragePaths.removeFiles(at: StoragePaths.streamingCoverArts) { url in
-            url.lastPathComponent.contains("@")
+        StoragePaths.removeFiles(at: coverArtsDirectory) { url in
+            Self.isCachedArtwork(url)
+        }
+        await MainActor.run {
+            albumCoverPreloadService?.finishAccountReset()
+            albumCoverPreloadService?.reconcileChangedCovers()
         }
     }
 
@@ -236,6 +251,10 @@ actor StorageManagementService {
     }
 
     private func clearAllDownloads() async {
+        if let downloads = downloadService as? DownloadService {
+            await downloads.removeAllDownloads()
+            return
+        }
         let albums = await MainActor.run { () -> [DownloadedAlbumRef] in
             let context = ModelContext(modelContainer)
             let fetched = (try? context.fetch(FetchDescriptor<DownloadedAlbum>())) ?? []
@@ -248,6 +267,11 @@ actor StorageManagementService {
         }
         for track in await downloadedTracks() {
             try? await downloadService.remove(songId: track.songId, serverId: track.serverId)
+        }
+        await MainActor.run {
+            let context = ModelContext(modelContainer)
+            try? context.delete(model: DownloadedPlaylist.self)
+            try? context.save()
         }
     }
 

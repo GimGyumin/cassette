@@ -23,10 +23,21 @@ struct DiscoverView: View {
     @State private var isListenBrainzConnected: Bool = false
     /// Secondary shelves (fresh / spatial / radio / yearly) — once per session unless pull-to-refresh.
     @State private var didLoadSecondary = false
+    @State private var isStartingShuffle = false
+    @State private var loadedServerID: String?
+    @State private var isHeaderScrolled = false
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: CassetteSpacing.l) {
+            LazyVStack(alignment: .leading, spacing: 32) {
+                if let feed = container?.homeDiscoveryFeed {
+                    let artists = feed.stationArtists(from: feed.recentlyAdded)
+                    if !artists.isEmpty { RecommendedStationsShelf(artists: artists) }
+                }
+                SmartShuffleBanner(albums: container?.homeDiscoveryFeed.recentlyAdded ?? [], isLoading: isStartingShuffle) {
+                    Task { await triggerSmartShuffle() }
+                }
+                MoodPlaylistShelf()
                 if let vm {
                     if vm.isErrorState {
                         errorBanner(vm: vm)
@@ -34,32 +45,38 @@ struct DiscoverView: View {
                         freshReleasesSection(vm: vm)
                         spatialAudioSection(vm: vm)
                     }
-                    smartShuffleSection
                     wrappedSection
                     internetRadioSection
                 }
             }
-            .padding(.vertical, CassetteSpacing.m)
+            .padding(.vertical, 16)
+            .padding(.horizontal, 16)
         }
         .miniPlayerBottomMargin()
         .cassetteContentWidth(.fill)
         .navigationTitle(String(localized: "Discover", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-        .cassetteAccountProfileToolbar()
-        .task {
+        .cassetteAccountProfileToolbar(isVisible: !isHeaderScrolled)
+        .cassetteScrollingRootHeader(isScrolled: $isHeaderScrolled)
+        .task(id: container?.serverState.activeServer?.id) {
             guard let container else { return }
             let serverId = container.serverState.activeServer?.id.uuidString
-            if vm == nil {
+            if vm == nil || loadedServerID != serverId {
                 vm = DiscoverViewModel(
                     libraryService: container.libraryService,
                     recommendationService: container.recommendationService,
                     serverId: serverId
                 )
+                loadedServerID = serverId
+                didLoadSecondary = false
+                radioStations = []
+                replaySummary = nil
             }
             if allReleasesVM == nil {
                 allReleasesVM = AllFreshReleasesViewModel(recommendationService: container.recommendationService)
             }
             // Discover is not the first tab — wait until Home's first list returns.
             await AppBootGate.waitForHome()
+            await container.homeDiscoveryFeed.load()
             isListenBrainzConnected = await container.listenBrainzService.currentSnapshot().isEnabled
             guard !didLoadSecondary else { return }
             // Secondary sections after the main shelves are on screen.
@@ -71,6 +88,7 @@ struct DiscoverView: View {
             didLoadSecondary = true
         }
         .refreshable {
+            await container?.homeDiscoveryFeed.load(forceRefresh: true)
             isListenBrainzConnected = await container?.listenBrainzService.currentSnapshot().isEnabled ?? false
             await vm?.loadFreshReleases()
             await vm?.loadSpatialAlbums(force: true)
@@ -141,43 +159,13 @@ struct DiscoverView: View {
                 albums: vm.spatialAlbums,
                 showArtist: true
             )
-            .padding(.horizontal, CassetteSpacing.l)
-        }
-    }
-
-    private var smartShuffleSection: some View {
-        section(title: "Smart Shuffle") {
-            Button {
-                Task { await triggerSmartShuffle() }
-            } label: {
-                HStack(spacing: CassetteSpacing.s) {
-                    Image(systemName: "shuffle.circle.fill")
-                        .font(.title2)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Rediscover Your Library")
-                            .font(.cassetteCellTitle)
-                        Text("A random mix from your library")
-                            .font(.cassetteCaption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(CassetteSpacing.m)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.cassetteAccent.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: CassetteCornerRadius.standard, style: .continuous))
-                .foregroundStyle(.primary)
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, CassetteSpacing.m)
         }
     }
 
     private func triggerSmartShuffle() async {
-        guard let container else { return }
+        guard let container, !isStartingShuffle else { return }
+        isStartingShuffle = true
+        defer { isStartingShuffle = false }
         do {
             try await container.playerService.playSmartShuffle()
         } catch {
@@ -208,7 +196,6 @@ struct DiscoverView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(String(localized: "View Listening Stats", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
             }
-            .padding(.horizontal, CassetteSpacing.m)
 
             NavigationLink(value: HomeDestination.replay) {
                 ReplaySummaryCard(
@@ -217,7 +204,6 @@ struct DiscoverView: View {
                 )
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, CassetteSpacing.m)
             .accessibilityLabel(String(localized: "Open Replay", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
@@ -255,7 +241,6 @@ struct DiscoverView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, CassetteSpacing.m)
 
             if radioStations.isEmpty {
                 NavigationLink {
@@ -279,16 +264,14 @@ struct DiscoverView: View {
                     .clipShape(RoundedRectangle(cornerRadius: CassetteCornerRadius.standard, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, CassetteSpacing.m)
-            } else {
+                } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: CassetteSpacing.s) {
                         ForEach(radioStations, id: \.id) { station in
                             RadioCard(station: station)
                         }
                     }
-                    .padding(.horizontal, CassetteSpacing.m)
-                }
+                        }
             }
         }
     }
@@ -299,8 +282,7 @@ struct DiscoverView: View {
         VStack(alignment: .leading, spacing: CassetteSpacing.s) {
             Text(title)
                 .font(.cassetteSectionTitle)
-                .padding(.horizontal, CassetteSpacing.m)
-            content()
+                content()
         }
     }
 
@@ -324,8 +306,7 @@ struct DiscoverView: View {
                 Text("Retry")
                     .font(.cassetteCellTitle)
                     .foregroundStyle(.white)
-                    .padding(.horizontal, CassetteSpacing.m)
-                    .padding(.vertical, CassetteSpacing.s)
+                            .padding(.vertical, CassetteSpacing.s)
                     .cassetteAccentGlassCapsule()
             }
             .buttonStyle(.plain)
@@ -349,7 +330,6 @@ struct DiscoverView: View {
                     .frame(width: 140)
                 }
             }
-            .padding(.horizontal, CassetteSpacing.m)
         }
         .allowsHitTesting(false)
     }
@@ -361,6 +341,5 @@ struct DiscoverView: View {
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)
             .padding(.vertical, CassetteSpacing.l)
-            .padding(.horizontal, CassetteSpacing.m)
     }
 }

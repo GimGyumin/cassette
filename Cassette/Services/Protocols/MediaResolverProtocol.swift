@@ -11,5 +11,12 @@ import SwiftSonic
 /// PlayerService always calls this — never SwiftSonic directly.
 protocol MediaResolverProtocol: AnyObject, Sendable {
     func resolve(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource
+    func resolveOriginal(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource
     func resolveRadio(_ station: InternetRadioStation) async throws -> MediaSource
+}
+
+extension MediaResolverProtocol {
+    func resolveOriginal(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource {
+        try await resolve(songId: songId, serverId: serverId, song: song)
+    }
 }

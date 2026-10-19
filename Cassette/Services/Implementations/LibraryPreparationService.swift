@@ -64,21 +64,25 @@ final class LibraryPreparationService {
         }
         guard !phase.isBusy, !Task.isCancelled else { return }
         guard let serverId = serverService.state.activeServer?.id else { return }
+        if indexService.isPreparing {
+            _ = await indexService.ensureIndexedAndWait(using: libraryService)
+            guard !Task.isCancelled, !phase.isBusy, serverId == serverService.state.activeServer?.id else { return }
+        }
         phase = .checking
         publish(.init(phase: .checking))
         defer { detectedTrackCount = nil }
 
         // A scan that cannot be read is not a reason to block the app: treat it as "no change".
-        guard let status = try? await LibraryScanService.status(serverService: serverService) else {
-            finish(phase: .idle)
-            return
-        }
-        let serverCount = status.count
+        let status = try? await LibraryScanService.status(serverService: serverService)
+        guard !Task.isCancelled, serverId == serverService.state.activeServer?.id,
+              status?.scanning != true else { finish(phase: .idle); return }
+        let serverCount = status?.count
 
         guard LibraryChangeDetector.needsPreparation(
             storedCount: LibraryChangeDetector.storedCount(for: serverId),
             serverCount: serverCount
-        ) else {
+        ) || LibraryChangeDetector.needsMetadataRefresh(lastIndexedAt: indexService.lastIndexedAt,
+                                                        lastScan: status?.lastScan) else {
             // First observation (or nothing changed): record the count so the next launch compares.
             if let serverCount {
                 LibraryChangeDetector.store(count: serverCount, for: serverId)
@@ -111,7 +115,7 @@ final class LibraryPreparationService {
 
         if BulkArtworkPreference.isEnabled {
             phase = .covers
-            publish(.init(phase: .covers, coversTotal: coverPreload.state.total, indexFraction: 1))
+            publish(.init(phase: .covers, coversCompleted: coverPreload.state.availableCompleted, coversTotal: coverPreload.state.libraryTotal, indexFraction: 1))
             await coverPreload.downloadAllCovers(resumeDeferred: false) { [weak self] completed, total, coverId in
                 guard let self else { return }
                 self.publish(.init(

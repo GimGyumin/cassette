@@ -13,7 +13,6 @@ final class CassetteAppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        CassetteSystemChrome.configure()
         return true
     }
 

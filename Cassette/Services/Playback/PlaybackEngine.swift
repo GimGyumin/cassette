@@ -31,6 +31,7 @@ nonisolated protocol PlaybackEngine: AnyObject, Sendable {
     func pause()
     func resume()
     func seek(to time: Double)
+    func resetAfterMediaServicesReset()
 
 }
 
@@ -39,6 +40,7 @@ nonisolated protocol AudioStreamingPlaybackEngine: PlaybackEngine {
     /// Engine callbacks (state changes, EOF, errors). Owned by the engine, wired once by
     /// `PlayerService`; a fake engine can drive them to simulate a transition in tests.
     var delegate: AudioPlayerDelegate? { get set }
+    func ownsCallbacks(from player: AudioPlayer) -> Bool
 
     /// AudioStreaming announces a queued entry when it selects it, before decoded audio is
     /// necessarily moving. If that hand-off parks in `waitingForData`, wake the transport without
@@ -54,4 +56,11 @@ nonisolated protocol AudioGraphHosting: AnyObject, Sendable {
     func attach(node: AVAudioNode)
     func addFrameFilter(named name: String, filter: @escaping FilterCallback)
     func removeFrameFilter(named name: String)
+}
+
+extension PlaybackEngine {
+    nonisolated func resetAfterMediaServicesReset() { stop() }
+}
+extension AudioStreamingPlaybackEngine {
+    nonisolated func ownsCallbacks(from player: AudioPlayer) -> Bool { true }
 }

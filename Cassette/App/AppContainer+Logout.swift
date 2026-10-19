@@ -16,12 +16,16 @@ extension AppContainer {
         }
 
         await playerService.stop()
+        fullPlayerViewModel.resetTheme()
         libraryIndexService.clear()
         // Remove all saved server credentials so another account cannot expose
         // the previous account's local content after logout.
         let context = ModelContext(modelContainer)
         let serverIDs = try context.fetch(FetchDescriptor<ServerConfig>()).map(\.id)
-        for id in serverIDs { try await serverService.removeServer(id: id) }
+        for id in serverIDs {
+            libraryIndexService.clearAtmosSelections(serverId: id)
+            try await serverService.removeServer(id: id)
+        }
         await libraryService.invalidateClientCache()
         await playlistService.invalidateClientCache()
         await radioService.invalidateClientCache()
@@ -88,7 +92,7 @@ enum LocalAccountDataCleanup {
         let documents = try manager.url(for: .documentDirectory, in: .userDomainMask,
                                         appropriateFor: nil, create: false)
         // Explicit app-owned media folders; never delete Documents or a store root.
-        for name in ["downloads", "coverarts"] {
+        for name in ["audio", "downloads", "coverarts"] {
             let directory = documents.appendingPathComponent("app.cassette/\(name)", isDirectory: true)
             if manager.fileExists(atPath: directory.path) {
                 try manager.removeItem(at: directory)

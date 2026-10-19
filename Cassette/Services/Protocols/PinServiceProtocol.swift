@@ -27,8 +27,15 @@ protocol PinServiceProtocol: AnyObject {
     ) throws
     func unpin(itemType: PinnedItemType, itemId: String)
     func isPinned(itemType: PinnedItemType, itemId: String) -> Bool
+    func isPinnedInBackground(itemType: PinnedItemType, itemId: String) async -> Bool
     func reorder(items: [PinnedItem])
     func currentPinnedCount() -> Int
     /// Updates the stored cover art ID for a pinned item. No-op if not pinned.
     func updateCoverArtId(itemType: PinnedItemType, itemId: String, newCoverArtId: String?)
+}
+
+extension PinServiceProtocol {
+    func isPinnedInBackground(itemType: PinnedItemType, itemId: String) async -> Bool {
+        isPinned(itemType: itemType, itemId: itemId)
+    }
 }

@@ -87,8 +87,16 @@ struct LyricWordKaraokeLine: View {
 
 // ── per-word view ──
 
-private struct KaraokeWord: View {
+private struct KaraokeWord: View, Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.word == rhs.word && lhs.displayText == rhs.displayText && lhs.idx == rhs.idx
+            && lhs.activeIdx == rhs.activeIdx && lhs.all[safe: lhs.idx + 1]?.startMs == rhs.all[safe: rhs.idx + 1]?.startMs && lhs.fs == rhs.fs
+            && lhs.sec == rhs.sec && lhs.rm == rhs.rm
+            && (lhs.role != 1 || lhs.ms == rhs.ms) && lhs.role == rhs.role
+    }
+
     let word: LyricDisplayWord
+    let displayText: String
     let idx: Int
     let activeIdx: Int?
     let all: [LyricDisplayWord]
@@ -100,11 +108,11 @@ private struct KaraokeWord: View {
     var body: some View {
         ZStack(alignment: .leading) {
             // dim base — always visible
-            Text(verbatim: displayStr)
+            Text(verbatim: displayText)
                 .font(font)
                 .foregroundStyle(Color.white.opacity(dimOpacity))
             // bright fill — masked left→right
-            Text(verbatim: displayStr)
+            Text(verbatim: displayText)
                 .font(font)
                 .foregroundStyle(Color.white.opacity(brightOpacity))
                 .mask(alignment: .leading) {
@@ -120,31 +128,6 @@ private struct KaraokeWord: View {
     }
 
     private var font: Font { .system(size: sec ? fs * 0.92 : fs, weight: sec ? .medium : .heavy) }
-    private var displayStr: String {
-        let raw = sec ? word.text.replacingOccurrences(of: "(", with: "").replacingOccurrences(of: ")", with: "") : word.text
-        if word.preservesSourceSpacing { return raw }
-        // Do not strip Korean word boundaries or insert spaces inside English syllables.
-        if all.contains(where: { Self.isCJK($0.text) || $0.text.contains(where: \.isWhitespace) }) { return raw }
-        guard idx != all.count - 1 else { return raw }
-        return raw.hasSuffix(" ") ? raw : raw + " "
-    }
-
-    private static func isCJK(_ text: String) -> Bool {
-        text.unicodeScalars.contains { scalar in
-            switch scalar.value {
-            case 0xAC00...0xD7AF,   // Hangul Syllables
-                 0x1100...0x11FF,   // Hangul Jamo
-                 0x3130...0x318F,   // Hangul Compatibility Jamo
-                 0x4E00...0x9FFF,   // CJK Unified Ideographs
-                 0x3040...0x30FF,   // Hiragana + Katakana
-                 0x3400...0x4DBF,   // CJK Extension A
-                 0xF900...0xFAFF:   // CJK Compatibility Ideographs
-                return true
-            default:
-                return false
-            }
-        }
-    }
     private var role: Int { // 0=upcoming, 1=current, 2=lit/sung
         if sec {
             if let a = activeIdx { return idx <= a ? (idx == a ? 1 : 2) : 0 }
@@ -169,6 +152,42 @@ private struct KaraokeWord: View {
     private var brightOpacity: Double { sec ? 0.78 : 1.0 }
 }
 
+/// Text can discard trailing breakable spaces when each timed token is a separate view.
+/// Wrapping is handled by WordWrapLayout, so nonbreaking glyph spaces preserve its measured
+/// separators without altering source text, cue offsets, translations or sung syllables.
+nonisolated enum LyricKaraokeSpacing {
+    static func displayTexts(_ words: [LyricDisplayWord], secondary: Bool) -> [String] {
+        // Scan the line once, instead of scanning every word again for both Text layers.
+        let hasSourceBoundaries = words.contains { isCJK($0.text) || $0.text.contains(where: \.isWhitespace) }
+        return words.enumerated().map { index, word in
+            let raw = secondary ? word.text.replacingOccurrences(of: "(", with: "").replacingOccurrences(of: ")", with: "") : word.text
+            let text = word.preservesSourceSpacing || hasSourceBoundaries || index == words.count - 1 || raw.hasSuffix(" ")
+                ? raw : raw + " "
+            return visibleText(text)
+        }
+    }
+
+    private static func isCJK(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0xAC00...0xD7AF,   // Hangul Syllables
+                 0x1100...0x11FF,   // Hangul Jamo
+                 0x3130...0x318F,   // Hangul Compatibility Jamo
+                 0x4E00...0x9FFF,   // CJK Unified Ideographs
+                 0x3040...0x30FF,   // Hiragana + Katakana
+                 0x3400...0x4DBF,   // CJK Extension A
+                 0xF900...0xFAFF:   // CJK Compatibility Ideographs
+                return true
+            default:
+                return false
+            }
+        }
+    }
+    static func visibleText(_ source: String) -> String {
+        source.replacingOccurrences(of: " ", with: "\u{00A0}")
+    }
+}
+
 // ── word-wrapping row Layout ──
 
 private struct KaraokeRow: View {
@@ -181,9 +200,10 @@ private struct KaraokeRow: View {
     let rm: Bool
 
     var body: some View {
+        let displayTexts = LyricKaraokeSpacing.displayTexts(words, secondary: sec)
         WordWrapLayout(hAlign: align == .center ? .center : align == .trailing ? .trailing : .leading) {
             ForEach(Array(words.enumerated()), id: \.0) { i, w in
-                KaraokeWord(word: w, idx: i, activeIdx: activeIdx, all: words, ms: ms, fs: fs, sec: sec, rm: rm)
+                KaraokeWord(word: w, displayText: displayTexts[i], idx: i, activeIdx: activeIdx, all: words, ms: ms, fs: fs, sec: sec, rm: rm).equatable()
             }
         }
     }
@@ -205,15 +225,24 @@ private struct WordWrapLayout: Layout {
         #endif
     }()
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    struct Cache {
+        var sizes: [CGSize]
+        var width: CGFloat?
+        var rows: R?
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache(sizes: subviews.map { $0.sizeThatFits(.unspecified) }) }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = makeCache(subviews: subviews) }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let mw = maxW(proposal)
-        let rows = layOut(subviews, mw: mw)
+        let rows = layout(mw: mw, cache: &cache)
         return CGSize(width: min(rows.nw, mw), height: rows.th)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         let mw = bounds.width > 0 ? bounds.width : maxW(proposal)
-        let rows = layOut(subviews, mw: mw)
+        let rows = layout(mw: mw, cache: &cache)
         var y = bounds.minY
         for (ri, row) in rows.rows.enumerated() {
             let rw = rows.rw[ri]
@@ -225,7 +254,7 @@ private struct WordWrapLayout: Layout {
             var x = x0
             let h = rows.rh[ri]
             for (sv, sz) in row {
-                sv.place(at: CGPoint(x: x, y: y + (h - sz.height) / 2), proposal: ProposedViewSize(sz))
+                subviews[sv].place(at: CGPoint(x: x, y: y + (h - sz.height) / 2), proposal: ProposedViewSize(sz))
                 x += sz.width
             }
             y += h
@@ -236,14 +265,14 @@ private struct WordWrapLayout: Layout {
         if let w = p.width, w.isFinite { return w }; return Self.fallbackW
     }
 
-    private struct R { let rows: [[(LayoutSubview, CGSize)]]; let rw: [CGFloat]; let rh: [CGFloat]; let nw: CGFloat; let th: CGFloat }
+    struct R { let rows: [[(Int, CGSize)]]; let rw: [CGFloat]; let rh: [CGFloat]; let nw: CGFloat; let th: CGFloat }
 
-    private func layOut(_ svs: Subviews, mw: CGFloat) -> R {
-        var rows: [[(LayoutSubview, CGSize)]] = [[]]
+    private func layout(mw: CGFloat, cache: inout Cache) -> R {
+        if cache.width == mw, let rows = cache.rows { return rows }
+        var rows: [[(Int, CGSize)]] = [[]]
         var rw: [CGFloat] = [0]
         var rh: [CGFloat] = [0]
-        for sv in svs {
-            let sz = sv.sizeThatFits(.unspecified)
+        for (sv, sz) in cache.sizes.enumerated() {
             let last = rows.count - 1
             if rw[last] > 0, rw[last] + sz.width > mw { rows.append([]); rw.append(0); rh.append(0) }
             rows[rows.count - 1].append((sv, sz))
@@ -252,7 +281,10 @@ private struct WordWrapLayout: Layout {
         }
         var th: CGFloat = 0, nw: CGFloat = 0
         for (i, h) in rh.enumerated() { nw = max(nw, rw[i]); th += h }
-        return R(rows: rows, rw: rw, rh: rh, nw: nw, th: th)
+        let result = R(rows: rows, rw: rw, rh: rh, nw: nw, th: th)
+        cache.width = mw
+        cache.rows = result
+        return result
     }
 }
 

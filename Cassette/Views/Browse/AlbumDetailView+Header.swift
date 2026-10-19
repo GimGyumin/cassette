@@ -94,7 +94,7 @@ extension AlbumDetailContentView {
             if vm == nil {
                 SkeletonBlock(width: 100, height: 14, cornerRadius: 4)
             } else if let vm {
-                let qualities = AudioQualityClassifier.albumQualities(in: songs)
+                let qualities = vm.audioQualities
                 HStack(spacing: 6) {
                     if let genre = vm.genre, !genre.isEmpty {
                         Text(genre)
@@ -139,10 +139,7 @@ extension AlbumDetailContentView {
                 Image(systemName: "shuffle")
                     .font(.cassetteCellTitle)
                     .foregroundStyle(headerTextColor)
-                    .cassetteGlassButton(
-                        size: 52,
-                        tint: atmosphere.controlGlassTint
-                    )
+                    .albumTransportCircle(ink: headerTextColor)
             }
             .disabled(songs.isEmpty)
             .opacity(vm == nil ? 0.4 : 1)
@@ -152,7 +149,7 @@ extension AlbumDetailContentView {
                     guard !songs.isEmpty else { return }
                     try? await container?.playerService.play(tracks: songs, startIndex: 0)
                 }
-            }, label: String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), isDisabled: songs.isEmpty || (mode == .full && vm?.isDownloadingAlbum == true), accentColor: heroButtonVariant.background, height: usesDesktopDetail ? nil : 52, labelColor: heroButtonVariant.foreground)
+            }, label: String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), isDisabled: songs.isEmpty || (mode == .full && vm?.isDownloadingAlbum == true), accentColor: heroButtonVariant.background, height: usesDesktopDetail ? nil : 52, labelColor: heroButtonVariant.background.luminance > 0.5 ? .black : .white)
             .frame(maxWidth: playMaxWidth)
 
             if mode == .downloadedOnly {
@@ -169,10 +166,7 @@ extension AlbumDetailContentView {
                     Image(systemName: "trash")
                         .font(.cassetteCellTitle)
                         .foregroundStyle(headerTextColor)
-                        .cassetteGlassButton(
-                            size: 52,
-                            tint: atmosphere.controlGlassTint
-                        )
+                        .albumTransportCircle(ink: headerTextColor)
                 }
             } else if vm?.isOffline != true {
                 if let vm {
@@ -181,33 +175,24 @@ extension AlbumDetailContentView {
                             Image(systemName: "xmark")
                                 .font(.cassetteCellTitle)
                                 .foregroundStyle(headerTextColor)
-                                .cassetteGlassButton(
-                                    size: 52,
-                                    tint: atmosphere.controlGlassTint
-                                )
+                                .albumTransportCircle(ink: headerTextColor)
                         }
                     } else {
                         switch downloadState(for: vm) {
                         case .notDownloaded:
                             Button { Task { await vm.downloadAlbum() } } label: {
-                                Image(systemName: "plus")
+                                Image(systemName: "arrow.down")
                                     .font(.cassetteCellTitle)
                                     .foregroundStyle(headerTextColor)
-                                    .cassetteGlassButton(
-                                        size: 52,
-                                        tint: atmosphere.controlGlassTint
-                                    )
+                                    .albumTransportCircle(ink: headerTextColor)
                             }
                             .disabled(vm.songs.isEmpty)
                         case .partiallyDownloaded:
                             Button { Task { await vm.downloadMissingTracks() } } label: {
-                                Image(systemName: "arrow.down.circle.dotted")
+                                Image(systemName: "arrow.down")
                                     .font(.cassetteCellTitle)
                                     .foregroundStyle(headerTextColor)
-                                    .cassetteGlassButton(
-                                        size: 52,
-                                        tint: atmosphere.controlGlassTint
-                                    )
+                                    .albumTransportCircle(ink: headerTextColor)
                             }
                         case .fullyDownloaded:
                             Button {
@@ -217,22 +202,16 @@ extension AlbumDetailContentView {
                                 Image(systemName: "trash")
                                     .font(.cassetteCellTitle)
                                     .foregroundStyle(headerTextColor)
-                                    .cassetteGlassButton(
-                                        size: 52,
-                                        tint: atmosphere.controlGlassTint
-                                    )
+                                    .albumTransportCircle(ink: headerTextColor)
                             }
                         }
                     }
                 } else {
                     Button { } label: {
-                        Image(systemName: "plus")
+                        Image(systemName: "arrow.down")
                             .font(.cassetteCellTitle)
                             .foregroundStyle(headerTextColor)
-                            .cassetteGlassButton(
-                                size: 52,
-                                tint: atmosphere.controlGlassTint
-                            )
+                            .albumTransportCircle(ink: headerTextColor)
                     }
                     .disabled(true)
                     .opacity(0.4)
@@ -267,5 +246,17 @@ extension AlbumDetailContentView {
             }
             .frame(minHeight: 44)
         }
+    }
+}
+
+private extension View {
+    func albumTransportCircle(ink: Color) -> some View {
+        self
+            .font(.system(size: 22, weight: .semibold))
+            .foregroundStyle(ink)
+            .frame(width: 52, height: 52)
+            .background(ink.opacity(0.12), in: Circle())
+            .overlay(Circle().strokeBorder(ink.opacity(0.05), lineWidth: 1))
+            .contentShape(Circle())
     }
 }

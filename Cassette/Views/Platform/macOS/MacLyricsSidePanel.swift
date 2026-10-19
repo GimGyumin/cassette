@@ -11,6 +11,10 @@ import SwiftSonic
 struct MacLyricsSidePanel: View {
     @Environment(\.appContainer) private var container
 
+    @Environment(ArtworkImageCache.self) private var artworkCache
+    @AppStorage("cassette.visuals.animatedArtwork") private var animatedArtwork = true
+    @State private var artworkImage: PlatformImage?
+
     @State private var lyricsViewModel: LyricsViewModel?
 
     private var playerState: PlayerState? { container?.playerState }
@@ -57,7 +61,20 @@ struct MacLyricsSidePanel: View {
         }
         .frame(width: 360, alignment: .center)
         .frame(maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.55))
+        .background {
+            AppleMusicLyricsBackground(
+                coverImage: artworkImage, fallbackColor: .black,
+                isPlaying: playerState?.playbackState == .playing,
+                animated: animatedArtwork
+            )
+        }
+        .clipped()
+        .task(id: container?.playbackCoverId(for: currentTrack) ?? currentTrack?.effectiveCoverArtId) {
+            let coverID = container?.playbackCoverId(for: currentTrack) ?? currentTrack?.effectiveCoverArtId
+            let image = await artworkCache.load(coverArtId: coverID, tier: .hero)
+            guard !Task.isCancelled else { return }
+            artworkImage = image
+        }
         .environment(\.colorScheme, .dark)
         .task(id: currentTrack?.id) {
             guard let track = currentTrack,

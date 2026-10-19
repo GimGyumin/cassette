@@ -1,0 +1,8 @@
+{
+  "Cassette/Services/Cache/CoverDecodeGate.swift": "e86339c55910aea4752131d0bc42fe4a311dbc9e4115f790bc7dafc1d8616d23",
+  "Cassette/Services/Playback/MediaTransferCoordinator.swift": "fd3cd8831920a6c6d10e743e46f8941da8d4f797f6a256ba8c100887a47b8064",
+  "Cassette/Services/Playback/PlaybackMeterMailbox.swift": "ba30265a85d7dee4b9c2b56c48718c12b18bca7f5bf00ab1799da6b97482aeff",
+  "Cassette/Services/Playback/PlaybackContext.swift": "871fc03ca3f9b820b0481de73b6e1b50a9062f498c280ada05ca4d12a2c6a4a6",
+  "Cassette/Utilities/CostBoundedCache.swift": "487958582bcef57f9359f2973b726dd38dcaf708c55a89281356ded044746d81",
+  "Cassette/Utilities/ExpiringBoundedCache.swift": "e53172947d1bbdd4783c1a1121e2bd36409b1f19eb0bc538754dcd3e94b6a664"
+}

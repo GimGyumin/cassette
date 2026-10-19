@@ -42,6 +42,7 @@ struct FullPlayerExpandedView: View {
     @State private var isTrackDownloaded = false
     @State private var draggedQueueIndex: Int?
     @State private var dropTargetGap: Int?
+    @AppStorage("cassette.visuals.animatedArtwork") private var animatedArtwork = true
     @AppStorage("cassette.lastVolume") private var localVolume: Double = 0.7
 
     private var playerState: PlayerState? { container?.playerState }
@@ -57,7 +58,7 @@ struct FullPlayerExpandedView: View {
     private var playbackQuality: AudioQualityKind? {
         guard let playerState, !playerState.isLiveStream, let track = currentTrack else { return nil }
         return AudioQualityClassifier.displayablePlaybackQuality(
-            for: track,
+            for: playerState.currentPlaybackTrack ?? track,
             isExpensive: container?.serverState.isExpensive == true,
             isTranscoding: playerState.isDeliveringTranscodedAudio
         )
@@ -343,43 +344,13 @@ struct FullPlayerExpandedView: View {
         )
     }
 
-    /// Apple Music–like soft blurred cover wash (static — no mesh motion).
     private var softArtBackground: some View {
-        let palette = generatePalette(from: dominantColor)
-        return Color.black
-            .overlay {
-                ZStack {
-                    if let artworkImage {
-                        Image(platformImage: artworkImage)
-                            .resizable()
-                            .scaledToFill()
-                            .scaleEffect(1.35)
-                            .blur(radius: 72, opaque: true)
-                            .opacity(0.55)
-                    }
-
-                    LinearGradient(
-                        colors: [
-                            palette.mid.opacity(0.55),
-                            palette.dark.opacity(0.75),
-                            Color.black.opacity(0.55),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-
-                    RadialGradient(
-                        colors: [Color.clear, Color.black.opacity(0.35)],
-                        center: .center,
-                        startRadius: 80,
-                        endRadius: 700
-                    )
-                }
-                .clipped()
-            }
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
-            .animation(.easeInOut(duration: 0.5), value: dominantColor)
+        AppleMusicLyricsBackground(
+            coverImage: artworkImage,
+            fallbackColor: generatePalette(from: dominantColor).dark,
+            isPlaying: isPlaying,
+            animated: animatedArtwork && selectedPanel == .lyrics
+        )
     }
 
     // MARK: - Player Column

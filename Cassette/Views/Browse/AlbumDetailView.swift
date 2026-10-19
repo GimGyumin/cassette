@@ -238,6 +238,7 @@ struct AlbumDetailContentView: View {
     /// value — the page was rebuilt, or SwiftUI re-applied the same id — must not re-run the whole
     /// album + More-By + description load behind whatever page is open on top of this one.
     @State private var loadedForOnlineState: Bool?
+    @State var resolvedThemeCoverID: String?
     @Query private var albumFavoriteMatches: [FavoriteRecord]
     @Query var downloadedAlbumTracks: [DownloadedTrack]
 
@@ -254,12 +255,12 @@ struct AlbumDetailContentView: View {
     /// Cover id the album theme is keyed on.
     var albumCoverId: String { viewModel?.coverArtId ?? coverArtId ?? albumId }
     var isLoadingSkeleton: Bool {
-        viewModel == nil || (viewModel?.isLoading == true && viewModel?.songs.isEmpty == true)
+        viewModel == nil
+            || (viewModel?.isLoading == true && viewModel?.isPrimaryContentReady != true)
+            || resolvedThemeCoverID != albumCoverId
     }
-    /// Music.app keeps white ink on medium-bright chromatic album pages. Reserve black
-    /// ink for genuinely near-white artwork where white would disappear.
     private var usesWhiteAlbumInk: Bool {
-        atmosphere.isThemed && atmosphere.pageColor.luminance < 0.72
+        atmosphere.isThemed && !atmosphere.isLight
     }
     private var albumChromeColorScheme: ColorScheme? {
         guard atmosphere.isThemed else { return nil }
@@ -354,6 +355,7 @@ struct AlbumDetailContentView: View {
             if let vm = viewModel, !vm.songs.isEmpty {
                 return vm.songs
             }
+            if isOnline, viewModel == nil || viewModel?.isLoading == true { return [] }
             return offlineFallbackSongs
         }
     }
@@ -366,13 +368,20 @@ struct AlbumDetailContentView: View {
                 compactAlbumBody
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay {
+            if isLoadingSkeleton {
+                AlbumAtmosphereBackground(atmosphere: atmosphere)
+                    .overlay { ProgressView().tint(headerTextColor) }
+            }
+        }
         .refreshable { await viewModel?.load() }
         // More by reserves its own bottom inset; otherwise use the shared margin.
         .modifier(AlbumMiniPlayerMargin(enabled: !showsMoreByShelf))
         // Music's album artwork begins below the navigation controls. Full-bleed is
         // reserved for artist imagery; applying it here pulls the cover under the bar.
         .modifier(AlbumTopBleedModifier(bleed: false))
-        .cassetteHideTopScrollEdgeEffect()
+        .cassetteSoftTopScrollEdge()
         .cassetteStatusBarScrim(isLightPage: albumChromeColorScheme == .light)
         .cassetteDestructiveAlert(
             "Remove downloaded album?",
@@ -484,7 +493,8 @@ struct AlbumDetailContentView: View {
                     libraryService: c.libraryService,
                     downloadService: c.downloadService,
                     toastService: c.toastService,
-                    serverState: c.serverState
+                    serverState: c.serverState,
+                    libraryIndex: c.libraryIndexService
                 )
             }
             let isOnline = c.serverState.isOnline
@@ -505,7 +515,11 @@ struct AlbumDetailContentView: View {
             }
         }
         .task(id: albumCoverId) {
-            await resolveDominantColor(coverArtId: albumCoverId)
+            let requestedCoverID = albumCoverId
+            await resolveDominantColor(coverArtId: requestedCoverID)
+            guard !Task.isCancelled, albumCoverId == requestedCoverID else { return }
+            // Missing/offline artwork is a completed fallback, not an infinite spinner.
+            resolvedThemeCoverID = requestedCoverID
         }
         .onAppear {
             Logger.ui.debug("[NAV] album appear instance=\(pageInstanceID, privacy: .public) album=\(albumId, privacy: .public)")

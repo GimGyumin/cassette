@@ -58,6 +58,10 @@ private struct PlayerThemeKey: Equatable {
     let coverId: String?
     let override: Color?
     let isActive: Bool
+    let serverID: UUID?
+    let uploadVersion: Int
+    let artworkRevision: UInt64
+    let allowsArtworkNetwork: Bool
 }
 
 struct FullPlayerView: View {
@@ -75,7 +79,9 @@ struct FullPlayerView: View {
     var openWithLyrics: Bool = false
     var openWithQueue: Bool = false
 
-    @State private var vm = FullPlayerViewModel()
+    @State private var fallbackViewModel = FullPlayerViewModel()
+    private var vm: FullPlayerViewModel { container?.fullPlayerViewModel ?? fallbackViewModel }
+    @AppStorage("coverArtUploadVersion") private var coverArtUploadVersion = 0
     @State private var surface: PlayerSurface = .player
     private var showLyrics: Bool { surface == .lyrics }
     @State private var lyricsViewModel: LyricsViewModel?
@@ -129,19 +135,38 @@ struct FullPlayerView: View {
             ?? playerState.currentTrack?.effectiveCoverArtId
     }
 
+    private func playerCoverImage(for coverID: String) -> PlatformImage? {
+        if vm.themeColor(for: coverID, serverID: container?.serverState.activeServer?.id) != nil,
+           let image = vm.coverImage(for: coverID) { return image }
+        return container?.artworkImageCache.cachedImage(for: coverID, tier: .hero)
+            ?? container?.artworkImageCache.cachedImage(for: coverID, tier: .thumb)
+    }
+
     var body: some View {
         if let playerState = container?.playerState {
             let themeCoverId = resolvedPlayerCoverId(playerState)
+            let themeKey = PlayerThemeKey(
+                coverId: themeCoverId,
+                override: colorExtractor.colorOverride(for: themeCoverId ?? ""),
+                isActive: scenePhase == .active,
+                serverID: container?.serverState.activeServer?.id,
+                uploadVersion: coverArtUploadVersion,
+                artworkRevision: vm.artworkRevision,
+                allowsArtworkNetwork: container?.artworkImageCache.allowsNetworkDownloads == true
+            )
             content(playerState)
                 .appEntityIdentifier(nowPlayingEntityIdentifier(playerState))
-                .task(id: PlayerThemeKey(coverId: themeCoverId, override: colorExtractor.colorOverride(for: themeCoverId ?? ""), isActive: scenePhase == .active)) {
+                .task(id: themeKey) {
                     guard scenePhase == .active else { return }
                     for attempt in 0..<3 {
                         if attempt > 0 {
                             do { try await Task.sleep(for: .seconds(attempt * 2)) } catch { return }
                         }
                         guard !Task.isCancelled else { return }
-                        await vm.updateColors(for: themeCoverId, colorExtractor: colorExtractor, container: container)
+                        await vm.updateColors(
+                            for: themeCoverId, colorExtractor: colorExtractor,
+                            container: container, uploadVersion: coverArtUploadVersion
+                        )
                         guard let themeCoverId, vm.coverImage(for: themeCoverId) == nil else { return }
                     }
                 }
@@ -163,14 +188,10 @@ struct FullPlayerView: View {
                         match: LyricsMatchInfo(song: track)
                     )
                     lyricsViewModel = newVM
-                    if showLyrics {
-                        newVM.setVisible(true)
-                    }
                     await newVM.load()
                     if newVM.shouldAutoDismissLyrics {
                         withAnimation(CassetteAnimation.surface) { surface = .player }
                     } else if showLyrics {
-                        newVM.setVisible(true)
                         newVM.reconcileTracking()
                     }
                 }
@@ -186,7 +207,6 @@ struct FullPlayerView: View {
                             surface = .player
                             return
                         }
-                        lyricsViewModel?.setVisible(true)
                         showLyricsChromeTemporarily()
                     } else {
                         lyricsChromeAutoHideTask?.cancel()
@@ -254,8 +274,9 @@ struct FullPlayerView: View {
     private func content(_ playerState: PlayerState) -> some View {
         let coverArtId = resolvedPlayerCoverId(playerState) ?? ""
         let dominant: Color = {
-            if vm.dominantColor != .black { return vm.dominantColor }
-            let source = colorExtractor.cachedColor(for: coverArtId) ?? .black
+            if let prepared = vm.themeColor(for: coverArtId, serverID: container?.serverState.activeServer?.id) { return prepared }
+            let source = colorExtractor.colorOverride(for: coverArtId)
+                ?? colorExtractor.cachedColor(for: coverArtId) ?? .black
             if source == .black || source == .clear { return .black }
             return CoverColorRefiner.playerAtmosphere(from: source).pageColor
         }()
@@ -277,14 +298,11 @@ struct FullPlayerView: View {
             }
             .environment(\.cassettePlayingAccent, CassetteColors.accentForeground(on: dominant))
         .background {
-            BeatReactiveBackgroundView(
-                dominant: dominant,
-                top: vm.atmosphereTop == .black ? dominant : vm.atmosphereTop,
-                mid: vm.atmosphereMid == .black ? dominant : vm.atmosphereMid,
-                bottom: vm.atmosphereBottom == .black ? dominant : vm.atmosphereBottom,
-                isPlaying: isPlaying,
-                coverImage: atmosphereReady ? vm.coverImage(for: coverArtId) : nil,
-                freezeBeat: !animatedArtwork || !atmosphereReady || showLyrics || showingQueue || scenePhase != .active
+            AppleMusicLyricsBackground(
+                coverImage: playerCoverImage(for: coverArtId),
+                fallbackColor: dominant,
+                isPlaying: playerState.playbackState == .playing,
+                animated: animatedArtwork && atmosphereReady && !showingQueue
             )
         }
     }
@@ -302,13 +320,18 @@ struct FullPlayerView: View {
                 flowGap((showLyrics || showingQueue) ? surfaceHeaderTopInset : playerTopInset)
 
                 ZStack {
-                    if showLyrics, let lyricsVM = lyricsViewModel {
+                    if let lyricsVM = lyricsViewModel {
                         flowingLyricsContent(
                             playerState,
                             lyricsVM: lyricsVM,
                             hideChrome: hideChrome
                         )
-                    } else if showingQueue {
+                        .opacity(showLyrics ? 1 : 0)
+                        .allowsHitTesting(showLyrics)
+                        .accessibilityHidden(!showLyrics)
+                        .animation(.easeInOut(duration: 0.20), value: showLyrics)
+                    }
+                    if showingQueue {
                         flowingQueueContent(playerState)
                     }
 
@@ -349,6 +372,7 @@ struct FullPlayerView: View {
                             lyricsViewModel: lyricsViewModel
                         )
                         .id(playerState.currentTrack?.id ?? "empty")
+                        .transition(.identity)
                         .padding(.horizontal, CassetteSpacing.l)
                     }
 
@@ -490,7 +514,7 @@ struct FullPlayerView: View {
                 Spacer()
                     .frame(height: coverTopInset)
 
-                CoverArtView(id: coverArtId, size: 700, initialImage: vm.coverImage(for: coverArtId))
+                CoverArtView(id: coverArtId, size: 700, initialImage: playerCoverImage(for: coverArtId))
                     .aspectRatio(1, contentMode: .fit)
                     .frame(width: coverSize, height: coverSize)
                     .clipShape(RoundedRectangle(cornerRadius: CassetteCornerRadius.large, style: .continuous))
@@ -699,7 +723,7 @@ struct FullPlayerView: View {
             let artSide: CGFloat = isSource ? side : 64
             let artCorner: CGFloat = isSource ? corner : CassetteCornerRadius.standard
 
-            CoverArtView(id: coverArtId, size: 600, initialImage: vm.coverImage(for: coverArtId), contentMode: .fill)
+            CoverArtView(id: coverArtId, size: 600, initialImage: playerCoverImage(for: coverArtId), contentMode: .fill)
                 .frame(width: artSide, height: artSide)
                 .clipShape(RoundedRectangle(cornerRadius: artCorner, style: .continuous))
                 .shadow(color: .black.opacity(isSource ? 0.4 : 0), radius: isPlaying ? 28 : 18, y: isPlaying ? 14 : 10)
@@ -739,6 +763,7 @@ struct FullPlayerView: View {
                     lyricsViewModel: lyricsVM
                 )
                 .id("lyrics-header-\(playerState.currentTrack?.id ?? "empty")")
+                .transition(.identity)
             }
             .padding(.horizontal, CassetteSpacing.l)
             .padding(.top, CassetteSpacing.xs)
@@ -748,8 +773,12 @@ struct FullPlayerView: View {
                 viewModel: lyricsVM,
                 bottomChromeInset: hideChrome ? 20 : 8,
                 onInteraction: showLyricsChromeTemporarily,
-                consumesLineTapToRevealChrome: hideChrome
+                consumesLineTapToRevealChrome: hideChrome,
+                presentationIsVisible: showLyrics
             )
+            // Layout/matched artwork animate at the surface level; rebuilding every word's
+            // masks and measurements inside that transaction makes the transition hitch.
+            .animation(nil, value: surface)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 8)
             // Fade the scrolling lyrics into the header without placing a material layer

@@ -1,0 +1,3962 @@
+{
+  "capturedAt": "2026-10-13T06:05:42.285757+00:00",
+  "head": "e2cc0e5f6434c19eb8db88623723d6ae92f6b0fc",
+  "scope": "On-disk working tree; inventory and hashes are not a claim of line-by-line verification.",
+  "files": [
+    {
+      "path": "Cassette/App/AppContainer+Logout.swift",
+      "lines": 102,
+      "sha256": "fb3b89f345b4263bd2b7ff7c7047bb2d28838c43e03d031ef10b7857a9ef83d1"
+    },
+    {
+      "path": "Cassette/App/AppContainer.swift",
+      "lines": 959,
+      "sha256": "4aab557089a774624c932992079596136218a3f5d6f50ceacf903b78ddfa1752"
+    },
+    {
+      "path": "Cassette/App/CassetteApp.swift",
+      "lines": 561,
+      "sha256": "5470fdf5a57d75e57cd2fe1dac71d3c2588b4aafca8601b35ecad6c403e552a2"
+    },
+    {
+      "path": "Cassette/App/CassetteAppDelegate.swift",
+      "lines": 55,
+      "sha256": "9d951477c20307124eba87a3c04cee68ca9dd7f5c4083e246406c82178b13290"
+    },
+    {
+      "path": "Cassette/App/CassetteCommands.swift",
+      "lines": 62,
+      "sha256": "3a5d36419eae63b7851b27a8113806a53f58b616068e888b4a00e709ecd19424"
+    },
+    {
+      "path": "Cassette/App/CassetteNotifications.swift",
+      "lines": 83,
+      "sha256": "134a1ffb85aa886f8b07dacb47a4678dee25b8771dfad496497bcbd5eeb88f08"
+    },
+    {
+      "path": "Cassette/DesignSystem/CassetteAnimation.swift",
+      "lines": 54,
+      "sha256": "fdb653813f4490cbe1bcd3c59de09276d9766ec77055c69b1fa8fa2313cf1b59"
+    },
+    {
+      "path": "Cassette/DesignSystem/CassetteColors.swift",
+      "lines": 158,
+      "sha256": "91e2f81fbdae0c53c3308141fa8a6d05ff5c99c6735aa88a48c5dc0f68f8a41d"
+    },
+    {
+      "path": "Cassette/DesignSystem/CassettePlayingAccent.swift",
+      "lines": 22,
+      "sha256": "9403edba9295dbe5037d006034b185e16b869c58e53ae5e21c3a7e2af7f7a798"
+    },
+    {
+      "path": "Cassette/DesignSystem/CassetteSpacing.swift",
+      "lines": 206,
+      "sha256": "0a2cd254a94ea6f22a097a26016ac4541277ff65aaafa6dcfa180507d87a23ef"
+    },
+    {
+      "path": "Cassette/DesignSystem/CassetteSystemChrome.swift",
+      "lines": 95,
+      "sha256": "af257f5527f5467299839efc548fc55b38af483274f9c50f0cc82f161bf01766"
+    },
+    {
+      "path": "Cassette/DesignSystem/CassetteTypography.swift",
+      "lines": 50,
+      "sha256": "e12a762229f27648457a4a32e747ad55ba98ca838ffc33f52adb748459dbafb3"
+    },
+    {
+      "path": "Cassette/DesignSystem/ChromeAppearance.swift",
+      "lines": 157,
+      "sha256": "038816cfddcfde12b3a081ec2ad9ce3d5eb937b233716434aa40edf0bbcd6911"
+    },
+    {
+      "path": "Cassette/DesignSystem/ColorContrastUtils.swift",
+      "lines": 92,
+      "sha256": "65158cc2481aba93006730739b80a7c2dfa4c1f7023228a8c24f6334fe8a45c2"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AccountProfileToolbar.swift",
+      "lines": 66,
+      "sha256": "ab24d84b0c4244c3d4f6133930d1064b122c13f2f127891931b74558a0b864e7"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AdaptiveAlbumShelf.swift",
+      "lines": 73,
+      "sha256": "0d24015dda12d5416c3dbfa439b4ae028bc0dd88565f53966c084afcb4cf7d88"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AddMusicSheet.swift",
+      "lines": 707,
+      "sha256": "885dab7290f1a16d1afbac2cad8f4b05c8e2b1287e33bfc96023607fefd26fc1"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AlbumCard.swift",
+      "lines": 35,
+      "sha256": "f8f776be66d0440780d831dd4bc7d56f8584682c8af671a63a3fc6186f888d62"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AlbumGridCell.swift",
+      "lines": 50,
+      "sha256": "d7d832b0167d62b3dc86afabb78979e0b7e2c0258449f01ec28f52bbc45abfa3"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AlbumRow.swift",
+      "lines": 76,
+      "sha256": "08c1ec18aecdcfd911598ca56cf80ca48947d4d62d1c9a829ff7c6ba5ff26bc2"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AlbumSortMenu.swift",
+      "lines": 32,
+      "sha256": "acebef4843da357e7cb7cbd48b00e446a140baadd756fb24766373d67173e0bf"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AlphabetJumpBar.swift",
+      "lines": 164,
+      "sha256": "608e2cf6270a516dada3997627725b607c38d2e2d8ea62f68b7cdf37597e7773"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AppleMusicSearchBar.swift",
+      "lines": 131,
+      "sha256": "596327dc236b89262e185e5cd5cec39a043740fca978f19809538878c57502ed"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ArtistBioView.swift",
+      "lines": 74,
+      "sha256": "6acc9c495dcb1c08e9fc93eae20a95dcdf8e54e16d1ee449ea9759130f3c5914"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ArtistGridCard.swift",
+      "lines": 49,
+      "sha256": "cbddc89c3ff6e97f86e2af3f5c49ac39ec5d4fe16a386ebf0efd9b5a6f709e4f"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ArtistPlaceholderView.swift",
+      "lines": 49,
+      "sha256": "700b572a6b94de5e7bb5fcc82a67c70eae37e36fb2495d6e2b97c9a6a7158e41"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ArtistRow.swift",
+      "lines": 53,
+      "sha256": "f5336617d4f84eb0f8597bfd567247e3edc6777dacb2cad93a34657d35a8f61f"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ArtistSortMenu.swift",
+      "lines": 23,
+      "sha256": "c8ecd7df8dcd44c22791f5a9e0e4d8fcda5942f6f18f57ea282d60de6dc11197"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AudioFormatBadge.swift",
+      "lines": 24,
+      "sha256": "a494881d945106c27129b7e8c285b6becf07338d39fae656ee1b96294487207a"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/AudioQualityLabelView.swift",
+      "lines": 316,
+      "sha256": "a4ca2adff81a11525e2ee6f92363e6e2bcfd16a8e25fecdd1ea879e8435364a3"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/CassetteShareButton.swift",
+      "lines": 255,
+      "sha256": "395489728d21642c7f727e79458cddde9f8a692d4e97befc9261991a88d655ee"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/CassetteTapeIcon.swift",
+      "lines": 62,
+      "sha256": "338ec3223c4618c64eda6872728ae53bccc000a4ac1f889f95212406d5f998d2"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/CircleToolbarLabel.swift",
+      "lines": 24,
+      "sha256": "d35a81ede04ca2db48ea161930ad4cdab041e1e2957869e559459922f7ac20f5"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/CopyableCodeLabel.swift",
+      "lines": 62,
+      "sha256": "9c2b83d6892457f2833d2f3b49596cc063e3eec5e5487345e4b6beb7df142dbe"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/CoverArtCard.swift",
+      "lines": 56,
+      "sha256": "0073a12c11efd346ec3bd6c1c7ae9f1cb774fc7e9a77e74e7820844766df1e05"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/DeletePlaylistConfirmation.swift",
+      "lines": 45,
+      "sha256": "70393fb0e250a4666dcf4ed594fcfaebb4f5003def1e6fb226925f667f48d95a"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/DetailNavigationLink.swift",
+      "lines": 33,
+      "sha256": "a100e8db872645997091e8cda1d666b9d21b543ea10aa5ff159e48d88122be32"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/DocumentImagePicker.swift",
+      "lines": 71,
+      "sha256": "fdb27f573604bd93345dbd97156c41e9226f6dfb6c547574a42dbd533043cbea"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/EmptyStateView.swift",
+      "lines": 77,
+      "sha256": "9e276626d4a4a37b5768d34fca0553c8e39fa49b8f1df2f06062d049e0d38faa"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ExternalCoverView.swift",
+      "lines": 34,
+      "sha256": "b7bd9055a9aeb451bca8558bfed975ae72ae107a23f371a81904237cd6323d4c"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/GlassButtonModifier.swift",
+      "lines": 136,
+      "sha256": "fa6ca1fd7e127cd1c70dc5585862a4987967c5c9458dc3b14c1309d84ae490de"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/GoToDestinationMenuLabel.swift",
+      "lines": 30,
+      "sha256": "5b2c4782334fc0d7835f813846132b48345c6f6527405e09b3b2248fcdef760c"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ImagePickerController.swift",
+      "lines": 116,
+      "sha256": "8888ccbcbe062c5914972173c81eff394dfa85dd67a97c09004244d5315cfd1d"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ItemContextMenus.swift",
+      "lines": 1001,
+      "sha256": "4e185f6fc0627d5d2a56ca4fd22fb21bf90862eee0490771211f2ecca8a6bc77"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/JustifiedText.swift",
+      "lines": 90,
+      "sha256": "863aaecfcab1772fca8b2ccf37df8593c0d0959895cd9f2183969bb7c0df8a00"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/LoadingStateView.swift",
+      "lines": 145,
+      "sha256": "5270b4c1a8f2c4128bb460e9a815c3b8f9694f3e4ae12af6511c3ba02dad9a59"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/LyricInstrumentalDotsView.swift",
+      "lines": 44,
+      "sha256": "5716c2c172acbd0b466c97b606d4ab6fade9de68f6b9db8378451210abb183b9"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/Lyrics/CassetteLyricsTranslateButton.swift",
+      "lines": 144,
+      "sha256": "76ef70eb82dd417cfd2db1ae1690a1bc413bd33fb60ed873663fef7bfb48d7f4"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/Lyrics/LyricsLineView.swift",
+      "lines": 57,
+      "sha256": "beca0c787424bebee1a446f4d8b4b73d0bb9cb6d249dea584f3926189b6fa8a1"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/MarqueeText.swift",
+      "lines": 103,
+      "sha256": "1e3674b4b09c5164f515ef893e23640f9fbd4d16e9b630029c117fff4ba4e93b"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/MeshGradientBackground.swift",
+      "lines": 70,
+      "sha256": "cbe1fa95abca1bed77c20105f29bac603a94c9d2be0b9e331bfb21c4e4a88f9b"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/MiniPlayerBottomMargin.swift",
+      "lines": 37,
+      "sha256": "eca15e0e0e0edebbab72643fb478bd90af4b6ce1e390785161b5d3c1134a80b8"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/MusicShareDraggable.swift",
+      "lines": 54,
+      "sha256": "4b74807fb339dc11266dcd681c9657354d72bfe7234eb420821324cad62f05b7"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/NowPlayingBarsIndicator.swift",
+      "lines": 45,
+      "sha256": "74b6876e53bf817767ab61a8967c065ead3ddde97c818b47b68e3eb522429ed1"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/OnboardingStepView.swift",
+      "lines": 120,
+      "sha256": "d287bd7fc0e0ea6034065ec0b3349fd1ad7146070847d4261566faf9fcaab44e"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/PersonalMixCard.swift",
+      "lines": 83,
+      "sha256": "f4939f9b214e0270fd718d0b10050566e07722b23d41cd7ab33660c81379b4f4"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/PlayButton.swift",
+      "lines": 46,
+      "sha256": "77b22ee3b7520255e6acc82556fb1a7f55bcb6f448096c6cb3123b9a9a6927af"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/PlaylistCoverCarousel.swift",
+      "lines": 200,
+      "sha256": "2e37b025c4e58d6bafdced24bde8292c8ff48c9db7e26c6404d17f409db78b74"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/PlaylistCoverThumbnail.swift",
+      "lines": 91,
+      "sha256": "f436003f8ae971ae63501a1ffb1a5127f8a11d47fadbacd41993176ecd4bb219"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/RadioCard.swift",
+      "lines": 82,
+      "sha256": "7e537d51f97066d3838f6e22d68f52de15cdd16d0fe9914cfed63da17d5e8625"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ReorderIndicator.swift",
+      "lines": 44,
+      "sha256": "a5cc40ff7ed30245be89496095c3b7a04239ed573e21751b2d310b16c11e90d5"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/SearchHistoryEntryRow.swift",
+      "lines": 64,
+      "sha256": "696ff6a8164a10fb601e152d1d4568b0d70689a1cad0de7db48d9b694a9cc50c"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/SectionHeader.swift",
+      "lines": 27,
+      "sha256": "3607f6e2ca401d74a7c1e5846ec841c62009e10910f634bb1a119bf2d9613495"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ShareSheetWrapper.swift",
+      "lines": 19,
+      "sha256": "0df6a347233f79ba811949c5f635808ead96eeb0df28856fbb0f88cae0268be1"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/SimilarArtistCell.swift",
+      "lines": 45,
+      "sha256": "6a96f12210c7be2622135c455d16095cda9dd273ba018242c684755174449424"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/SongFilterMenu.swift",
+      "lines": 37,
+      "sha256": "7f1fb8887757078e58de168ebe66ac1105fb35f8603707594553f23607baca23"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/SongRow.swift",
+      "lines": 421,
+      "sha256": "0c88f4f551f9d74ce5b10bed1ce83c898b9d67ff55fb9eb9a20b1200c1cedbbc"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/SongSortMenu.swift",
+      "lines": 73,
+      "sha256": "85fa029bb25e11e27a74b3fcc1476ae254b34c40f4fece497eca51d8993da4c2"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/SquareCropView.swift",
+      "lines": 159,
+      "sha256": "d7c77a01f7cddda67be095f47be6f950d554c8dbfbf098b528d4765011181f47"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/StatusBarScrim.swift",
+      "lines": 130,
+      "sha256": "42fb4c470536ac1173747126859e599aa4048b5b2a6a47be4437fd8dbcafd7d7"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/SystemVolumeView.swift",
+      "lines": 193,
+      "sha256": "009a29eb82a064fb003b9d77019feb3750dfadb2a53893545ef1cf16116e0715"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ToastView.swift",
+      "lines": 118,
+      "sha256": "0cc905179d32ecd9801508d073aabc92d2da7f4f5bcc31e02b9cbc5357056fa3"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/TrackSkipSwipeModifier.swift",
+      "lines": 82,
+      "sha256": "bf43faed3ce3d519605233ac7b81d445ce40433ad8ecec099e445f08e28059a3"
+    },
+    {
+      "path": "Cassette/DesignSystem/Platform/Color+Cassette.swift",
+      "lines": 25,
+      "sha256": "3234f5a0940a12eaff929a5152d9dfe6d8c1691c03edb9dd78c5f221b12e4401"
+    },
+    {
+      "path": "Cassette/DesignSystem/Platform/FullScreenCover+Cassette.swift",
+      "lines": 22,
+      "sha256": "3a07511842cfa29e4df4b8943592d198620dcc62d2cb5a7c79e6dedb74954ea3"
+    },
+    {
+      "path": "Cassette/DesignSystem/Platform/ListStyles+Cassette.swift",
+      "lines": 17,
+      "sha256": "38b45bd9352919688f7fb198322b45ef2aedf71dd8bb3ac3df5fa6b02ba15c61"
+    },
+    {
+      "path": "Cassette/DesignSystem/Platform/NavigationTitle+Cassette.swift",
+      "lines": 35,
+      "sha256": "45dd0617cd669021be01ec4a4157c3f1667a3ed4aa12c1eb7d923b552c0201a5"
+    },
+    {
+      "path": "Cassette/DesignSystem/Platform/NavigationTransitions+Cassette.swift",
+      "lines": 37,
+      "sha256": "02a3d0992521e3cf665c9f2bd88c030a5755cf9bd3efdd93d0b4b0d87881c34d"
+    },
+    {
+      "path": "Cassette/DesignSystem/Platform/PlatformPasteboard.swift",
+      "lines": 27,
+      "sha256": "afefb2be64aa0322b55bdd6113124cdfb166e533397e3883980d6ddc71b218ed"
+    },
+    {
+      "path": "Cassette/DesignSystem/Platform/SharedBackground+Cassette.swift",
+      "lines": 21,
+      "sha256": "96c3c6429b8612bb31ac670427f80feacf1bad5561e9cd7b1f612fdcb0597d53"
+    },
+    {
+      "path": "Cassette/DesignSystem/SkeletonBlock.swift",
+      "lines": 44,
+      "sha256": "84fc5e3e93046b650e3da9a7237d8a254392e06d0a3ae2b2522dcebe23e99d8b"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/AlbumAtmosphere.swift",
+      "lines": 184,
+      "sha256": "aa62001c71efe435878aa9921fb645cb9d1165efc9c30fd4bd35e7f344524d55"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/AlbumAtmosphereBackground.swift",
+      "lines": 83,
+      "sha256": "45b2bc824a4ba448277f6940d120baa8ba337470017bca9db4831bbd4cbc8207"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/AlbumColorAnalyzer.swift",
+      "lines": 777,
+      "sha256": "805823e4f6ff61899ff5109509a53b3b4fcfe4a1b44c3a368ff2b5233c35b930"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/ArtworkColorAnalysis.swift",
+      "lines": 642,
+      "sha256": "ac9bbc24f2d07592c47d9d7404c6ec369718c3c0ccc9ddf8f3237e5031799227"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/Color+GradientAdjust.swift",
+      "lines": 69,
+      "sha256": "e21a30225d51c766316ca10190e88ccfdb0e36782c0d1732250137f515cd077a"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/ColorCache.swift",
+      "lines": 136,
+      "sha256": "80a3fd85ed23b09903887771f7a29e787dc5947fd0e8c9c10541a247701bb93b"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/ColorCluster.swift",
+      "lines": 29,
+      "sha256": "31af61f26784256f7cc52a1f03265136c2d2657ffde7c8266f50123af06626be"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/CoverColorRefiner.swift",
+      "lines": 130,
+      "sha256": "0213b77808ef5d9411e079aa15e6a171593c8ff712e210466cb1e6e5261c8f16"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/DynamicAlbumPalette.swift",
+      "lines": 210,
+      "sha256": "ad94d920f0c9318d232141aeb6dcc304aca8a9b4d8fb96df1f218a101bcb2a5b"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/ImmersiveCoverHero.swift",
+      "lines": 161,
+      "sha256": "d751c00ac96ff9a4aea497901d882be2d46313af6d878ed22a692ab66cf62395"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/PlaylistGradient.swift",
+      "lines": 235,
+      "sha256": "ba6e19b0ae1eb555f7d0520ded9fd79de9e24105f8950c1b8c30046c89c0f5b0"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/PlaylistTheme.swift",
+      "lines": 47,
+      "sha256": "8d65d68bd03f026a0c8099b8f873dab365b77ece845e36ea862a3d108b9d0e7e"
+    },
+    {
+      "path": "Cassette/DesignSystem/Theming/PlaylistThemedBackground.swift",
+      "lines": 170,
+      "sha256": "ae89f512322277596094671297ef102097d2273d3512d426a7ab0350262483cc"
+    },
+    {
+      "path": "Cassette/DesignSystem/WrappedYearPalette.swift",
+      "lines": 75,
+      "sha256": "6b75b141263c467ed2c08b79b75a0dc3084353fabbdf5baa34d2050eb98a2296"
+    },
+    {
+      "path": "Cassette/Keychain/KeychainService.swift",
+      "lines": 88,
+      "sha256": "62a991cf16cae3fa180cab7bf13356dabb33a7297bbe3d54014c25b05e67174b"
+    },
+    {
+      "path": "Cassette/Keychain/KeychainServiceProtocol.swift",
+      "lines": 12,
+      "sha256": "01d37a878e164531eed917f1aee025002caaf992bfe138e9bc0c23a03dc89fa7"
+    },
+    {
+      "path": "Cassette/Keychain/SensitiveSettingsStore.swift",
+      "lines": 86,
+      "sha256": "8bd83c12f19a27540f0f1cd859cf4b684053f26619d094ca0be5cc3af8a0f4eb"
+    },
+    {
+      "path": "Cassette/Keychain/ServerCredentials.swift",
+      "lines": 39,
+      "sha256": "f58a0d36496f6ec8bf9a0b80350b66d693f00b2e049969a34adc8e8ce1291296"
+    },
+    {
+      "path": "Cassette/Models/Domain/AdaptiveQualityPolicy.swift",
+      "lines": 149,
+      "sha256": "de8f91ebb9aadbe49b96197a0e45ddd8e376178ad73e2b0946eb9a3919dff135"
+    },
+    {
+      "path": "Cassette/Models/Domain/AlbumSort.swift",
+      "lines": 47,
+      "sha256": "2e3b13a94905ef95171bfc3a655243cbd345d350b65e72f4b9a2bc74e47cb277"
+    },
+    {
+      "path": "Cassette/Models/Domain/AlbumVersionMatcher.swift",
+      "lines": 106,
+      "sha256": "dfa8659be8ab410eb3dbd08959cc0fca50f16d4cb5fdab1e82fb78dd349e17c9"
+    },
+    {
+      "path": "Cassette/Models/Domain/ArtistSort.swift",
+      "lines": 44,
+      "sha256": "48c22b480b39faf0069c5cac9ddafd30f5a0b225485e30ceb5e145464e855a1b"
+    },
+    {
+      "path": "Cassette/Models/Domain/AtmosVariantCatalogue.swift",
+      "lines": 190,
+      "sha256": "94df47cb4f64ef4eee4ece9302dc3ab1373b7cb7edd5b9e79d701fe155fe8e17"
+    },
+    {
+      "path": "Cassette/Models/Domain/AudioQualityInfo.swift",
+      "lines": 568,
+      "sha256": "85c714fcbb4f10fb32afb9fe3441a293a8a90dc4be7af36ba95b0f6c82dc6cc0"
+    },
+    {
+      "path": "Cassette/Models/Domain/CacheFormat.swift",
+      "lines": 138,
+      "sha256": "923332d7dab2f83b26d4d054d6a45e334f4423ed980f0d60b3556734e082934f"
+    },
+    {
+      "path": "Cassette/Models/Domain/CassetteError.swift",
+      "lines": 84,
+      "sha256": "a8c18beed788f174199a029ad8efd4b97a288b0fdaa4c2cc3b5ca35c88e64a6f"
+    },
+    {
+      "path": "Cassette/Models/Domain/ConnectionErrorPresentation.swift",
+      "lines": 15,
+      "sha256": "84b4203d7e3e61f83341202ce5f4d3f0cb50820f556e4c72289f9a20e4925613"
+    },
+    {
+      "path": "Cassette/Models/Domain/ConnectionTestError.swift",
+      "lines": 150,
+      "sha256": "3ae4b48f41a7c804be7461a78cc703e81a5c60859412458648d58dd8de0720bd"
+    },
+    {
+      "path": "Cassette/Models/Domain/DisplayableSong.swift",
+      "lines": 329,
+      "sha256": "79b889bcbbc688a68aaf7036797240f047c74092ff077e0e967b0783b8149723"
+    },
+    {
+      "path": "Cassette/Models/Domain/DownloadedAlbumDisplay.swift",
+      "lines": 86,
+      "sha256": "6519eff72e53129bc43c09e11d3d0d51ba653615cce34505860205028f083ae2"
+    },
+    {
+      "path": "Cassette/Models/Domain/FeaturedArtist.swift",
+      "lines": 45,
+      "sha256": "376a0ac54cfb87c55da2ed4999bc3ba6673821ae3c6ac5580bec5d51615d0cca"
+    },
+    {
+      "path": "Cassette/Models/Domain/IntegrationIntroPreference.swift",
+      "lines": 10,
+      "sha256": "4cdc90ac30ce5e82fde631df2c75c7e3512c0317ec92102502681a70609002b4"
+    },
+    {
+      "path": "Cassette/Models/Domain/LyricTranslationFailure.swift",
+      "lines": 33,
+      "sha256": "0124d31dd81fac35639b6be238675d0e41d1509fd3a1c88ef8fed891df89890f"
+    },
+    {
+      "path": "Cassette/Models/Domain/LyricsError.swift",
+      "lines": 13,
+      "sha256": "f75c068a9d6f9eb7206515673bc46ba95998a07b80c0c0c21f80af1290794ced"
+    },
+    {
+      "path": "Cassette/Models/Domain/MediaSource.swift",
+      "lines": 150,
+      "sha256": "21dec8890ad5a2c4ebfeaee585041a63522bc42e451d2739da40e8b23646d2a8"
+    },
+    {
+      "path": "Cassette/Models/Domain/NowPlayingSnapshot.swift",
+      "lines": 83,
+      "sha256": "95bf43270ca9bb4272075537a68a5d4eeb3bd72deecc994eb5ad049cabffbe95"
+    },
+    {
+      "path": "Cassette/Models/Domain/OriginalArtwork.swift",
+      "lines": 7,
+      "sha256": "7c0d3016541a5971dc3579ec91a309dc269a2c59fd9111b99a371820fc89620d"
+    },
+    {
+      "path": "Cassette/Models/Domain/PlaybackDecisionPolicy.swift",
+      "lines": 186,
+      "sha256": "d09dcf55a59635b5b7e11d96ff02cb32f1365a47185cb0bcd05af6b0722f1c42"
+    },
+    {
+      "path": "Cassette/Models/Domain/PlaybackDetails.swift",
+      "lines": 99,
+      "sha256": "885707c3efae25fce480403b635e081a6b1ff6b5b33475276b0298b18f129331"
+    },
+    {
+      "path": "Cassette/Models/Domain/PlaybackDurationPolicy.swift",
+      "lines": 17,
+      "sha256": "2c0a4c93e0eea2ff492befcd26762058281fdff1e3a8a75904a63e61b0c1e607"
+    },
+    {
+      "path": "Cassette/Models/Domain/PlaybackEventDTO.swift",
+      "lines": 25,
+      "sha256": "ede13a3d8fc2a44106cd028a7e7533dfe98cbb5cfbed3dfeb4a0bfa834d79336"
+    },
+    {
+      "path": "Cassette/Models/Domain/PlaybackState.swift",
+      "lines": 113,
+      "sha256": "92b6f9dd685a59d18999ea51ed6a669ade48f87358900caaf94c7fa8819da2e3"
+    },
+    {
+      "path": "Cassette/Models/Domain/PreparationETA.swift",
+      "lines": 24,
+      "sha256": "5d43ab642e68f886dde681c57faa37ea5c2ddf30b47dd52c5548de903e21dce3"
+    },
+    {
+      "path": "Cassette/Models/Domain/RepeatMode.swift",
+      "lines": 30,
+      "sha256": "467476ea78a21a8bd3d7716bd8848522b8cab9cda9eea1cd60d86407734e3242"
+    },
+    {
+      "path": "Cassette/Models/Domain/SearchCategory.swift",
+      "lines": 16,
+      "sha256": "8bb39c6f0154945b146af922f05ead8a1b58930bfe2ee3ea7c09b3a84d905d37"
+    },
+    {
+      "path": "Cassette/Models/Domain/SearchPageRequest.swift",
+      "lines": 11,
+      "sha256": "33bd37fee355a73693c2da9659f13e6a03efa9f5eec44be85dcec508e93ced34"
+    },
+    {
+      "path": "Cassette/Models/Domain/SongListFilter.swift",
+      "lines": 36,
+      "sha256": "ef05eb86375a3fa2bfba37a64dc1bf2f3d38468e0f1c72d13ec0f92920967b32"
+    },
+    {
+      "path": "Cassette/Models/Domain/SongSort.swift",
+      "lines": 59,
+      "sha256": "c38b461d1debe768c95d22ebf43e25694ad30ea8b8d5a7991ddc336ddc0fcc20"
+    },
+    {
+      "path": "Cassette/Models/Domain/StorySlideTiming.swift",
+      "lines": 22,
+      "sha256": "210971415cd04c7731a0a91053d94b28c5ee8a8c60c7078bb796f9a5160842ce"
+    },
+    {
+      "path": "Cassette/Models/Domain/UserFacingError.swift",
+      "lines": 104,
+      "sha256": "6c3f541b2b727e07c95991b1fc34158b6bafcb174dcf8794aeac5aba3f38ca79"
+    },
+    {
+      "path": "Cassette/Models/Domain/WrappedData.swift",
+      "lines": 155,
+      "sha256": "2bc071743f2587f66051521987b1c798a1de269ff61d11f937afb5fc07800a66"
+    },
+    {
+      "path": "Cassette/Models/Domain/iOSAudioCapability.swift",
+      "lines": 129,
+      "sha256": "003ce460041abde0b1b8eee8e466f1fc63bf40ad2848790a241f2aeeaef88a66"
+    },
+    {
+      "path": "Cassette/Models/Integrations/ExternalReleaseProvider.swift",
+      "lines": 77,
+      "sha256": "5489ce7826956ad43289f379a02c7c25b94f44bcfb1a8e09b118972d2e527503"
+    },
+    {
+      "path": "Cassette/Models/ListenBrainz/ListenBrainzSnapshot.swift",
+      "lines": 21,
+      "sha256": "761dcd31b1c35ca5f5118715b7d78048c4ff46249d2114a4ca67d1f10ba5fc17"
+    },
+    {
+      "path": "Cassette/Models/ListenBrainz/ListenBrainzValidation.swift",
+      "lines": 23,
+      "sha256": "9bd9a563a49dd74d379bdf831c0668687e14e03205b74a7160a1458a124ccd44"
+    },
+    {
+      "path": "Cassette/Models/LyricsSourcePreference.swift",
+      "lines": 82,
+      "sha256": "49814e1dbc234b9c33727e195edc1403f1b670bc28b98963f426888bd73bb5a2"
+    },
+    {
+      "path": "Cassette/Models/LyricsTranslationSettings.swift",
+      "lines": 225,
+      "sha256": "077ee4b743883ec711c82483b1bd1ef1c2dc228b855f4e6660575f1f072c6da1"
+    },
+    {
+      "path": "Cassette/Models/Navigation/HomeDestination.swift",
+      "lines": 66,
+      "sha256": "ab5ff285bee46f4dcf1c4b86878ac0099d28a32deaec2ab9f93b63010693725b"
+    },
+    {
+      "path": "Cassette/Models/Persistence/CachedLyrics.swift",
+      "lines": 25,
+      "sha256": "a933a0e7a78d40d01940164143fcc058be94ef1177f62ede563e97e01913455a"
+    },
+    {
+      "path": "Cassette/Models/Persistence/CachedTrack.swift",
+      "lines": 36,
+      "sha256": "92aad74d811cb24a5303740ed409f954dac19f76dc3220a392c618cf1d448e31"
+    },
+    {
+      "path": "Cassette/Models/Persistence/DownloadedAlbum.swift",
+      "lines": 55,
+      "sha256": "062e68cb41616bfa771ad14f2333634593f23210f58f66abac4fad02ae153bc0"
+    },
+    {
+      "path": "Cassette/Models/Persistence/DownloadedPlaylist.swift",
+      "lines": 54,
+      "sha256": "846219cbf945828493ef89aef27289098aa3edb08ff8e6af38a81e5dd616644d"
+    },
+    {
+      "path": "Cassette/Models/Persistence/DownloadedTrack.swift",
+      "lines": 138,
+      "sha256": "0cf62b1457025bcbe1047bceeeb816274ca98690c446c2f5a54d61b3c076ad22"
+    },
+    {
+      "path": "Cassette/Models/Persistence/FavoriteRecord.swift",
+      "lines": 33,
+      "sha256": "6d6c1b0c579a1f7a80fb7837775c12d0c6cc05453b689e0bd4eb20b94c64d0d8"
+    },
+    {
+      "path": "Cassette/Models/Persistence/JellyfinCapabilityRecord.swift",
+      "lines": 92,
+      "sha256": "30e53d4735cc5de5b311d6e457529e31fd2382734b71d1c912ba5a235fa5116c"
+    },
+    {
+      "path": "Cassette/Models/Persistence/LibraryMetadataSong.swift",
+      "lines": 87,
+      "sha256": "a7e7986f3f082031866c08db7d627e07669f4c4fe4b6992149c6d9885c320be4"
+    },
+    {
+      "path": "Cassette/Models/Persistence/PinnedItem.swift",
+      "lines": 49,
+      "sha256": "d67563f600c3deab8771d93052818f37498203e584c0b68efe6b58a7841ab791"
+    },
+    {
+      "path": "Cassette/Models/Persistence/PlaybackEvent.swift",
+      "lines": 66,
+      "sha256": "4d198162964901b687d983af9a9f4ed9fa3f728563e6488a340a2de6e8bde214"
+    },
+    {
+      "path": "Cassette/Models/Persistence/PlaybackSession.swift",
+      "lines": 86,
+      "sha256": "fbc3fbb30e20f23a12c47fb811d57ad58954e3f370a0cb76392bad162075216f"
+    },
+    {
+      "path": "Cassette/Models/Persistence/PlaylistCoverChoice.swift",
+      "lines": 49,
+      "sha256": "c5e63262578a37dedbdec86c823a682035a6ddc08fa2475fe00f792ee73f86d8"
+    },
+    {
+      "path": "Cassette/Models/Persistence/QueueSnapshot.swift",
+      "lines": 35,
+      "sha256": "22d5400aafa992f1e760940534a7e307da0984a822242a1c8a5eaabe147973b7"
+    },
+    {
+      "path": "Cassette/Models/Persistence/RemoteMediaIdentity.swift",
+      "lines": 97,
+      "sha256": "3c5ad6ecc106245c5cc5f7674afe615af7c995c928f83ab3a87debf47bf69e0f"
+    },
+    {
+      "path": "Cassette/Models/Persistence/SearchHistoryEntry.swift",
+      "lines": 29,
+      "sha256": "24438a9fa61301e8cc93ce5ccd0555d02bac39b66c93e2ab17161dbe2514ee20"
+    },
+    {
+      "path": "Cassette/Models/Persistence/ServerConfig.swift",
+      "lines": 39,
+      "sha256": "ffc0da484fca37a7828b3293637d5d5f47403e3fa595269e098970a8531b8b74"
+    },
+    {
+      "path": "Cassette/Models/Recommendations/AlbumRecommendation.swift",
+      "lines": 15,
+      "sha256": "3e4023fbec07aec91a8aef69c06407c9d3c15bbf985326cbb6580d12c603f8a6"
+    },
+    {
+      "path": "Cassette/Models/Recommendations/SimilarArtistRecommendation.swift",
+      "lines": 15,
+      "sha256": "709774294243c203293e7b6d8df615ff47f8c51be8a765476c353a3af5f01464"
+    },
+    {
+      "path": "Cassette/Models/ShareOptions.swift",
+      "lines": 13,
+      "sha256": "f3746837a9c9448ff0e292a49d6252ccaabdfbe8319d755e08dca7d9b49d9608"
+    },
+    {
+      "path": "Cassette/Models/ShareSettings.swift",
+      "lines": 190,
+      "sha256": "eed61ce639caee5e2dca7c32ddc13775cf4dc0447fc1fad7e24ee60ffe079629"
+    },
+    {
+      "path": "Cassette/Models/TranslatedLyric.swift",
+      "lines": 79,
+      "sha256": "a353401035d62ba2c81120a78dc7b7e30a8977b27f8992d36cf13dae80c89ddb"
+    },
+    {
+      "path": "Cassette/Models/Wrapped/WrappedStoryAvailability.swift",
+      "lines": 65,
+      "sha256": "4bed05e7690944aa886f9009944ec62dfd5ed6f044a1791fbba4f56e029ca66d"
+    },
+    {
+      "path": "Cassette/ObservableState/AppleMusicSettings.swift",
+      "lines": 240,
+      "sha256": "b1d3ba62dba45c36a72dc00876e248fd63fece481e0bfa844adcb122a20febda"
+    },
+    {
+      "path": "Cassette/ObservableState/CacheSettings.swift",
+      "lines": 101,
+      "sha256": "f319f0a2fae574cb1271223f0c2050fb423217c23dec00ced7ba2db0de2d462a"
+    },
+    {
+      "path": "Cassette/ObservableState/CrossfadeSettings.swift",
+      "lines": 130,
+      "sha256": "c489e15832f03f8d7f520c32e493db1f1eaa8b78823f4059a1bd8c4f69797ce9"
+    },
+    {
+      "path": "Cassette/ObservableState/GaplessSettings.swift",
+      "lines": 71,
+      "sha256": "528d480e438219543e154db7ccae5fe711535134bf93e419fffa20fd5f7f3a64"
+    },
+    {
+      "path": "Cassette/ObservableState/PlayerState.swift",
+      "lines": 78,
+      "sha256": "1022bc3356430aae3a8647db41ef556083f7418ccdabef7d7e35021e79765901"
+    },
+    {
+      "path": "Cassette/ObservableState/ReplayGainSettings.swift",
+      "lines": 185,
+      "sha256": "0932c3b099646a50a13d13e974fe6d28995cab055da2945687769b618137f14c"
+    },
+    {
+      "path": "Cassette/ObservableState/ServerState.swift",
+      "lines": 90,
+      "sha256": "1263ea14aacd2c69aca6713dc06d5da4809457266a6d9e24e94e3604ef0edd24"
+    },
+    {
+      "path": "Cassette/ObservableState/StreamingSettings.swift",
+      "lines": 142,
+      "sha256": "ac0ec2e94bc7d8f068a79a66f395f513fe2c927a4aff1e53d1d85d35236ca1ea"
+    },
+    {
+      "path": "Cassette/Services/AppleIntelligenceLyricsTranslator.swift",
+      "lines": 150,
+      "sha256": "c07e83c6cdcddfd28d1cb9589b3fb62cf8f3a451e042727384242a31598ad3c8"
+    },
+    {
+      "path": "Cassette/Services/AppleMusic/AppleMusicCatalogService.swift",
+      "lines": 325,
+      "sha256": "742fabeb547f86f377dd62f18292a69fe0ba034398b908fcc6584d5f3a8bfc27"
+    },
+    {
+      "path": "Cassette/Services/AppleTranslator.swift",
+      "lines": 130,
+      "sha256": "3c017e751b189a53401997c874df501e1152e7a874ee5e777cfc3fc8a424c1fd"
+    },
+    {
+      "path": "Cassette/Services/Cache/DescriptionCache.swift",
+      "lines": 194,
+      "sha256": "7a6031d72caaa443daa14a43efe72ac13e6b1206338c0d669aa59000ba1ef4b2"
+    },
+    {
+      "path": "Cassette/Services/Cache/ExternalArtworkCache.swift",
+      "lines": 234,
+      "sha256": "33b3841458325d6f79e7c2a080761ed438588883f517d0d11c00d901a1d397de"
+    },
+    {
+      "path": "Cassette/Services/Haptics/MusicHapticsController.swift",
+      "lines": 130,
+      "sha256": "e8b706bd92983067ad794c5dc3fc31ebb42799768ed10db445a91741926c4d05"
+    },
+    {
+      "path": "Cassette/Services/Implementations/AACDownloadEncoder.swift",
+      "lines": 96,
+      "sha256": "2a7fb3456ea96297631e564998b4281cb47235ceabf2aecdbb9187d6cb425bff"
+    },
+    {
+      "path": "Cassette/Services/Implementations/AlbumCoverPreloadService.swift",
+      "lines": 510,
+      "sha256": "aeb4dcbbb306e71b682da8163b2168dabd7f9f2108867f9b6386cf409de96f18"
+    },
+    {
+      "path": "Cassette/Services/Implementations/ArtworkImageCache.swift",
+      "lines": 794,
+      "sha256": "9a11b567ad6f6c8727080e93ebe3d088e391583a0efd08e0811e94fc4ac54a93"
+    },
+    {
+      "path": "Cassette/Services/Implementations/ArtworkLoader.swift",
+      "lines": 138,
+      "sha256": "5cd7f786c9884e062784df7fbb6891891fcc7066691300506716a3876bf23c9f"
+    },
+    {
+      "path": "Cassette/Services/Implementations/AudioFaststartRemuxer.swift",
+      "lines": 154,
+      "sha256": "a1526083ecde861bd25a43017ce566a8ea98bfc73f25cb9f7209ecd3fdf6f548"
+    },
+    {
+      "path": "Cassette/Services/Implementations/AudioResponseValidator.swift",
+      "lines": 78,
+      "sha256": "471b8c5fa50789627bade21ffa4bd7e13bbcfded7fc417e52d27bae4f0120a6e"
+    },
+    {
+      "path": "Cassette/Services/Implementations/BackgroundDownloadJournal.swift",
+      "lines": 142,
+      "sha256": "4f140c1ddf44a9f68b775b01136be509a52bd396b1d347f5e2a97fe559987e59"
+    },
+    {
+      "path": "Cassette/Services/Implementations/CacheService.swift",
+      "lines": 324,
+      "sha256": "8a09914df42d698262a0db1ba6c21dfe69530fc36153738ebf0c66b522a854db"
+    },
+    {
+      "path": "Cassette/Services/Implementations/CassetteBackgroundDownloads.swift",
+      "lines": 323,
+      "sha256": "ffae5ebd005dc4dc8d5fb77ffe4a4ca725cb5b8cc957a4dcb91a8598a87298c3"
+    },
+    {
+      "path": "Cassette/Services/Implementations/DominantColorExtractor.swift",
+      "lines": 304,
+      "sha256": "db8371afea8d6840c6561e44e8e725c60380a7fd4f0252b45ecb0a9176830b41"
+    },
+    {
+      "path": "Cassette/Services/Implementations/DownloadBatchRunner.swift",
+      "lines": 43,
+      "sha256": "92aba32ab432585b18f73e4a85a563bed55e9714924408ad944844e067cc9c04"
+    },
+    {
+      "path": "Cassette/Services/Implementations/DownloadService.swift",
+      "lines": 1394,
+      "sha256": "b1f3e6cdcfdc016ca9a049188a09f837ddfc997e028f915824ae8afe524c0810"
+    },
+    {
+      "path": "Cassette/Services/Implementations/FavoritesService.swift",
+      "lines": 199,
+      "sha256": "b7146831662f1f4e22deb8fdb0ad69722218b2be45549eb39326ed5daeccde3a"
+    },
+    {
+      "path": "Cassette/Services/Implementations/LibraryIndexService.swift",
+      "lines": 512,
+      "sha256": "e2b4fc42941d6082b079b0369120ae2b5338df972781cf75d548d5e887cbfe35"
+    },
+    {
+      "path": "Cassette/Services/Implementations/LibraryMetadataStore.swift",
+      "lines": 184,
+      "sha256": "f7739113c017fd64a4d48949ad8b88462ba4328b3ef424b0fe383a6bade42826"
+    },
+    {
+      "path": "Cassette/Services/Implementations/LibraryPreparationLiveActivityController.swift",
+      "lines": 202,
+      "sha256": "b639aa9c3dadab74e6248887c362c8221f67ae015b3cd4fe541afcd58c0e8358"
+    },
+    {
+      "path": "Cassette/Services/Implementations/LibraryPreparationService.swift",
+      "lines": 215,
+      "sha256": "b17ce072e09b791d0f8046c07acffd5fabe91db6864b41a87b64b411d628d851"
+    },
+    {
+      "path": "Cassette/Services/Implementations/LibraryScanService.swift",
+      "lines": 143,
+      "sha256": "95319a6814b3173de3ade2a7ad0d481b2698993424806875f4c84f072fdc7628"
+    },
+    {
+      "path": "Cassette/Services/Implementations/LibraryService.swift",
+      "lines": 840,
+      "sha256": "c3578de1dbbe10e630104e5bbcbfb77a1fdd2c40ce7f16c43dc3d57c0956a206"
+    },
+    {
+      "path": "Cassette/Services/Implementations/LyricsService.swift",
+      "lines": 750,
+      "sha256": "3324fe9f9912b68f549b672c9efe11b2d8026149fb52d75195dabfb54a1f2365"
+    },
+    {
+      "path": "Cassette/Services/Implementations/MediaIdentityReconciliationService.swift",
+      "lines": 297,
+      "sha256": "fe9848ba16fda2c978a9c439649bba5137b3bffbb183291f641f21434a440d11"
+    },
+    {
+      "path": "Cassette/Services/Implementations/MediaIdentityService.swift",
+      "lines": 449,
+      "sha256": "a65988d75bd0dea1aa6bff71d2f0bfb7cc73b24e7b279fa7da430332c5b7e3d9"
+    },
+    {
+      "path": "Cassette/Services/Implementations/MediaResolver.swift",
+      "lines": 387,
+      "sha256": "a6a8c5a85fc65b21183aa76f0ccc2eaf84afccc8093413caacd75feff0b512d1"
+    },
+    {
+      "path": "Cassette/Services/Implementations/NetworkMonitor.swift",
+      "lines": 37,
+      "sha256": "c5b1d7b933838da477fd7949d0c67ef2429e64169b8845212c833a7c67072f0d"
+    },
+    {
+      "path": "Cassette/Services/Implementations/NowPlayingBackgroundPreparation.swift",
+      "lines": 44,
+      "sha256": "d2310fd385b31944f77c438684634e8807683d8c20b305a579a36d4266f79458"
+    },
+    {
+      "path": "Cassette/Services/Implementations/NowPlayingService+Artwork.swift",
+      "lines": 242,
+      "sha256": "9e53ca4f063dca2fc46cd2288732ab1d15c52fc23cfdf944660f8cfd753c80ec"
+    },
+    {
+      "path": "Cassette/Services/Implementations/NowPlayingService+Commands.swift",
+      "lines": 265,
+      "sha256": "37831a9105525acaf9c0eba8ac31ce97e9c4dbb306dbe06ce2ccbad518fbf265"
+    },
+    {
+      "path": "Cassette/Services/Implementations/NowPlayingService+Update.swift",
+      "lines": 315,
+      "sha256": "e7761c9455f266c9c588b7d807a80fc7794119f6ba56f01c519ccd236b4e3d52"
+    },
+    {
+      "path": "Cassette/Services/Implementations/NowPlayingService.swift",
+      "lines": 100,
+      "sha256": "311c2c59a6634976d0ff642c5093e35a68967b226da72f31459418d1a1d6120c"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PinService.swift",
+      "lines": 161,
+      "sha256": "106b8c9b2bb339960d343f48cdf5f7f25cb0329efbe2e37a4474fb4843076ba3"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlaybackSessionService.swift",
+      "lines": 212,
+      "sha256": "dd927a806662a8f699baa4ad68a6fb19b3912ad4eeed7cc5cc9b9e2189365805"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Artwork.swift",
+      "lines": 162,
+      "sha256": "793074ecd00b68ea3b0eb0fd2f6173deb2d22c6209befaebec259a5889e12da8"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+AudioSession.swift",
+      "lines": 563,
+      "sha256": "38d316986957a72dfe035d9019fd5a18bc755ba235c7e6957398f9a4e61e7438"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Callbacks.swift",
+      "lines": 160,
+      "sha256": "31b504e0e51ce796d0319a0eb725c148abc48549b968c2947d9a596fbb3fbb02"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Controls.swift",
+      "lines": 549,
+      "sha256": "68cf52d878d980f896661d6f780ab7144e475c3cd3f3337d9996594173809fde"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Crossfade.swift",
+      "lines": 287,
+      "sha256": "5e50277f52a1ce91f6d4fcc6f3b655c4806511cae1ae406f771d7a1d8412331b"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Details.swift",
+      "lines": 9,
+      "sha256": "54f6613ec595607c47b54c00219881314b2e29c65c28489af0b7a2857d80cfab"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Engine.swift",
+      "lines": 720,
+      "sha256": "fc7458acfe92ce90820ab9fe167f2cb7a43c9e87fe876da5137f6a5b23393d1c"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Gapless.swift",
+      "lines": 610,
+      "sha256": "2395fc30c85fbb11663e5265b0922eb9e588d0b3082212e4a92e7887479bf450"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+NowPlaying.swift",
+      "lines": 269,
+      "sha256": "f008d1b3cab33484e5860e3c78dbb443f7ad227550a447b20cf902834452480f"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Progress.swift",
+      "lines": 370,
+      "sha256": "39ac73736e330c9a3f5903e6d6bce724db15cf24259f280175c0a4c2180374c4"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Queue.swift",
+      "lines": 408,
+      "sha256": "2aace2963dd4add51591814e78bae35dfa650735d6f00398ea09c032ea07705a"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Radio.swift",
+      "lines": 196,
+      "sha256": "98eeb4962c98fd6549a42f9c491f43fccd5b6b50824f98aaafb87ab2551dac73"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Reporting.swift",
+      "lines": 163,
+      "sha256": "52d0cce7d2e5b06a902f579e96a2470b48a28ef65bd8f505154f44764d028012"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Seeking.swift",
+      "lines": 185,
+      "sha256": "177ea59d43b1115bcc0095de0702d4591a86dc99ec9b69b2afc1a7bdda8a350f"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Session.swift",
+      "lines": 274,
+      "sha256": "1eff295898f6a1a46a4fbf23c674dff30af0ced5235ea12132b559dd556eee6f"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService+Transition.swift",
+      "lines": 584,
+      "sha256": "9bcf77da6737443936df0d3c655d6af5d140de5bab1faaa07b0b6307f8f56e92"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlayerService.swift",
+      "lines": 369,
+      "sha256": "4d2e368725d390518e83003f34564855d408f3f2e45e8901e204cdd9078fd9d5"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlaylistCoverManager.swift",
+      "lines": 102,
+      "sha256": "02a2badf1980bfbc3dab51db02b19cbaf1626224cee55ec7b86b487ffeca4245"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlaylistCoverStore.swift",
+      "lines": 72,
+      "sha256": "ac30553a188632c16b1c052ded1007f5d504aaef70da8fa80009c9ef0992452f"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlaylistGradientRenderer.swift",
+      "lines": 29,
+      "sha256": "431ba686bd29fa66c814e5298f9eb421c50835ca7a7bfcfb88594ad81e719448"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlaylistGradientResolver.swift",
+      "lines": 44,
+      "sha256": "fce89fd5cd68ca976fc362bcac95359574b21ce7a161ee883f09092d75b04fa6"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PlaylistService.swift",
+      "lines": 450,
+      "sha256": "6068f52a70fdb5299bf8eff3b33510e94b10804d3c8c4b17aaba94a5ccef96f1"
+    },
+    {
+      "path": "Cassette/Services/Implementations/PreparationArtworkStore.swift",
+      "lines": 51,
+      "sha256": "de4d29d2a61222f8f150a324bd55af024b9331416b8c263de83780d4a877476e"
+    },
+    {
+      "path": "Cassette/Services/Implementations/RadioService.swift",
+      "lines": 79,
+      "sha256": "52f38ac71d3c01cede09e880ef67b2cffac603a18feac795c728d84049b1a4e0"
+    },
+    {
+      "path": "Cassette/Services/Implementations/ReplayGainService.swift",
+      "lines": 122,
+      "sha256": "d96f19468e13f3b6fc8d06a42da06f472af67aaca9183c272fd0500de89a6e9d"
+    },
+    {
+      "path": "Cassette/Services/Implementations/ScrobbleThresholdDetector.swift",
+      "lines": 26,
+      "sha256": "2fc5bc35443bc3ba786e72edf84988d5a2268d8664ca7ad92be1343c975d262e"
+    },
+    {
+      "path": "Cassette/Services/Implementations/SearchDownloadStore.swift",
+      "lines": 26,
+      "sha256": "7b47777cbe1fdbbd94a8d6b6180f993b583ec86636ed057cc4280b982268de86"
+    },
+    {
+      "path": "Cassette/Services/Implementations/SearchHistoryService.swift",
+      "lines": 82,
+      "sha256": "6beb3a841be280d4d3c8cadafb83d454cbe04229c1694321aee70299447a85bd"
+    },
+    {
+      "path": "Cassette/Services/Implementations/ServerReachabilityMonitor.swift",
+      "lines": 214,
+      "sha256": "387f8e2f85216e50dce207adfa2a530e28fad53c7638fed103baddeb00406a18"
+    },
+    {
+      "path": "Cassette/Services/Implementations/ServerService.swift",
+      "lines": 580,
+      "sha256": "a9dd0cc3d482250c3d0a03335e6c7c4e9f218c1f24b022a1d5b78cbddfb47d98"
+    },
+    {
+      "path": "Cassette/Services/Implementations/SiriCatalogService.swift",
+      "lines": 433,
+      "sha256": "3cab677579e40c3f492406625287ad22c52f4d043d6851158bc68eaa635a80f4"
+    },
+    {
+      "path": "Cassette/Services/Implementations/StatsService.swift",
+      "lines": 415,
+      "sha256": "d00404a9e552e86209eaa6cdf7c35e52f8d4e10a0214288b4d6965eeaae73ced"
+    },
+    {
+      "path": "Cassette/Services/Implementations/StorageManagementService.swift",
+      "lines": 269,
+      "sha256": "972f07477192ca4510dea22ced97e78db0986594dadf96bcdd27d73ebfeeff80"
+    },
+    {
+      "path": "Cassette/Services/Implementations/ToastService.swift",
+      "lines": 94,
+      "sha256": "076359fd623ac72c60d592db3896272b2d40495626536fa5ed0c1129ed0712e8"
+    },
+    {
+      "path": "Cassette/Services/Implementations/WidgetSyncService.swift",
+      "lines": 318,
+      "sha256": "6774cb1d99f65effc1f7dd1c9886805aa4aa6750f19a6c3516108cd85839a202"
+    },
+    {
+      "path": "Cassette/Services/Implementations/WrappedCoverRenderer.swift",
+      "lines": 90,
+      "sha256": "6a3cf700cd52de9aae285c3c7235e4da97d1605ac5a639940547bf8d66d67093"
+    },
+    {
+      "path": "Cassette/Services/Implementations/WrappedPlaylistService.swift",
+      "lines": 259,
+      "sha256": "4c6c24e1fe4281c5bc0658aa873397661e155c5e2e90948db6dab2467e9d285c"
+    },
+    {
+      "path": "Cassette/Services/Integrations/ExternalArtistImageResolver.swift",
+      "lines": 251,
+      "sha256": "3aea1bf88b2d960a63bac04e50490f90a3ae621ee1f0e72ec79d91a906d9d0a1"
+    },
+    {
+      "path": "Cassette/Services/Integrations/ExternalDescriptionService.swift",
+      "lines": 856,
+      "sha256": "c3b77fb9fb4ea9108c49b3ed4fd65666e002f7ebd0ae2595ede423066c9e4c72"
+    },
+    {
+      "path": "Cassette/Services/Integrations/ExternalProvidersStore.swift",
+      "lines": 52,
+      "sha256": "7d1322f53abe0e27ad486d6a81adfdd92a94d7a689b72b808384ee7abb4a5960"
+    },
+    {
+      "path": "Cassette/Services/Intelligence/CassetteFoundationModel.swift",
+      "lines": 37,
+      "sha256": "f984af33577ccce95d9bd5c0e79ea5ba3609ac6fb6dd7a6a483b5cf5e8fb5d3f"
+    },
+    {
+      "path": "Cassette/Services/Intelligence/PlaylistGenerationService.swift",
+      "lines": 425,
+      "sha256": "a1c41dadcb7286279fc718cb687011aaece2216e50fa2070a297ea6bff5a2284"
+    },
+    {
+      "path": "Cassette/Services/Intelligence/SongInsightService.swift",
+      "lines": 308,
+      "sha256": "0343f4c919f3c78e9f0e5ff139a9e1484b320cc5c31d5802327d0f869777ebfe"
+    },
+    {
+      "path": "Cassette/Services/Jellyfin/JellyfinClient.swift",
+      "lines": 1116,
+      "sha256": "93dba657961a20b2d10edd7babf7f2c075d1f5f188102ddc3b437d8fa2e2da9b"
+    },
+    {
+      "path": "Cassette/Services/Jellyfin/JellyfinDeviceIdentity.swift",
+      "lines": 35,
+      "sha256": "e34780248357557160c28de261e814ff36cb16436cf004b63c4e997df539d379"
+    },
+    {
+      "path": "Cassette/Services/Jellyfin/JellyfinLANDiscoveryService.swift",
+      "lines": 224,
+      "sha256": "e25dbde469e8a2ca1fd29127677bd21ef79f1e0bab9685f7b139a8bebc8787d7"
+    },
+    {
+      "path": "Cassette/Services/Jellyfin/JellyfinMusicTransport+Mapping.swift",
+      "lines": 117,
+      "sha256": "5735f740369085c5ecec0730a78b7a1b526b0d0a0ea36b11b1018c26555127b3"
+    },
+    {
+      "path": "Cassette/Services/Jellyfin/JellyfinMusicTransport.swift",
+      "lines": 324,
+      "sha256": "d359503057822a2dd211309d4458758fd1ccb6b84c8d79e4dd8b6d2079ac0c69"
+    },
+    {
+      "path": "Cassette/Services/Jellyfin/JellyfinPlaylistArtwork.swift",
+      "lines": 20,
+      "sha256": "03da1b799e2bebc2eb13e84ab79da1e0ea888584bd3d42f989821f063c9cd851"
+    },
+    {
+      "path": "Cassette/Services/Jellyfin/JellyfinService.swift",
+      "lines": 425,
+      "sha256": "2a8a5fbf1c823c31c09506d2e333bba9202e8d02d3b8e93b19c3a1d94a13f96e"
+    },
+    {
+      "path": "Cassette/Services/Jellyfin/NavidromeJellyfinIDCodec.swift",
+      "lines": 78,
+      "sha256": "125ff67310f12886a7a62f22ad87554c7bb86dc7541b3f5cbed45e4ac48b6066"
+    },
+    {
+      "path": "Cassette/Services/Jellyfin/ServerEndpointNormalizer.swift",
+      "lines": 43,
+      "sha256": "0e96e1771320f87bd4a7520e0ece94ccf423131a1b55a5aaf6d13a7f5dee9ada"
+    },
+    {
+      "path": "Cassette/Services/ListenBrainz/LBFreshReleaseDTO.swift",
+      "lines": 48,
+      "sha256": "0030b7ceba181bd7b9301572d2b0d2ad697d8913febf57c1aecc7ea76e566a02"
+    },
+    {
+      "path": "Cassette/Services/ListenBrainz/LBSimilarArtistDTO.swift",
+      "lines": 46,
+      "sha256": "be27256bdd529755a170c82d3e8dc80cb3e94f3d8e009db528fe2c08f2e9b2cc"
+    },
+    {
+      "path": "Cassette/Services/ListenBrainz/LBSubmitListensDTO.swift",
+      "lines": 94,
+      "sha256": "14c1f69e9bce5ee0a9dce39c8aabef2603f390a08a75eb7054fd175111608bf8"
+    },
+    {
+      "path": "Cassette/Services/ListenBrainz/ListenBrainzClient.swift",
+      "lines": 368,
+      "sha256": "a8f5bacb036826ad0aa50ce7a42628a1a48c159cc9502f0f677e696936464e4c"
+    },
+    {
+      "path": "Cassette/Services/ListenBrainz/ListenBrainzError.swift",
+      "lines": 75,
+      "sha256": "1baaf5fbc7b87a00fbdd46b2c3b2d48ad1605f1f7ef553becd8aa356e94376ec"
+    },
+    {
+      "path": "Cassette/Services/ListenBrainz/ListenBrainzService.swift",
+      "lines": 372,
+      "sha256": "fc7cdea4237a75a984cdda1d3f1aa353c9fbde76dad08b7a0cd1be68e35554c3"
+    },
+    {
+      "path": "Cassette/Services/ListenBrainz/PendingListen.swift",
+      "lines": 20,
+      "sha256": "1ce4f64e92dbc627aef41a20461f075549bbc4457e30a20d112e7dd570d98958"
+    },
+    {
+      "path": "Cassette/Services/LyricTranslationBundler.swift",
+      "lines": 176,
+      "sha256": "edffb73ef7aa7e96d24b09d60f9306dc71c619f874143fe779f8f1517a9b6219"
+    },
+    {
+      "path": "Cassette/Services/Lyrics/AppleLyricDocument.swift",
+      "lines": 381,
+      "sha256": "022ae646ba6795098d4e108a06f135f3823ab921f83ea8192ffd781ae4fd4567"
+    },
+    {
+      "path": "Cassette/Services/Lyrics/AppleLyricTTMLParser.swift",
+      "lines": 270,
+      "sha256": "dabcbc55ac93b8283b6c579f0a4141ff8ed9cfe5814be18968c0ecf672e60478"
+    },
+    {
+      "path": "Cassette/Services/Lyrics/AppleMusicLyricsClient.swift",
+      "lines": 17,
+      "sha256": "2418e8292d4662b370eeec67c952435407249ba8d6482b38a5634b236886ee57"
+    },
+    {
+      "path": "Cassette/Services/Lyrics/ExternalLyricsProviding.swift",
+      "lines": 11,
+      "sha256": "8b63413d4aa2efc9651239dd3f9bd074476b7c18fb7b892aeae24567527a1ace"
+    },
+    {
+      "path": "Cassette/Services/Lyrics/LRCLIBClient.swift",
+      "lines": 187,
+      "sha256": "7a445c2cce8d1a01f34f35d31240fff84d69ca2e0610fdccbbeb724b227e963b"
+    },
+    {
+      "path": "Cassette/Services/Lyrics/LRCParser.swift",
+      "lines": 156,
+      "sha256": "d29af24fd7276aedad47219bd63a60730f5cccac540f4ea4bd962a49cf0fdd23"
+    },
+    {
+      "path": "Cassette/Services/Lyrics/LyricDocumentBuilder.swift",
+      "lines": 336,
+      "sha256": "7acd4b69532b26eba37f46c8d09e8dd952a516667021ac0b8c5eb6e873da8b08"
+    },
+    {
+      "path": "Cassette/Services/LyricsTranslationService.swift",
+      "lines": 280,
+      "sha256": "6a3f4cc23e4ee248ad1a906891d15b7d29b196ebec9ea7ba2fa53988f3fbe649"
+    },
+    {
+      "path": "Cassette/Services/LyricsTranslator.swift",
+      "lines": 31,
+      "sha256": "95e03b94742a18fe293b887f977fa7512c744c896618f135ab1abe250a61960c"
+    },
+    {
+      "path": "Cassette/Services/MusicBrainz/MusicBrainzCatalogService.swift",
+      "lines": 225,
+      "sha256": "4cf77d1816a125d6434fdef272332d38d3e8a9e4d3fc8de382ca707d776c0978"
+    },
+    {
+      "path": "Cassette/Services/Networking/CustomHeadersTransport.swift",
+      "lines": 64,
+      "sha256": "460b4d1f0a58cc439eda55dcb762cb7b17e7b3ef09d1f8ef6f37a394ad106dae"
+    },
+    {
+      "path": "Cassette/Services/Networking/ListenBrainzTransport.swift",
+      "lines": 36,
+      "sha256": "db3eff6de8c26c9eccfea96a481eb5b740368bce6063e2c00ceec9e5206d0667"
+    },
+    {
+      "path": "Cassette/Services/Networking/NetworkSpeedProbe.swift",
+      "lines": 155,
+      "sha256": "1aca6e0e4f850d341ff9d05116666fca3581c4bf112c18df235786571f7989d1"
+    },
+    {
+      "path": "Cassette/Services/OnDeviceLyricTranslation.swift",
+      "lines": 115,
+      "sha256": "c02e1ebada1ab17f681be387ced44b28ec3c3e99818c73e947cdfcd4b03e99c7"
+    },
+    {
+      "path": "Cassette/Services/OpenAITranslator.swift",
+      "lines": 173,
+      "sha256": "f987b7d00390b3d5135f0890844232134427c6b828614409f340e745f3a482a1"
+    },
+    {
+      "path": "Cassette/Services/Playback/AVPlayerPlaybackEngine.swift",
+      "lines": 475,
+      "sha256": "f773eeeebbd800cf795d9a032d196773bbf54c79cba064a9cbabed450e93345c"
+    },
+    {
+      "path": "Cassette/Services/Playback/AudioStreamingDelegate.swift",
+      "lines": 73,
+      "sha256": "ffbdeebb462da2b19e0212fb14b8f9257889ae9c368c34339a07caec757e92ee"
+    },
+    {
+      "path": "Cassette/Services/Playback/AudioStreamingPlayerEngine.swift",
+      "lines": 104,
+      "sha256": "7fdb30bb2ed85a71b90ef5f03aad9232cd7e5ddbd02f4110ac066c764c808b15"
+    },
+    {
+      "path": "Cassette/Services/Playback/CassetteMediaSessionController.swift",
+      "lines": 247,
+      "sha256": "03aa9f9fa2f98f768f64657f28d21522d58dc04d744c5015225506330cbcf04d"
+    },
+    {
+      "path": "Cassette/Services/Playback/GaplessPolicy.swift",
+      "lines": 85,
+      "sha256": "330e0eb2f6946f99b5069a705d65a72ef256ec927d951fdf6d44c226b705d479"
+    },
+    {
+      "path": "Cassette/Services/Playback/NativePlaybackMeterTap.swift",
+      "lines": 66,
+      "sha256": "4a54d8b5b3627046a4658e136f99e44afcf02d1b906df87463f50a7303431de8"
+    },
+    {
+      "path": "Cassette/Services/Playback/NowPlayingArtworkRevision.swift",
+      "lines": 16,
+      "sha256": "438d31297381f7a916fcfefd989e2896913a2a4ed79aebee5592c886206968e8"
+    },
+    {
+      "path": "Cassette/Services/Playback/PlaybackBeatMeter.swift",
+      "lines": 220,
+      "sha256": "16dcf59fc0de62758bd615b6db3414e2d0a519d8818bd779f18704c9308edcb3"
+    },
+    {
+      "path": "Cassette/Services/Playback/PlaybackBufferPolicy.swift",
+      "lines": 49,
+      "sha256": "7e530d9477d27130d2c49daf4e5405c2fafe1f05a57f78c651eef3fd0a5ffa5e"
+    },
+    {
+      "path": "Cassette/Services/Playback/PlaybackCheckpointScheduler.swift",
+      "lines": 28,
+      "sha256": "6d644912199d79dcf771f69df381fb2d96f220e034ca39aa1e91bbe8d899315f"
+    },
+    {
+      "path": "Cassette/Services/Playback/PlaybackEngine.swift",
+      "lines": 57,
+      "sha256": "5582c970c97426ba7ec82b6702a901d9d68d5e300390b73efd1bf391e40802c4"
+    },
+    {
+      "path": "Cassette/Services/Protocols/CacheServiceProtocol.swift",
+      "lines": 43,
+      "sha256": "355130518b05e0807965b744f2883b9fa048bf4d4c36a0abfcd1466f5e794a11"
+    },
+    {
+      "path": "Cassette/Services/Protocols/DownloadServiceProtocol.swift",
+      "lines": 99,
+      "sha256": "9b7a746f1489659ca0ffbf600df8d0535e474989da853f49501014a38ce80d1f"
+    },
+    {
+      "path": "Cassette/Services/Protocols/FavoritesServiceProtocol.swift",
+      "lines": 20,
+      "sha256": "95ace94f932779f5eefce60505899839950b37034fcff0de1720930294d028af"
+    },
+    {
+      "path": "Cassette/Services/Protocols/LibraryServiceProtocol.swift",
+      "lines": 144,
+      "sha256": "9cf636a373ca25e709c230838a0f660d6c06d4b346c3c77c273914814915e4d8"
+    },
+    {
+      "path": "Cassette/Services/Protocols/MediaResolverProtocol.swift",
+      "lines": 22,
+      "sha256": "a82701af06e573b32cb3094636d880aaf572e4847d74d4f12b801acefd8c9ede"
+    },
+    {
+      "path": "Cassette/Services/Protocols/NowPlayingServiceProtocol.swift",
+      "lines": 43,
+      "sha256": "49d8dc871181f9f169b89db997bbe2e94163184cf83f3d2ad4a45e72a7671668"
+    },
+    {
+      "path": "Cassette/Services/Protocols/PinServiceProtocol.swift",
+      "lines": 41,
+      "sha256": "dc54c209fdeee72e255ced7634174f201c7804ce0e29adf48e2119b21475c303"
+    },
+    {
+      "path": "Cassette/Services/Protocols/PlayerServiceProtocol.swift",
+      "lines": 78,
+      "sha256": "fce5dff516668b8ab8f567a36fc2978da7dd4994a70e9fba6f3877ef7f5d9f88"
+    },
+    {
+      "path": "Cassette/Services/Protocols/PlaylistServiceProtocol.swift",
+      "lines": 34,
+      "sha256": "6ccb49d3379ef7db75a7faf605148a8d4d36e1c4e7b14000257d3084e7adaaa3"
+    },
+    {
+      "path": "Cassette/Services/Protocols/RadioServiceProtocol.swift",
+      "lines": 19,
+      "sha256": "c09b98d3339bec094269d07f46772aef89856e2e49186745c9639be096318f53"
+    },
+    {
+      "path": "Cassette/Services/Protocols/RecommendationProvider.swift",
+      "lines": 16,
+      "sha256": "e7405b10f85e3fe554e718c3d1ecf39486b60d38428c7f55a71d829c74395638"
+    },
+    {
+      "path": "Cassette/Services/Protocols/ServerServiceProtocol.swift",
+      "lines": 111,
+      "sha256": "4b13bcf22f53a66e1751e8a06548926aaa1fa2b7a6896b8fc81f65f88f801b7d"
+    },
+    {
+      "path": "Cassette/Services/Protocols/SiriCatalogServiceProtocol.swift",
+      "lines": 62,
+      "sha256": "f80c4a974407a8a6963765e51a3efa2f4284da6b398de535a37d47f5c3be0c23"
+    },
+    {
+      "path": "Cassette/Services/Recommendations/PersonalMixService.swift",
+      "lines": 403,
+      "sha256": "671a6117007e6f96d059ce080fc63918e37c1a8187d1c8cdaa7426b8297a3f2b"
+    },
+    {
+      "path": "Cassette/Services/Recommendations/Providers/ListenBrainzRecommendationProvider.swift",
+      "lines": 175,
+      "sha256": "38003a3cd530ef2d09b4932234ce44e2bf1efbd6a6bb0252267b2122c559d1d6"
+    },
+    {
+      "path": "Cassette/Services/Recommendations/Providers/SubsonicRecommendationProvider.swift",
+      "lines": 39,
+      "sha256": "8d1600194791d4c50a32a78bb21c87e2a8ddfa96327c0bee654e28a14ae15b3f"
+    },
+    {
+      "path": "Cassette/Services/Recommendations/RecommendationService.swift",
+      "lines": 44,
+      "sha256": "bfbf03eefc8243c1ce8922adecc7c93d78751d8ba845822fd0617f2c22fa2b13"
+    },
+    {
+      "path": "Cassette/Services/ShareService.swift",
+      "lines": 64,
+      "sha256": "8e57071c80a30a9ee3ccd9839291077a2148937bd243a9ce8ae06ab6a49d5252"
+    },
+    {
+      "path": "Cassette/Services/Spotify/SpotifyCatalogService.swift",
+      "lines": 414,
+      "sha256": "e5092f06223ef7915eab555d46f586686503020e57f69e6452415b08199152e0"
+    },
+    {
+      "path": "Cassette/Services/TranslationCache.swift",
+      "lines": 202,
+      "sha256": "aa7ab2fcdabfed1e6dfb794589ccb50c624e896cb9eae956cd3234f6604e1111"
+    },
+    {
+      "path": "Cassette/Services/WrappedPreferences.swift",
+      "lines": 103,
+      "sha256": "823dbedf57fc26e73b93370534f88d6703838b37eddb2189487165e836b4ae75"
+    },
+    {
+      "path": "Cassette/Shared/LibraryPreparationActivity.swift",
+      "lines": 132,
+      "sha256": "37ab56c62a65966602b094e7a563123c94dd17d4c3f37cf209886e0b97c9f3d9"
+    },
+    {
+      "path": "Cassette/Shared/NowPlayingBridge.swift",
+      "lines": 12,
+      "sha256": "bbbd6fa7c531b964a74ccc75149f122e108b00321ba0b376f5c73ee436d3b778"
+    },
+    {
+      "path": "Cassette/Shared/PlayPauseIntent.swift",
+      "lines": 15,
+      "sha256": "685fae8f063c42f55b9ad271bc8d3df2ed28785b93a1e7158927d0aaef64f67e"
+    },
+    {
+      "path": "Cassette/Shared/SharedNowPlayingState.swift",
+      "lines": 14,
+      "sha256": "18f3cb73df7c1e1113008c4bc73873c14c0e6524165cd8b614e956584a084fb7"
+    },
+    {
+      "path": "Cassette/Shared/SharedStorage.swift",
+      "lines": 130,
+      "sha256": "b473b530db3f958d5434fa4ec81b9fe507f55ffa0219998057a7c318f5d912f1"
+    },
+    {
+      "path": "Cassette/Shared/WidgetKind.swift",
+      "lines": 12,
+      "sha256": "77bad1b8e561da6b5be17033934dde666393884eb043bae1f24aa704e8ecba8c"
+    },
+    {
+      "path": "Cassette/Siri/Bridge/SiriBootGate.swift",
+      "lines": 56,
+      "sha256": "c897f1c7d61dec2214d971f0bae84325bc6150127130c5518ad062ea6553a608"
+    },
+    {
+      "path": "Cassette/Siri/Bridge/SiriBridge.swift",
+      "lines": 45,
+      "sha256": "b17aaeb773cf5b4267fce38976059ec39994535eea1c7edf6812447207f6aa3c"
+    },
+    {
+      "path": "Cassette/Siri/CassetteAppShortcuts.swift",
+      "lines": 25,
+      "sha256": "40517b5bd169e026d4e4a68fdf80ca5e1a47aae3b1fe8d05ad1c203ecb21ceb9"
+    },
+    {
+      "path": "Cassette/Siri/DeepLink/CassetteDeepLink.swift",
+      "lines": 48,
+      "sha256": "ded03961f98c39291e81355dc87c3086fc5dd722ae357b34c78ebf68d3a97fc1"
+    },
+    {
+      "path": "Cassette/Siri/Donation/SiriDonations.swift",
+      "lines": 38,
+      "sha256": "948894a52d0d1ef958ecb26fd428861cf3bc074505568aec00e62563cf6a770a"
+    },
+    {
+      "path": "Cassette/Siri/Entities/CassetteAlbumEntity.swift",
+      "lines": 54,
+      "sha256": "3c024d93eead6dd7f11e71be80c8e69295d9321a528b1cdf4978e48c3ef2a11a"
+    },
+    {
+      "path": "Cassette/Siri/Entities/CassetteArtistEntity.swift",
+      "lines": 47,
+      "sha256": "219bfaa90358fddc4e1a951b1b3e70702ed48f24527ac2cdaf218b6ba1576ade"
+    },
+    {
+      "path": "Cassette/Siri/Entities/CassetteAudioItem.swift",
+      "lines": 40,
+      "sha256": "6d587711ce0db38fa9d5ceb9c01a94d12f166f826c11597c4d06097921d944bb"
+    },
+    {
+      "path": "Cassette/Siri/Entities/CassettePlaylistEntity.swift",
+      "lines": 56,
+      "sha256": "908b884914f73d337dd35cd0d208746fc90b83b800bdf09090d4702c6d4d7915"
+    },
+    {
+      "path": "Cassette/Siri/Entities/CassettePlaylistOwner.swift",
+      "lines": 18,
+      "sha256": "d32eea63447ac660aa9221ef07d06571fb2e54700d3865ad035c243f5e35793e"
+    },
+    {
+      "path": "Cassette/Siri/Entities/CassetteSongEntity.swift",
+      "lines": 76,
+      "sha256": "cdbcab389bfcce6aa1d731b46f77fc05fbb72fcfb55a663f011097e49cb33618"
+    },
+    {
+      "path": "Cassette/Siri/Entities/CassetteWarmupAudioQueueResult.swift",
+      "lines": 25,
+      "sha256": "245356c243feb5138d01bdf4c17843763b6f4f394f3d49a3ffc4dc43ab65d861"
+    },
+    {
+      "path": "Cassette/Siri/EntityID.swift",
+      "lines": 36,
+      "sha256": "0d5de998fa49d5869ecd08b6bdac64a9beb2639ffc9a4095fd6d5d91afe6c528"
+    },
+    {
+      "path": "Cassette/Siri/Enums/CassetteAffinityState.swift",
+      "lines": 33,
+      "sha256": "0d7fc055e2598eac28f04c93726b5985a820f9552fc56c79db27fa2f387cd467"
+    },
+    {
+      "path": "Cassette/Siri/Enums/CassettePlaybackAttributes.swift",
+      "lines": 27,
+      "sha256": "05712f8bfed0cbfe2c4b55df080553117155ee0295a226720ac56dc5ef36d032"
+    },
+    {
+      "path": "Cassette/Siri/Enums/CassetteQueueInsertionLocation.swift",
+      "lines": 26,
+      "sha256": "06c70425c5778b11f8db41cd77203c1e7ff09512310c5ec10904d52d26b545ef"
+    },
+    {
+      "path": "Cassette/Siri/Intents/CassetteAddToPlaylistIntent.swift",
+      "lines": 47,
+      "sha256": "c56a3038eb9f57c2ca0cfaad9518684917a047a23ce2361ddbff724252fb8554"
+    },
+    {
+      "path": "Cassette/Siri/Intents/CassetteAudioIntentError.swift",
+      "lines": 50,
+      "sha256": "0be9b5386219e8a2c0a9e3bd6d4169f7fad8c8df31bad16a3219d249975aac0b"
+    },
+    {
+      "path": "Cassette/Siri/Intents/CassetteOpenSongIntent.swift",
+      "lines": 31,
+      "sha256": "4e75a8cd69a766473dd49c99217e990525493c60a519a73bbff649e3c8fcc55e"
+    },
+    {
+      "path": "Cassette/Siri/Intents/CassettePlayAudioIntent.swift",
+      "lines": 113,
+      "sha256": "3796b1fc49dca0ff0df3556f766b4e97d607a19c92f7ac6d9dd1fc3eadb3a920"
+    },
+    {
+      "path": "Cassette/Siri/Intents/CassetteSearchInAppIntent.swift",
+      "lines": 45,
+      "sha256": "da4e39c90f5fbaf8b02fc87f344e2078469012b8977a5ca5d8d5425148a16576"
+    },
+    {
+      "path": "Cassette/Siri/Intents/CassetteUpdateAudioAffinityIntent.swift",
+      "lines": 70,
+      "sha256": "f65572318685fbfc1f87ceef266d0faf910b31d4e224553973d2f345de2076b1"
+    },
+    {
+      "path": "Cassette/Siri/Intents/CassetteWarmupAudioQueueIntent.swift",
+      "lines": 88,
+      "sha256": "cfe1b4d010553fe428880bf1e6f4e2e8d2ff4414e28579ad8fb811d7d3bbbcfa"
+    },
+    {
+      "path": "Cassette/Siri/Mapping/CassetteAlbumEntity+Mapping.swift",
+      "lines": 58,
+      "sha256": "d97fb2374159f484761b52a4529184124e11d591e1a8f97102f515c3d0476a54"
+    },
+    {
+      "path": "Cassette/Siri/Mapping/CassetteArtistEntity+Mapping.swift",
+      "lines": 39,
+      "sha256": "75aa289995a00a3c3f3ff6578bda409f04a05ab9b2bf71d5927eb9bad5af72b0"
+    },
+    {
+      "path": "Cassette/Siri/Mapping/CassetteEntityDisplay.swift",
+      "lines": 29,
+      "sha256": "c9754ac9f5cf0a95b7ab007eade429fb8bae7fa000911d1ae36b32e84f7e0c43"
+    },
+    {
+      "path": "Cassette/Siri/Mapping/CassettePlaylistEntity+Mapping.swift",
+      "lines": 42,
+      "sha256": "8e668cdc1d1128bbed427a0da6026e1114b0b6384a77a750b4a5988158ffa7b7"
+    },
+    {
+      "path": "Cassette/Siri/Mapping/CassetteSongEntity+Mapping.swift",
+      "lines": 71,
+      "sha256": "2b324e264b4b0dbcc97ed8185d03d6bcb258aa822d0cb2f487cebf8188b61a82"
+    },
+    {
+      "path": "Cassette/Siri/Onscreen/OnscreenEntityAnnotation.swift",
+      "lines": 57,
+      "sha256": "4f0574d1e7672033a1b25d3e597307c0fb179c541090d9f145f002cd3ac1969d"
+    },
+    {
+      "path": "Cassette/Siri/Queries/CassetteAlbumQuery.swift",
+      "lines": 40,
+      "sha256": "97f3a884919229590c320351aee8e4a52286ae3aa2a1efedf177908d07009467"
+    },
+    {
+      "path": "Cassette/Siri/Queries/CassetteArtistQuery.swift",
+      "lines": 40,
+      "sha256": "7cc5b3a61ff48cf7b5e50cd853fd79ff784892a5e084e6aa4debdc7b7a00e8ac"
+    },
+    {
+      "path": "Cassette/Siri/Queries/CassetteAudioIntentValueQuery.swift",
+      "lines": 72,
+      "sha256": "4de513b50e896cf8372c68209a3354b79d2cc2e810691f59121ac5e37093b5a7"
+    },
+    {
+      "path": "Cassette/Siri/Queries/CassettePlaylistQuery.swift",
+      "lines": 40,
+      "sha256": "3547c166f5f6cc7854258471e9d9d2756a57543e26bfed399916869270662df3"
+    },
+    {
+      "path": "Cassette/Siri/Queries/CassetteSongQuery.swift",
+      "lines": 44,
+      "sha256": "4441ebe2e84e9db83260c802ee66b8cf931569a3fab919262af95ffbf22e7e2b"
+    },
+    {
+      "path": "Cassette/Siri/Spotlight/SpotlightIndexing.swift",
+      "lines": 145,
+      "sha256": "b3f49fff1440d63a8b15ff263a1e24e2b6b6df862aa11476a4bfdc8343f5ec89"
+    },
+    {
+      "path": "Cassette/Utilities/AppBootGate.swift",
+      "lines": 54,
+      "sha256": "14f858711a9c07c883fcc603e5f6e94bf371472b5c340a573ee8feb6b40f86c4"
+    },
+    {
+      "path": "Cassette/Utilities/AppLanguage.swift",
+      "lines": 306,
+      "sha256": "0b118144ce20375f4bec825af79683915d96b5dd9e7984f01cd992810c72bbb1"
+    },
+    {
+      "path": "Cassette/Utilities/CassetteCountLabel.swift",
+      "lines": 30,
+      "sha256": "fde790d5ab743bec4896a1cd88f3d134b6c21dbdcf33aa279116a24f4feb8d2d"
+    },
+    {
+      "path": "Cassette/Utilities/CassettePerformance.swift",
+      "lines": 112,
+      "sha256": "6a5b90aa3d77cb5caa307367cd263259dad9888ea79ab59e127d8f0f5015ed0a"
+    },
+    {
+      "path": "Cassette/Utilities/CassetteSystemSettings.swift",
+      "lines": 24,
+      "sha256": "dd7eb89dc928cc0c4e71d4b8e3ff0fd8a9c23c7e85e216a32b2426932f3e278c"
+    },
+    {
+      "path": "Cassette/Utilities/CassetteURLs.swift",
+      "lines": 13,
+      "sha256": "32050d969aa3a779a556ae9645c35cc46a8eaa8371ef3f2a3b8695c3c62022b1"
+    },
+    {
+      "path": "Cassette/Utilities/Color+Luminance.swift",
+      "lines": 34,
+      "sha256": "307405ccfa0984c36b2b72d7a05bd9435f69278ef2a418f84e7a30101cab82d9"
+    },
+    {
+      "path": "Cassette/Utilities/CostBoundedCache.swift",
+      "lines": 64,
+      "sha256": "487958582bcef57f9359f2973b726dd38dcaf708c55a89281356ded044746d81"
+    },
+    {
+      "path": "Cassette/Utilities/DurationFormatting.swift",
+      "lines": 59,
+      "sha256": "07a546eb6945a5eef7b769569b7a76a5a915fba31abcff5e9371f36bfc5427ec"
+    },
+    {
+      "path": "Cassette/Utilities/ExternalLinkOpener.swift",
+      "lines": 53,
+      "sha256": "e9c7143fff6145d08b9617b818f86cac9aa0dd44a2c04c026f38f3a1d3fec982"
+    },
+    {
+      "path": "Cassette/Utilities/HangulRomanization.swift",
+      "lines": 101,
+      "sha256": "eade6533b6c2fc2dcef01beb73e83db0fbabd2311ae2d289b07c93f1569c5d22"
+    },
+    {
+      "path": "Cassette/Utilities/HapticFeedback.swift",
+      "lines": 53,
+      "sha256": "ef41059f092d7584c019fe6495477940bf8a9b775ce52bd29e4df080563c2694"
+    },
+    {
+      "path": "Cassette/Utilities/HeaderValidator.swift",
+      "lines": 48,
+      "sha256": "8f2aaafbd0d26604d1fa60e7c13cfe40ad9225b5c027883ef838ad7225d1dc7e"
+    },
+    {
+      "path": "Cassette/Utilities/LibraryChangeDetector.swift",
+      "lines": 47,
+      "sha256": "feb090b7139ac10049a543da90377e73f1dc337dfc4a81c7ea63ff82643cf30b"
+    },
+    {
+      "path": "Cassette/Utilities/Logger+Cassette.swift",
+      "lines": 47,
+      "sha256": "6a4de4283fa8315db38c0138b7a6060501919f17fe4da14dc304045de3c11816"
+    },
+    {
+      "path": "Cassette/Utilities/LyricDisplayBuilder.swift",
+      "lines": 340,
+      "sha256": "a848448f041906fdb64057a74a267b7d9519879befd59b933b9cd6b1da80666d"
+    },
+    {
+      "path": "Cassette/Utilities/LyricKaraokeText.swift",
+      "lines": 80,
+      "sha256": "99cf3ace6ad1fc208bcd0388f63283b5027a93f1d797a4c6a7e00b9cd5e9a031"
+    },
+    {
+      "path": "Cassette/Utilities/LyricKaraokeTiming.swift",
+      "lines": 53,
+      "sha256": "224cfecf39c0190c4f94ee978b59af84b93dc05b3efb1cb6d4e3bae9c357ae50"
+    },
+    {
+      "path": "Cassette/Utilities/LyricPlaybackTimeline.swift",
+      "lines": 54,
+      "sha256": "ed65b96c37bb048b1de36a07065e9138c75a6dc99d2d3386f6e07a02c98ac43c"
+    },
+    {
+      "path": "Cassette/Utilities/LyricWordKaraokeLine.swift",
+      "lines": 270,
+      "sha256": "5e99f025b35617e20397ac08e2138860281a33c2a7d03f63de1de17b5cd9e9f9"
+    },
+    {
+      "path": "Cassette/Utilities/LyricsEncoding.swift",
+      "lines": 95,
+      "sha256": "b5bb165b3d83ffe2e08a690b0dceb1630c77001568d5a95929959d937bbccad2"
+    },
+    {
+      "path": "Cassette/Utilities/LyricsLayerAligner.swift",
+      "lines": 56,
+      "sha256": "69eb160bad4b3d759c445c152806db3fd347c78b7b1e52b1afeb0bfddcf2bfb8"
+    },
+    {
+      "path": "Cassette/Utilities/MusicKitDeveloperTokenInfo.swift",
+      "lines": 114,
+      "sha256": "275346272b9d8f9ef76d3999df4abb0b4de787e02d376964cd7beb9876245106"
+    },
+    {
+      "path": "Cassette/Utilities/NetworkCostPolicy.swift",
+      "lines": 38,
+      "sha256": "a7a0b32aec873ade47bc8d300140379bd09b0da2ce87ff5ac781d5c9d3e3a5af"
+    },
+    {
+      "path": "Cassette/Utilities/PasswordAutoFillOffer.swift",
+      "lines": 33,
+      "sha256": "0b02e11609470cf37c7a92a57d848391f01311615a33eba4d2e70ca9bca4505d"
+    },
+    {
+      "path": "Cassette/Utilities/PerformanceGovernor.swift",
+      "lines": 498,
+      "sha256": "fccf8b18f60584689c1c48d1906f5640b643c40586edf6997702e52b748747d8"
+    },
+    {
+      "path": "Cassette/Utilities/PlatformColors.swift",
+      "lines": 23,
+      "sha256": "74e50edee2c456bb5a88750e36b2d51077aef0e8c77b2db7e9877b8db40b0e9b"
+    },
+    {
+      "path": "Cassette/Utilities/PlatformImage+Encoding.swift",
+      "lines": 64,
+      "sha256": "d1022713cc65c6497f17e7ba3d6c9b0812ab003f2730f04d27690f89158244da"
+    },
+    {
+      "path": "Cassette/Utilities/PlatformImage.swift",
+      "lines": 39,
+      "sha256": "be9422ce163cb7d9c1ed8439c33928a2cb2f0cce93464d5e11df8de7fa553552"
+    },
+    {
+      "path": "Cassette/Utilities/Pluralization.swift",
+      "lines": 12,
+      "sha256": "ad7b351ca5fcc6a4ee3d4854e4ee03daa628298e0a3e6b1d5dc39362795b84bf"
+    },
+    {
+      "path": "Cassette/Utilities/RegistersHomeDestinationsKey.swift",
+      "lines": 19,
+      "sha256": "02150cc109e54a1eb9aebc6dbe806113bc6d2ca3d78234b36419d029f83636e2"
+    },
+    {
+      "path": "Cassette/Utilities/SearchTabReselectObserver.swift",
+      "lines": 111,
+      "sha256": "50f330953f0c63798b0b6320eece364551bdfc08d56c02a77fe89db96e6fb942"
+    },
+    {
+      "path": "Cassette/Utilities/WrappedAvailability.swift",
+      "lines": 23,
+      "sha256": "a44f33b7f8cd6149603538ad5d06ab98db66bb366e5e8354078f36cd0a30a51a"
+    },
+    {
+      "path": "Cassette/ViewModels/AddToPlaylistViewModel.swift",
+      "lines": 124,
+      "sha256": "6fa569f0ba52371d70fcc78b09e82ad6d94af1abcac721f5e1c5e6430036d597"
+    },
+    {
+      "path": "Cassette/ViewModels/AlbumDetailViewModel.swift",
+      "lines": 571,
+      "sha256": "48d9a7111abbbfd8bcf08783dd7cc7fefb5aed0ec71fa79240e1de0feab93396"
+    },
+    {
+      "path": "Cassette/ViewModels/AlbumListViewModel.swift",
+      "lines": 37,
+      "sha256": "be761920c49272078155102dffc232854bf7d8783e1691d1497742d69ac7b760"
+    },
+    {
+      "path": "Cassette/ViewModels/AllFreshReleasesViewModel.swift",
+      "lines": 48,
+      "sha256": "ff9b4f388002eadc8c8e971912635ae26606ad53a7434b3ceb5cc37cb6ab42ca"
+    },
+    {
+      "path": "Cassette/ViewModels/ArtistDetailViewModel.swift",
+      "lines": 236,
+      "sha256": "30c7c759284534970a1e66dfe65b9bbc807faf6286c9796dff18711921c1478e"
+    },
+    {
+      "path": "Cassette/ViewModels/ArtistListViewModel.swift",
+      "lines": 32,
+      "sha256": "ad0a42356db5c554bc48f962556a84e473439c8a091059590b091dd585691686"
+    },
+    {
+      "path": "Cassette/ViewModels/CreatePlaylistViewModel.swift",
+      "lines": 61,
+      "sha256": "422fe21d3b23afbfdcb3e902aced98be1e8b4ebc4a8a322252138eb09c2ec3f3"
+    },
+    {
+      "path": "Cassette/ViewModels/CustomHeaderEntry.swift",
+      "lines": 18,
+      "sha256": "5beb4d194b3c8768e21b4dc5a690addf41c248257db203e7a3a5a23ec90add7c"
+    },
+    {
+      "path": "Cassette/ViewModels/DiscoverViewModel.swift",
+      "lines": 426,
+      "sha256": "9e91dee9172958ba54137e8df5e9858e910d474acac9204fc534e3a0cc2d81df"
+    },
+    {
+      "path": "Cassette/ViewModels/DownloadsViewModel.swift",
+      "lines": 101,
+      "sha256": "4c267674159b9b962dd615a2c29340d78c3c6a22101120cfde88f464bef16f02"
+    },
+    {
+      "path": "Cassette/ViewModels/EditServerViewModel.swift",
+      "lines": 153,
+      "sha256": "2cf701451bb73018a15c4170dd06c2b97dbf1e2da2ee68e740efefb9a895fc16"
+    },
+    {
+      "path": "Cassette/ViewModels/FavoritesViewModel.swift",
+      "lines": 37,
+      "sha256": "ae65f8e150cc0b78ef9ec48f87842e11a496999fe4c7f05cea29a521b04075b6"
+    },
+    {
+      "path": "Cassette/ViewModels/FullPlayerViewModel.swift",
+      "lines": 239,
+      "sha256": "17de51e0ec800918629661b9f148fffebb28d331ad78f1d9b84fa5839613e3ec"
+    },
+    {
+      "path": "Cassette/ViewModels/HomeViewModel.swift",
+      "lines": 134,
+      "sha256": "c2afcb8d011a41efaab6bc7265850784f93b32ea32c34cab53052faeba379aac"
+    },
+    {
+      "path": "Cassette/ViewModels/ListenBrainzSettingsViewModel.swift",
+      "lines": 233,
+      "sha256": "30f5950434017c0963d112ab5395391984de36ec741adba6bf991be6f0b2af31"
+    },
+    {
+      "path": "Cassette/ViewModels/LyricsViewModel+Chorus.swift",
+      "lines": 180,
+      "sha256": "50522935bcc453e490e620786f8fe7043aa6b214717d705adb72758245e38243"
+    },
+    {
+      "path": "Cassette/ViewModels/LyricsViewModel+Display.swift",
+      "lines": 236,
+      "sha256": "b32caab87bdc363a60835f0ecc5a8fd94cec2e2dfb43ce667fa7cadee615e67a"
+    },
+    {
+      "path": "Cassette/ViewModels/LyricsViewModel+Seeding.swift",
+      "lines": 301,
+      "sha256": "72d217f3d178bf59aa7b5a3888d7df32e6142fb3107da13071868c0c8607d9f4"
+    },
+    {
+      "path": "Cassette/ViewModels/LyricsViewModel+Tracking.swift",
+      "lines": 430,
+      "sha256": "65a43f9b4799b28d9c76770774d20386c8c0588432eaec6ce7627c8537d0a5d3"
+    },
+    {
+      "path": "Cassette/ViewModels/LyricsViewModel+Translation.swift",
+      "lines": 533,
+      "sha256": "159ac328cb7a841d121ef2f0e1586f7672a5b55e9fe9ec3afcc6e2741684ac6c"
+    },
+    {
+      "path": "Cassette/ViewModels/LyricsViewModel.swift",
+      "lines": 260,
+      "sha256": "ca347ebbd6c583733cff8cabde016cceb15ad71eb7863f0eac8d7818e721744a"
+    },
+    {
+      "path": "Cassette/ViewModels/OnboardingViewModel.swift",
+      "lines": 399,
+      "sha256": "74c52c7dc7b25a78993d9f3fb0854e4a6eec007aa295fac9c00728dd8eb5817a"
+    },
+    {
+      "path": "Cassette/ViewModels/PlaylistDetailViewModel.swift",
+      "lines": 278,
+      "sha256": "bd1c1ae10439b6266fa6541a3a54ba76b52c707b8a76dcbe439c85b5c78c2b3f"
+    },
+    {
+      "path": "Cassette/ViewModels/PlaylistListViewModel.swift",
+      "lines": 32,
+      "sha256": "ea77cb1f30a06162791a5b0117d864f497ccf66768aeeab14dbb70da030caaaa"
+    },
+    {
+      "path": "Cassette/ViewModels/SearchViewModel.swift",
+      "lines": 271,
+      "sha256": "4a0c43925b8594dcdfab48157d744fce2573faaf65d3cbb4a5a9312292c761ea"
+    },
+    {
+      "path": "Cassette/ViewModels/SongsListViewModel.swift",
+      "lines": 305,
+      "sha256": "8beb34d6b77a0b772302af84ede4cf0e1538470a7fbac64a92f9d13a92031c69"
+    },
+    {
+      "path": "Cassette/ViewModels/StorageManagementViewModel.swift",
+      "lines": 49,
+      "sha256": "6044f8cc4a6c1f57c74a75dc8fd21667a2be35cde496dd967e385479805981cc"
+    },
+    {
+      "path": "Cassette/Views/Browse/AddToPlaylistSheet.swift",
+      "lines": 224,
+      "sha256": "6c9c545d5cfc8f234398ad1f8dcd5c375d69afc7098ca91ac2853c0fbdb17579"
+    },
+    {
+      "path": "Cassette/Views/Browse/AlbumDetailView+Actions.swift",
+      "lines": 197,
+      "sha256": "868ef47b76ae91168794e4dd83c969d198a67d0e7e36066b76b25ec6d8789734"
+    },
+    {
+      "path": "Cassette/Views/Browse/AlbumDetailView+Components.swift",
+      "lines": 189,
+      "sha256": "32a4f0225f5e1ae501d32cc8607f50543283f3045499675d51bf07626f1ec275"
+    },
+    {
+      "path": "Cassette/Views/Browse/AlbumDetailView+Header.swift",
+      "lines": 271,
+      "sha256": "7721de79093aaf12c489ebfa727ceaa752b3a3d5ed6bf9bfd1356b9e000dc099"
+    },
+    {
+      "path": "Cassette/Views/Browse/AlbumDetailView+Layout.swift",
+      "lines": 189,
+      "sha256": "37d4ec20e3d3891592ab6a911a3d33c19503fbc24aad9b2807ce209148d6f1bd"
+    },
+    {
+      "path": "Cassette/Views/Browse/AlbumDetailView+Palette.swift",
+      "lines": 63,
+      "sha256": "1d1ce2349cae1365ff5c2f335ea66aefce3d18f91ced67fe30fa9b7499f0cd20"
+    },
+    {
+      "path": "Cassette/Views/Browse/AlbumDetailView+RelatedMusic.swift",
+      "lines": 325,
+      "sha256": "12ce05eeade3672ec68cad56becbb9822afe361be5e28726f334d6cd755eb40f"
+    },
+    {
+      "path": "Cassette/Views/Browse/AlbumDetailView.swift",
+      "lines": 528,
+      "sha256": "86848f5125c26106b49e80ced81abd29c600a12eaf7b7fc4d8084bd08b40dd68"
+    },
+    {
+      "path": "Cassette/Views/Browse/AlbumsListView.swift",
+      "lines": 397,
+      "sha256": "6d2917590a48c69a0c8b23d7b1fe550c57ea828f0dab88f16ddab7f1f68d2f7a"
+    },
+    {
+      "path": "Cassette/Views/Browse/ArtistDetailView.swift",
+      "lines": 761,
+      "sha256": "feb0ed77c3744088540ea5a7f6c42e570ffaa8236d200e839c22737cd789924d"
+    },
+    {
+      "path": "Cassette/Views/Browse/ArtistInfoView.swift",
+      "lines": 209,
+      "sha256": "b1794034267da0537316abce40408c2a1933585aa323d4e67a3feebce4329206"
+    },
+    {
+      "path": "Cassette/Views/Browse/ArtistListView.swift",
+      "lines": 324,
+      "sha256": "3e2d2361c7799bf0b13666b7afa32f04a99d5e0440bcde768f2aea2b7fb167d6"
+    },
+    {
+      "path": "Cassette/Views/Browse/CoverArtView.swift",
+      "lines": 238,
+      "sha256": "b5354e64f249d453ece37a8d607c99512ab6c1354cb9ca8f9784a22be119c245"
+    },
+    {
+      "path": "Cassette/Views/Browse/CreatePlaylistSheet.swift",
+      "lines": 545,
+      "sha256": "715777eacabb96161ca28cd1d5c889d887b9f71526c6bfbb928d1ac5cb7ec34c"
+    },
+    {
+      "path": "Cassette/Views/Browse/DownloadedView.swift",
+      "lines": 261,
+      "sha256": "b0fd897e21e8b8ba2229ceee1155d343d4e010d258e6dbbeaa4bce39bae38710"
+    },
+    {
+      "path": "Cassette/Views/Browse/EditPlaylistSheet.swift",
+      "lines": 445,
+      "sha256": "c84023c13ef5381dc23cf4fb234fa541e1bd7d0c5011af5322d5ea5400c36d95"
+    },
+    {
+      "path": "Cassette/Views/Browse/FavoritesView.swift",
+      "lines": 155,
+      "sha256": "0809c0b9b86ade0b93803534edd11d12058443a9c4e3d01be6538d56c013752b"
+    },
+    {
+      "path": "Cassette/Views/Browse/FeaturedArtistAvatar.swift",
+      "lines": 51,
+      "sha256": "dfc5f3054191c247a025edca58ba9d5a31dde41b97c473fdbfd920f63835a894"
+    },
+    {
+      "path": "Cassette/Views/Browse/PersonalMixDetailView.swift",
+      "lines": 202,
+      "sha256": "7a4620451afe16ea48e7958b2eaa6abdbe17b5063e3e4a6be93c48cdbd111455"
+    },
+    {
+      "path": "Cassette/Views/Browse/PlaylistCoverPicker.swift",
+      "lines": 106,
+      "sha256": "fa302c33897e147e196508b256277f82db19340ba45d7ec08d153bb9158ca443"
+    },
+    {
+      "path": "Cassette/Views/Browse/PlaylistDetailView+Actions.swift",
+      "lines": 316,
+      "sha256": "7485edb94e6d7df495920ad4b4a083bca70163525dc9d1bd9506fd3b129e8ae7"
+    },
+    {
+      "path": "Cassette/Views/Browse/PlaylistDetailView+Components.swift",
+      "lines": 157,
+      "sha256": "a622f2bd69c981c430d9785256d550f3b18f554f6959ff94d617bc8331f8ea22"
+    },
+    {
+      "path": "Cassette/Views/Browse/PlaylistDetailView+Editing.swift",
+      "lines": 285,
+      "sha256": "443495b872fbf761bd62d4ededda5bc28a82836c23e5b2d08a1fe7c379a41b57"
+    },
+    {
+      "path": "Cassette/Views/Browse/PlaylistDetailView+Header.swift",
+      "lines": 227,
+      "sha256": "f56a327ab0bb07bb26de69895c5ebda97bc3621b903388ba6b3c387186303ce8"
+    },
+    {
+      "path": "Cassette/Views/Browse/PlaylistDetailView+Layout.swift",
+      "lines": 159,
+      "sha256": "7a865b335dd006a3a9c71809cf578f66d5a0afb3dc9ce57a7ee6d5991ed3ff95"
+    },
+    {
+      "path": "Cassette/Views/Browse/PlaylistDetailView+Presentation.swift",
+      "lines": 58,
+      "sha256": "a7a4500342fbb0fcbb32e8e73377f304cee585fa56c91d920a431763de8d9f92"
+    },
+    {
+      "path": "Cassette/Views/Browse/PlaylistDetailView.swift",
+      "lines": 375,
+      "sha256": "650221049292debb83b103967481ff0051959878a2e39b1673e953c1a108388f"
+    },
+    {
+      "path": "Cassette/Views/Browse/PlaylistListView.swift",
+      "lines": 368,
+      "sha256": "136ca8b23480ff056f420f87b1b0386d4f69712a961b0d1916d7ae18bf66a466"
+    },
+    {
+      "path": "Cassette/Views/Browse/RadioListView.swift",
+      "lines": 122,
+      "sha256": "03d366784746522800dd12f3bf1de301512aa394eb87aa202ac6e80dca6a6250"
+    },
+    {
+      "path": "Cassette/Views/Browse/RecentlyAddedAlbumsView.swift",
+      "lines": 115,
+      "sha256": "6985d88dcd6612d895455fd4cb362176127b77add50787e11e240ac4cb8b7cd5"
+    },
+    {
+      "path": "Cassette/Views/Browse/SongsListView.swift",
+      "lines": 301,
+      "sha256": "ee573e13ee33539d027b01f0e0dde018f4d4ad88980f8a9979c14a13a2889b17"
+    },
+    {
+      "path": "Cassette/Views/LyricsPlaybackLineRow.swift",
+      "lines": 242,
+      "sha256": "542c64c8cdf527cb743ceeecbddfae272675b7f90ec207241b96a86367fce060"
+    },
+    {
+      "path": "Cassette/Views/LyricsView.swift",
+      "lines": 675,
+      "sha256": "9980dbf2f596ababcec052c9073554fcd6ffc8a5f50bd968816a50a6f64756dc"
+    },
+    {
+      "path": "Cassette/Views/Main/AllFreshReleasesView.swift",
+      "lines": 227,
+      "sha256": "0a1330a8451443f91b2d95b8f2f64f8b518164d60b1faff6baf99c02fe6658d0"
+    },
+    {
+      "path": "Cassette/Views/Main/DashboardHomeView.swift",
+      "lines": 151,
+      "sha256": "213f218cfc13532efff1ef36095b3eed9e658c78d7fdfa19ccd3b93348e53762"
+    },
+    {
+      "path": "Cassette/Views/Main/DiscoverView.swift",
+      "lines": 366,
+      "sha256": "4ebc9a29d615d8a7a1df2f3107ae6daab88ba5459afd33509a49dde18d050af8"
+    },
+    {
+      "path": "Cassette/Views/Main/FreshReleaseDetailSheet.swift",
+      "lines": 102,
+      "sha256": "fbb2ddf5649038b50d6cdecd01a2317e2199e6d6adc284a98a9e7f00b5f74f71"
+    },
+    {
+      "path": "Cassette/Views/Main/FreshReleasesCard.swift",
+      "lines": 196,
+      "sha256": "2e570a492dfb7ff8a21e0ab48b343c3f6cca28c67ca300678b9fbd845340f2f6"
+    },
+    {
+      "path": "Cassette/Views/Main/FullPlayerView.swift",
+      "lines": 1061,
+      "sha256": "ff07f849db790d33d6aafa69326a43990e57edfdd1c108313ce32431ac1b8561"
+    },
+    {
+      "path": "Cassette/Views/Main/HomeView.swift",
+      "lines": 1085,
+      "sha256": "3bf773de229a921a7a463c259d500eca3892ef3fafb16602972509bdb32d1324"
+    },
+    {
+      "path": "Cassette/Views/Main/LibraryPreparationView.swift",
+      "lines": 128,
+      "sha256": "5d925fd4fddaac6b9e3fac6d878e92480715ec84b57026096a18447ca07feb59"
+    },
+    {
+      "path": "Cassette/Views/Main/MainTabView.swift",
+      "lines": 639,
+      "sha256": "61c790b10ec21ba5133040c017cc0045fea8bc5aa74218836f7b118be8857116"
+    },
+    {
+      "path": "Cassette/Views/Main/MiniPlayerAccessoryView.swift",
+      "lines": 697,
+      "sha256": "e3748671c3afdbc6ad49c19abb90c391e1417427700134fc6d00e25f82059adb"
+    },
+    {
+      "path": "Cassette/Views/Main/Player/AppleMusicLyricsBackground.swift",
+      "lines": 241,
+      "sha256": "65ff69e9637fdd19c93c9ebf823c19a774105d8e1458c3f543ef3ec8aac993c1"
+    },
+    {
+      "path": "Cassette/Views/Main/Player/ArtworkRendererPreparation.swift",
+      "lines": 38,
+      "sha256": "361cf5540a6be715aec4d8ebe6a8dfebc6f82f0427976ceda3465aa92cd2269f"
+    },
+    {
+      "path": "Cassette/Views/Main/Player/ArtworkSceneMotion.swift",
+      "lines": 47,
+      "sha256": "89c4b0c94c02ad607b4e0764ea42c29925876054ae6d686d0335ea4cf714dc46"
+    },
+    {
+      "path": "Cassette/Views/Main/Player/ArtworkSceneTextureCache.swift",
+      "lines": 175,
+      "sha256": "1e592961b2353465d49b1742c244a5370cf4723d1336a37c27bb5264ba735230"
+    },
+    {
+      "path": "Cassette/Views/Main/Player/LyricsArtwork.metal",
+      "lines": 121,
+      "sha256": "426b5f024ede186056cdb350eccdc46bc5d505eac75ec5b3fcb5220cec061803"
+    },
+    {
+      "path": "Cassette/Views/Main/Player/LyricsArtworkGPU.swift",
+      "lines": 148,
+      "sha256": "3ade2dd41642aff8da85a0de30d08e0619c73431d898d74f7d50ede7f2e072df"
+    },
+    {
+      "path": "Cassette/Views/Main/Player/PlayerBottomControls.swift",
+      "lines": 373,
+      "sha256": "c5375b6d4632905a2f351992b778cdc23695db537600b417d1550edc3dd082f4"
+    },
+    {
+      "path": "Cassette/Views/Main/Player/PlayerTrackInfo.swift",
+      "lines": 616,
+      "sha256": "1abeb17aadd380ca4d68037127b335a9b8b87ad0a642a04ec8ec0ea3fd3293a6"
+    },
+    {
+      "path": "Cassette/Views/Main/Player/PlayerTransportControls.swift",
+      "lines": 322,
+      "sha256": "60362b9203da0e6fa41c60639c3c4f427f3aebf6d3c460cdce0d0ee328d36855"
+    },
+    {
+      "path": "Cassette/Views/Main/QueueView.swift",
+      "lines": 631,
+      "sha256": "8dea792f7c5ce5c1715395530b910cbe69334c1f32c5005e858add9e7fc06eb6"
+    },
+    {
+      "path": "Cassette/Views/Main/RootView.swift",
+      "lines": 125,
+      "sha256": "b59fc7b31b1e693405f8e62e1d84159c01fc9f79bb94add18625e9027dcb6e08"
+    },
+    {
+      "path": "Cassette/Views/Main/SearchHistoryListView.swift",
+      "lines": 168,
+      "sha256": "3d273e88c1a316597bafd6adbe4a13d3929c60bf1f39cac31aa0fe038d6891cd"
+    },
+    {
+      "path": "Cassette/Views/Main/SearchResultItem.swift",
+      "lines": 116,
+      "sha256": "52af9213f8e0c27dcabaa256c19e308a07974f473bc8f38002cf497e4e8e0a24"
+    },
+    {
+      "path": "Cassette/Views/Main/SearchResultsList.swift",
+      "lines": 173,
+      "sha256": "51effbd5d9e80448cff742544a20c4551109ef58b6cda7fadb0f8f1bc8b53f2d"
+    },
+    {
+      "path": "Cassette/Views/Main/SearchTabContent.swift",
+      "lines": 332,
+      "sha256": "e8e879c2df606b81d89123436258df694332507d7f4e3c95c0a133b69c9693c8"
+    },
+    {
+      "path": "Cassette/Views/Main/SearchView.swift",
+      "lines": 239,
+      "sha256": "2b55f6769e5fcdb09f7b3a4397269710a27285d00cc7ec83c04ff2fa80509e2b"
+    },
+    {
+      "path": "Cassette/Views/Main/ServerUnreachableView.swift",
+      "lines": 99,
+      "sha256": "74fd9a2ecc9ecd60f3127699e6e83889fbffbc14555c260e31d7a5e72039e9f3"
+    },
+    {
+      "path": "Cassette/Views/Main/SongInfoSheet.swift",
+      "lines": 322,
+      "sha256": "fe33d6c8db363433ea0fa3cd9a1fab5aed31394657a8d168abdf34e74c917b0e"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/ConnectionErrorView.swift",
+      "lines": 66,
+      "sha256": "4e5b2f2cc958bed1f30f1816e72d4039c2f7f61be682422c67b7398664b43b2c"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/EssentialSupportPreparationView.swift",
+      "lines": 226,
+      "sha256": "e8ade7aa5e731225cb18b8a742ebbc33593d3e0aa10a4bd009844ff7d2ccca48"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/OnboardingAboutView.swift",
+      "lines": 41,
+      "sha256": "d86c82d1d5a23b6b4e6ba06e89500178c417e958293c947ba84c9c98ad0f8190"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/OnboardingAlbumCoversStepView.swift",
+      "lines": 105,
+      "sha256": "c5a45e0c14293fcdf52ecc1aba56ec6bbdf25bcb2802a8119c9442c879862aab"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/OnboardingCacheStepView.swift",
+      "lines": 97,
+      "sha256": "8aa5a253a39e372bf97e3a0d67ded7f2d4a9cf9cf00b0b6d8ef312c94bae375c"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/OnboardingLanguageStepView.swift",
+      "lines": 77,
+      "sha256": "267aebe6b55e88f8740de9a618e827639d1cdded2dce83d85275a9ac2b52c053"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/OnboardingServerSignInView.swift",
+      "lines": 410,
+      "sha256": "64b6c75b3421facd86d44602381a4a7c7cb4247cf2f55695ab038d964f090ccd"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/OnboardingSignInOptionsView.swift",
+      "lines": 178,
+      "sha256": "bd5faf35ae5e5b31278e730e72928bdd9bacd3131657665af882fb39e08d5257"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/OnboardingView.swift",
+      "lines": 153,
+      "sha256": "ef4712dc06e1ca8efd6883f9c1bdc86028bace54a5fda9a83bc8d83274ee4cfe"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/OnboardingWelcomeView.swift",
+      "lines": 67,
+      "sha256": "de3e622e9a6c6e14dcfee38589b8ea27e4052c2e7bdfe960d10e067ee653a14e"
+    },
+    {
+      "path": "Cassette/Views/Onboarding/ServerFormView.swift",
+      "lines": 130,
+      "sha256": "dd9def65b770d158d68b51952bcabf6deaae7b0e59e12debe4b4575578a32427"
+    },
+    {
+      "path": "Cassette/Views/Platform/iPad/RootViewPad.swift",
+      "lines": 17,
+      "sha256": "39b2c2a51bafe8b2dd33adb6412d7b598d81d6302e03fb5b03e5c370f356201d"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/AlbumDetailMacOS.swift",
+      "lines": 432,
+      "sha256": "db4c8903375a6ba6d361a2746fc692520f89bc2826ddca8622f5980107127858"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/ArtistDetailMacOS.swift",
+      "lines": 509,
+      "sha256": "8928450a84af7fc3277fb2287beee4c485a850727384d3ab986427b267d4df93"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/ArtistsListMacOS.swift",
+      "lines": 148,
+      "sha256": "e3df94bab02c1b6b932a9934813cd37f91e4b2a39edb1caa57c0845b0c7918a7"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/BottomPlayerBar.swift",
+      "lines": 605,
+      "sha256": "7ff5ff7058845cd77503a2e2a8af93c12d21c2f943ca1ecadf2204376ed1781e"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/CarouselAlbumCard.swift",
+      "lines": 80,
+      "sha256": "60d48a61a0e3b9ac86ea169ade5948b92bf8ca31f066eea8c19667e2a4726173"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/CarouselSection.swift",
+      "lines": 41,
+      "sha256": "933de4f06f8a75becb012e5a8eb8fc51b1b1616aeecaca3e674172e1deb423c8"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/CassetteSettingsScene.swift",
+      "lines": 411,
+      "sha256": "758f45a7755a191d07e5297dc492a4012a04ef0ca4819e8377984dd4cfe71e1c"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/DetailHeroView.swift",
+      "lines": 112,
+      "sha256": "75bccfbd1f30f0ad35adbcc29c1825db4d61edca1b954f04227c945514dbbfbc"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/FullPlayerExpandedView.swift",
+      "lines": 1006,
+      "sha256": "4eb3649aa8053ea4ceb3f63dff587dcc7efa7aa3d580a1271ad129a02f5429c4"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/MacLyricsSidePanel.swift",
+      "lines": 100,
+      "sha256": "be6eac49ee3612090e3014e4729ead15f78016e2ba1bf39743393bc809bbf485"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/MacMiniPlayerQualityBadge.swift",
+      "lines": 89,
+      "sha256": "515fe0396ff4aaebcfa908339b3464833cae6d7fb07e5a23eb6f82b8ceab4ac3"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/MacSearchBrowseCategories.swift",
+      "lines": 69,
+      "sha256": "50b10ecd52c2234c2f5d32c93e39bdd08f920e8bbd3eb389fc0f972622c1f60d"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/MiniPlayerWindowConfigurator.swift",
+      "lines": 31,
+      "sha256": "35c00a180e437d15ed2665d15fac57739f0f935cd873bbb3644b0c2c6178f769"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/MiniPlayerWindowView.swift",
+      "lines": 217,
+      "sha256": "6bd64154e88ead4363f784076a682b6f384a67adc84951442cdc5b716d56a2d5"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/PlaylistDetailMacOS.swift",
+      "lines": 332,
+      "sha256": "3f65e22dfa16bd84391dc39747e980dd34fc0f1caafed05a43c90a4fdf698070"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/RootViewMacOS.swift",
+      "lines": 490,
+      "sha256": "50c56ec912b97fe1da2d58f1050da930fea8eee21fce84e9bd3b0fc968ebc3c5"
+    },
+    {
+      "path": "Cassette/Views/Platform/macOS/SidebarSection.swift",
+      "lines": 59,
+      "sha256": "0419d50672e488e977427b214b600ed71fb93a53169928be20788018f5de88ab"
+    },
+    {
+      "path": "Cassette/Views/Settings/AccountSettingsView.swift",
+      "lines": 1019,
+      "sha256": "90cd22d39313c826a582102bc72eab7cb23549a2a6deec2ab9667da376be1d5d"
+    },
+    {
+      "path": "Cassette/Views/Settings/AccountSheetView.swift",
+      "lines": 175,
+      "sha256": "ea6a239f25c9a027831e7fc1a4e2e3b4f107cb8657d3e6a4ca6a890c85a8f39a"
+    },
+    {
+      "path": "Cassette/Views/Settings/CacheSectionView.swift",
+      "lines": 151,
+      "sha256": "0d887bb5e4e6a248dea544bb15327f636ddc2ed41d482f81d29de3eaced0feb6"
+    },
+    {
+      "path": "Cassette/Views/Settings/DownloadedMusicManagementView.swift",
+      "lines": 425,
+      "sha256": "004edf61aa1ef02237fd883c1e6afd0a8a3dbd19853adfeed81aebde503efa80"
+    },
+    {
+      "path": "Cassette/Views/Settings/DownloadsSectionView.swift",
+      "lines": 126,
+      "sha256": "bcd96e23e58fcaf0a034fedef104d0fc742bc86bda0fffc68653b7cac6adf8d8"
+    },
+    {
+      "path": "Cassette/Views/Settings/EditServerView.swift",
+      "lines": 269,
+      "sha256": "4091ef9bf8a1aa96333870f5a949d56318911623c69e856aa90242a7afe6770a"
+    },
+    {
+      "path": "Cassette/Views/Settings/Integrations/CassetteSplashView.swift",
+      "lines": 103,
+      "sha256": "49079cb64987c4ec59fc5369a97650bf04c9518aa894423766278ac71fd61a9c"
+    },
+    {
+      "path": "Cassette/Views/Settings/Integrations/ExternalProviderEditView.swift",
+      "lines": 173,
+      "sha256": "d20c3edd3a08f8ab000e30559062c68b40e369455c0724876834a878551ec697"
+    },
+    {
+      "path": "Cassette/Views/Settings/Integrations/ExternalProvidersSettingsView.swift",
+      "lines": 196,
+      "sha256": "2bcc531a6202f67a11586e1ece7e2f627b83b0e01e1c8d14ccbfc20d108f124d"
+    },
+    {
+      "path": "Cassette/Views/Settings/LibraryPreparationStatusView.swift",
+      "lines": 147,
+      "sha256": "70bcf059e154e0786c5d8614e4f4acace795169a19775cb553cabbf288e97589"
+    },
+    {
+      "path": "Cassette/Views/Settings/ListenBrainzSettingsView.swift",
+      "lines": 463,
+      "sha256": "388e7588233a6144d6860b1725a3c09503fbae40d4d3270dc4eeba16a4ece608"
+    },
+    {
+      "path": "Cassette/Views/Settings/OnboardingReplayButton.swift",
+      "lines": 28,
+      "sha256": "9657332a073f3eba955c04f01e37fdfe2ea295044bdc4500b59facdd81fdd12e"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/AboutSettingsView.swift",
+      "lines": 100,
+      "sha256": "48d14a5ae0786d094a6faedd9e24b088db11a04eac70d7628afa9e6ce90f4f47"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/AdvancedSettingsView.swift",
+      "lines": 78,
+      "sha256": "7771d615304b341fcc9488739116afaf41254b7efd5496c5573d66273cbbab4e"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/AtmosVersionSelectionView.swift",
+      "lines": 96,
+      "sha256": "c659ebd0fcd17a7bc53a5e0aa168dbab22ba422645c026bddc4007379db23d6c"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/AudioQualitySettingsView.swift",
+      "lines": 108,
+      "sha256": "498538c4432b69f83a713bd6e88d82513e5865acead54930a090fdaec53766f7"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/ContentDisplaySettingsView.swift",
+      "lines": 43,
+      "sha256": "8073d141a2edec2d9054a7cc632cdabd78c4f64c78c50456df625916ecdf3c45"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/CurrentPlaybackSettingsView.swift",
+      "lines": 104,
+      "sha256": "b1a612d49b1dfd4fdcc62e81bdb2e51e254a82cda0200eeb92025a92759f180d"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/LyricsSettingsView.swift",
+      "lines": 238,
+      "sha256": "85bd312c141f18ed56e17644a5114f51d2f5a6e51a520f09705f4d1fa0f77f42"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/PlaybackSettingsView.swift",
+      "lines": 134,
+      "sha256": "c4e2c0aa70ff1580c51e945aa29edc46fbd1bfca895323546508a9284ecf1833"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/ReplayGainDetailSettingsView.swift",
+      "lines": 109,
+      "sha256": "ac30316529e627050a1563b5eeb89342d03c790d5013eec09076cc3b4a189db5"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/ServerPlaybackMethodSelectionView.swift",
+      "lines": 39,
+      "sha256": "b9aaa28ae8addf668e54585fc4db2f5f12345a04ccd5d6413edb884e35fd60c0"
+    },
+    {
+      "path": "Cassette/Views/Settings/Screens/SharingSettingsView.swift",
+      "lines": 60,
+      "sha256": "283376d444ad50545c35d3c01cfa7633bdc39d7a74e95cda49e3dc99f5db0cb9"
+    },
+    {
+      "path": "Cassette/Views/Settings/Sections/CrossfadeSettingsSection.swift",
+      "lines": 68,
+      "sha256": "8f79e397a9aa7643da70924b7e0dc64c788d2dafbf93d78bf1ecbd46a6289489"
+    },
+    {
+      "path": "Cassette/Views/Settings/Sections/GaplessSettingsSection.swift",
+      "lines": 38,
+      "sha256": "39b49d570f7211fe10e46e8e359e2b68cdaba3b72561df3fa1dcf45848d07661"
+    },
+    {
+      "path": "Cassette/Views/Settings/Sections/ReplayGainSettingsSection.swift",
+      "lines": 99,
+      "sha256": "eff6d91b79589117fd5352fda1573fcbb1017a56b1e2110877bfc6db52c960e4"
+    },
+    {
+      "path": "Cassette/Views/Settings/SettingsComponents.swift",
+      "lines": 360,
+      "sha256": "35d35c7ff900aca9f01b0774f7250e63a53785b21d59902961b855ceda5690c2"
+    },
+    {
+      "path": "Cassette/Views/Settings/SettingsView.swift",
+      "lines": 121,
+      "sha256": "e041989644c7af476db10a9538feed7ef4bec0a9f2acd0696deacc6179d28214"
+    },
+    {
+      "path": "Cassette/Views/Settings/StorageManagementView.swift",
+      "lines": 309,
+      "sha256": "dc918db81fad5873018abca092bfe96ad969c5a960cb921204ee0f1465023a3e"
+    },
+    {
+      "path": "Cassette/Views/Settings/SubsonicAccountVerificationView.swift",
+      "lines": 93,
+      "sha256": "1c41a7bd711c13d4a826bfb49c26d4a7529882cce39e376df754d2f2dd650dd5"
+    },
+    {
+      "path": "Cassette/Views/Settings/ranslationSettingsView.swift",
+      "lines": 89,
+      "sha256": "35b305e954789bdcc4a9f50480107590c342807422c3c61aa5940abd3b0ffe43"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/ReplaySummaryCard.swift",
+      "lines": 108,
+      "sha256": "3a1a3f6da8e0c35a4a5efcdcb5c98dd4cccf741fb928ed331bb4a8aaddf84132"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedAwardMedal.swift",
+      "lines": 179,
+      "sha256": "8228298dc893bd58b536e75bef8b53d437397f3029644a43fa3c732d0081da92"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedAwardsSection.swift",
+      "lines": 80,
+      "sha256": "e3770de4e4b05b70f4943bdf94bb7663173183a7b249372a87b49a90656853fc"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedCurrentYearCard.swift",
+      "lines": 72,
+      "sha256": "f038de9fa22bac08e57b3cc18815232b26a38299779938020514c926ca07c202"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedPeriodPicker.swift",
+      "lines": 51,
+      "sha256": "fa9800e6ed5bd2956ac24b37c7d7d7bd22ed3bae6608a386b746a39960b39bf8"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedRecapMonthCard.swift",
+      "lines": 77,
+      "sha256": "2317f2c8609e4b56362c9475ddc3e4c0a84c10673d297a5a1b7a8e50ff981a08"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedStatHero.swift",
+      "lines": 108,
+      "sha256": "a4023b09bcbd07fc4feb763c81724bbddecb4831773bbb689efc2dfca3c25e05"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedTopAlbumsSection.swift",
+      "lines": 104,
+      "sha256": "f92b2d31b2aab45c84f69fbd65ce646cf260ef69afb69888a9394ccdb15a40f3"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedTopArtistsSection.swift",
+      "lines": 142,
+      "sha256": "b6af64c3d82209559ff5983345c0395b5a06e435a7c9d321e52045e16fe97c1d"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedTopTracksSection.swift",
+      "lines": 111,
+      "sha256": "6d04cc1670294f2bdd6fbd6393e54e04a90c9dd1a3af915db6a7726eb34e164c"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedYearCard.swift",
+      "lines": 112,
+      "sha256": "4ed8615f20e2c0ebcd22fe19c3a1f0934c7f6a6a13ea96138df9208a87f346f5"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Components/WrappedYearlyCard.swift",
+      "lines": 70,
+      "sha256": "d09d00a180a2ea18a21d5a8dae5be8eeed85e55d2474ac6aa85aa1a49c55e2ac"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/Slides/WrappedClosingSlide.swift",
+      "lines": 77,
+      "sha256": "59ea42de0ccd9b53f34f7f6c457d92044099b1b156e2d3fb5dd3622701dca38e"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/Slides/WrappedDiscoveriesSlide.swift",
+      "lines": 64,
+      "sha256": "fe804b62d7218c81ec0564d78ac3bd3edbb4e75bec233e9fb7de09d57aa0f8d9"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/Slides/WrappedIntroSlide.swift",
+      "lines": 53,
+      "sha256": "c50df420a54a4ec6253a9a147e4f215b6b408f581dc349aa1ee6840753665561"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/Slides/WrappedMinutesSlide.swift",
+      "lines": 88,
+      "sha256": "2d2174f36037ebcc6971fd08f3b601c24865aea6c74abc184a08abd6c65e96b9"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/Slides/WrappedTopAlbumSlide.swift",
+      "lines": 72,
+      "sha256": "33cf17839b1d66a8fe62e4b7708ec21c7460ab8f599c1f4b8c35859d3318ae78"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/Slides/WrappedTopArtistSlide.swift",
+      "lines": 66,
+      "sha256": "eebf9215467e1179ae0537ee3ca5aa60cc63cbe048fc900962d3d6e2ec6a5c5a"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/Slides/WrappedTopGenreSlide.swift",
+      "lines": 53,
+      "sha256": "dceb115b4723433065c23e9272c432d760b528ab6a3f331cc7daf518bcd32a13"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/Slides/WrappedTopTrackSlide.swift",
+      "lines": 72,
+      "sha256": "54520428405a7293ec60ee57ff7998907102394e7b4c9647a5efe0583d0388bc"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/WrappedShareCardView.swift",
+      "lines": 91,
+      "sha256": "efee9c5280d12eee5a0cd55cd186f581e46b94fa83eeee6e3e28da80e0a7df54"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/WrappedSlideEntrance.swift",
+      "lines": 30,
+      "sha256": "ddc6943ac5a6bb76002a603dc1c5c8591526cc33ef705fb6885599772287cf96"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/WrappedStoryPlayerView.swift",
+      "lines": 363,
+      "sha256": "bf619c3bbe15c8b481f8ecbb01fa183a0ca58321059d85ee7320272149245c88"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/WrappedStoryProgressBar.swift",
+      "lines": 61,
+      "sha256": "20bd473926a6e8569d1aa1823fa6dba1b740703a4d68e24cd28c843c3b811b12"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/Story/WrappedStorySlideKind.swift",
+      "lines": 18,
+      "sha256": "87a404b0b5473a288709acaddb9ecad55cd2a7d43eb6c457437df5530ff20e96"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/WrappedView.swift",
+      "lines": 234,
+      "sha256": "18c910459962e010aa030c308814c953fa53f50a477410e66f53452e47660d9a"
+    },
+    {
+      "path": "Cassette/Views/Wrapped/WrappedYearlyListView.swift",
+      "lines": 99,
+      "sha256": "78fe2d239ce2eda52eb4067e27f506c9f58f107b5b771a8407dfe8932cbcf16c"
+    },
+    {
+      "path": "CassetteTests/AccountAndPlaybackRegressionTests.swift",
+      "lines": 317,
+      "sha256": "5297dced58c99d5113c3330315e4adc6d816369327439f9949bb7671008490e5"
+    },
+    {
+      "path": "CassetteTests/AdaptiveQualityPolicyTests.swift",
+      "lines": 249,
+      "sha256": "bcf7d3653f37a16ddde8858f0c9b32583e90de4a2c125f1fc90dd107f066a870"
+    },
+    {
+      "path": "CassetteTests/AlbumCommentSplitTests.swift",
+      "lines": 198,
+      "sha256": "97bace212e1ede741b1e9d9a345122028d1d5726f85e77a0dff1cb07287c8555"
+    },
+    {
+      "path": "CassetteTests/AlbumDetailOfflineTests.swift",
+      "lines": 746,
+      "sha256": "c63ff45f84bb53effab484682f7b7db408f8a04477cc9ab5c5319c3f6a09b1ab"
+    },
+    {
+      "path": "CassetteTests/AlbumVersionMatcherTests.swift",
+      "lines": 59,
+      "sha256": "de993619600152e530ea660f9b35a4194366599e846f6e423c18a47e25d0f4e1"
+    },
+    {
+      "path": "CassetteTests/AllFreshReleasesViewModelTests.swift",
+      "lines": 146,
+      "sha256": "91e5bd584efb939fed5580970f4aa37c4bb0ab71e0e5c96c60da84c0ae234cfc"
+    },
+    {
+      "path": "CassetteTests/AppLocalizationTests.swift",
+      "lines": 16,
+      "sha256": "3c6ce8b6b7609fccb208aa14de1871cff60f5cfe7e8f4183eda252af596537cc"
+    },
+    {
+      "path": "CassetteTests/AppleIntelligencePromptTests.swift",
+      "lines": 54,
+      "sha256": "2045ef7a65f2e765cc5aaf3c77c6ac151c7b304563e58d4e2daad18bd59ded3e"
+    },
+    {
+      "path": "CassetteTests/AppleLyricTTMLParserTests.swift",
+      "lines": 228,
+      "sha256": "82fd1550d22833d0f374184fd753f30888faed7faf6ca2c28c6fa58c627b412a"
+    },
+    {
+      "path": "CassetteTests/ArtistAlbumCategorizerTests.swift",
+      "lines": 58,
+      "sha256": "1230d03326c1fe417b9fcffca9f80d4920bc3ad2dc5b18c115436d716b2812dd"
+    },
+    {
+      "path": "CassetteTests/ArtworkColorAnalysisTests.swift",
+      "lines": 265,
+      "sha256": "dccdc29ab670648e4b3f8781c642cdfa8a50b5de670fc852bb7c2f0323823995"
+    },
+    {
+      "path": "CassetteTests/ArtworkMemoryTests.swift",
+      "lines": 66,
+      "sha256": "166db953eccd9b45552915372243952ca7f883fe8134cab1445ff67c38151314"
+    },
+    {
+      "path": "CassetteTests/ArtworkRendererPreparationTests.swift",
+      "lines": 21,
+      "sha256": "fa7e819a01d43dbe77386172134e219d6a80b4365798de91a26fe3ad5e73b5f7"
+    },
+    {
+      "path": "CassetteTests/ArtworkSceneTests.swift",
+      "lines": 249,
+      "sha256": "6fd21f2e190c737e7cc503671728e5a52b82f8a1d22b110ca267240353f8673a"
+    },
+    {
+      "path": "CassetteTests/AtmosVariantTests.swift",
+      "lines": 284,
+      "sha256": "641aa20a61d9466c742a9dee4fe20ce7d652f43e989dcdd20941b77517f74b22"
+    },
+    {
+      "path": "CassetteTests/AudioFaststartRemuxerTests.swift",
+      "lines": 137,
+      "sha256": "f05f0e586be379a2e4622a4d6f25d87aa9b22b91af9289b9a476f3404298a507"
+    },
+    {
+      "path": "CassetteTests/AudioQualityClassifierTests.swift",
+      "lines": 256,
+      "sha256": "b756ee3a62a65b7878e4d486febd6330affbed09191a9c8851150b2b115a57c1"
+    },
+    {
+      "path": "CassetteTests/AudioResponseValidatorTests.swift",
+      "lines": 146,
+      "sha256": "88aaa5f84dd3b68ffaaa28d4a974f6a6b423d09a442e9e9c08138de6226330e1"
+    },
+    {
+      "path": "CassetteTests/BackgroundDownloadRecoveryTests.swift",
+      "lines": 145,
+      "sha256": "b60826dbe20890b059e9aeed5c924e0d903195238a39f8da930cd24d47ae178c"
+    },
+    {
+      "path": "CassetteTests/CacheFormatTests.swift",
+      "lines": 87,
+      "sha256": "6347204ab99968fc083bd55a454c3236b06806498ce202124a4386293f7f792d"
+    },
+    {
+      "path": "CassetteTests/CacheServiceServerIsolationTests.swift",
+      "lines": 79,
+      "sha256": "af494c14ca75c740abcc6cc6e86c73933bede4ca62329518d5af86a851ae3a12"
+    },
+    {
+      "path": "CassetteTests/CachedLyricsTests.swift",
+      "lines": 56,
+      "sha256": "f63bff873f1a2b198fa8fa60b448f501fc086d3f1532ca5ca3f84591528d2df7"
+    },
+    {
+      "path": "CassetteTests/CassetteTests.swift",
+      "lines": 89,
+      "sha256": "14a7cc91360e335f4cea67aa7dfc55cae0f96dd962e4e07cf47df9f7d820fc9b"
+    },
+    {
+      "path": "CassetteTests/ConnectionTestErrorMappingTests.swift",
+      "lines": 286,
+      "sha256": "b23429c3cae3eb79fe2ddf42d586b024d63c3bd2003abf820425d5b768e21f6d"
+    },
+    {
+      "path": "CassetteTests/CostBoundedCacheTests.swift",
+      "lines": 84,
+      "sha256": "1bcbc15d056508ee1933196aad65f95405e8c68ff70765cbab2e03764c2af5cc"
+    },
+    {
+      "path": "CassetteTests/CrossfadePreloadTests.swift",
+      "lines": 217,
+      "sha256": "418b5da3aa84f7af2152e20644f3e2ae5cdc4304cdcf07c0973e3627813471d2"
+    },
+    {
+      "path": "CassetteTests/CustomHeadersTransportTests.swift",
+      "lines": 118,
+      "sha256": "d8c19dbc75933dd2aa085d4ae770ee22d037da5925209fcf2f16cfb0565ed58c"
+    },
+    {
+      "path": "CassetteTests/DiscoverViewModelFreshReleasesTests.swift",
+      "lines": 193,
+      "sha256": "a98451db294d1914e7524ffdf9741ce187eecbbe119ce46ada36c8f49cb4b9ff"
+    },
+    {
+      "path": "CassetteTests/DownloadedPlayerArtworkTests.swift",
+      "lines": 95,
+      "sha256": "5fc5870942e74b63bf29a70d9817b8aba84ffc408a246ce29b40820d70898c49"
+    },
+    {
+      "path": "CassetteTests/DownloadedTrackRGMappingTests.swift",
+      "lines": 68,
+      "sha256": "b228016a7f736854f28cf003459152810ecffafc445203227568fb8e65496ebd"
+    },
+    {
+      "path": "CassetteTests/ExternalArtistImageResolverTests.swift",
+      "lines": 274,
+      "sha256": "4b31543a5f4dc68544fbcd07dbb6d696995cbe7a437c34cc729e94d1a404b352"
+    },
+    {
+      "path": "CassetteTests/ExternalArtworkCacheTests.swift",
+      "lines": 295,
+      "sha256": "0bad454681d3115e531a12adad350069397a27e407a24bb4f3497f0b76d2a5ba"
+    },
+    {
+      "path": "CassetteTests/ExternalProvidersStoreTests.swift",
+      "lines": 87,
+      "sha256": "b8fd9197e085d14c88d5f0a152afe5da1e70b30b2b56ee914cb8a160ffa12aa7"
+    },
+    {
+      "path": "CassetteTests/ExternalReleaseProviderTests.swift",
+      "lines": 138,
+      "sha256": "a373e75b41673feaa2401dc1dcb7ee72a9309d96249ac656cb6ddf9ae19e810f"
+    },
+    {
+      "path": "CassetteTests/FreshReleaseDetailSheetTests.swift",
+      "lines": 86,
+      "sha256": "2f95c3016372414bdc70f71abc8849ed264883a6a23568b4d7f3632a146de353"
+    },
+    {
+      "path": "CassetteTests/GaplessContinuityTests.swift",
+      "lines": 74,
+      "sha256": "bc5c6da32aa45b973235d5f339a6d4557c67c1fcd66d7efbc5c4349e244cd7fa"
+    },
+    {
+      "path": "CassetteTests/GaplessPolicyTests.swift",
+      "lines": 157,
+      "sha256": "4b8e60e31c55a11afe2b682badcbfde05ea29383a79dc5e5179907477d8c8539"
+    },
+    {
+      "path": "CassetteTests/HangulRomanizationTests.swift",
+      "lines": 33,
+      "sha256": "0379bc5b82a447cfdd323c7ac73752b35746a06ae87f1db5ae6f8a1d20dfcaff"
+    },
+    {
+      "path": "CassetteTests/HeaderValidatorTests.swift",
+      "lines": 98,
+      "sha256": "2cc828696ef8ffa45f7ccceb2c525ee8bf37276131e396a34df38d1fee87f83c"
+    },
+    {
+      "path": "CassetteTests/IsolationAndOfflineRegressionTests.swift",
+      "lines": 390,
+      "sha256": "b4e9a495a36953109b808e69b3ad1685000bd4177c95987097f2aae89ee9046f"
+    },
+    {
+      "path": "CassetteTests/JellyfinClientURLTests.swift",
+      "lines": 42,
+      "sha256": "c2a6001d90331712d9ef1cba424ed2f8b6b1ab60514ad6192aa79ea9fc095f0f"
+    },
+    {
+      "path": "CassetteTests/JellyfinFeatureClientTests.swift",
+      "lines": 261,
+      "sha256": "93a7e96044b8290a626adb385477e480758fceb4b6ec323342a42c5e4b3fcda0"
+    },
+    {
+      "path": "CassetteTests/JellyfinLANDiscoveryTests.swift",
+      "lines": 67,
+      "sha256": "9d4e74aec277f843b7f4d224e92ec317bfaa4a21947634097f76b8ae99f0e064"
+    },
+    {
+      "path": "CassetteTests/JellyfinMusicTransportTests.swift",
+      "lines": 216,
+      "sha256": "9c39947f1ea97ec766297144cd566f94e09ee1da2880b91ea8e3804d6dde4038"
+    },
+    {
+      "path": "CassetteTests/KeychainUpsertTests.swift",
+      "lines": 34,
+      "sha256": "c581401098880f9d9a5000c3e2174999e9f006dfac373ea1eb0d234fe00a04a3"
+    },
+    {
+      "path": "CassetteTests/LBOfflineQueueTests.swift",
+      "lines": 353,
+      "sha256": "746ac2dcb589c59d7ca327d2426a0181a9e6653c3da3b9a28c1591a89c9fda53"
+    },
+    {
+      "path": "CassetteTests/LBSubmitListensTests.swift",
+      "lines": 258,
+      "sha256": "026256f7460cc0ed087db32744e41a84d9f4e44e5f0dd65a6a1fdd671a6153ac"
+    },
+    {
+      "path": "CassetteTests/LRCParserTests.swift",
+      "lines": 90,
+      "sha256": "1b345c770043bd881f643acdcd3ed4fa392719b40248820daf2249a3b0a14a45"
+    },
+    {
+      "path": "CassetteTests/LibraryChangeDetectorTests.swift",
+      "lines": 61,
+      "sha256": "e6e33685ff99c4057edab4a9a15e5197100ad2cd4803312358394d35727766f2"
+    },
+    {
+      "path": "CassetteTests/LibraryMetadataStoreTests.swift",
+      "lines": 119,
+      "sha256": "a90472f945b6c259edc8cdbc5414419b7bf4d1f6c4257a81fd76b1476c25f7e1"
+    },
+    {
+      "path": "CassetteTests/LibraryServiceTests.swift",
+      "lines": 42,
+      "sha256": "b354d9e536775f84e4b745f46c357b990ab6dba7e9b526df9bbac31626fea449"
+    },
+    {
+      "path": "CassetteTests/ListenBrainzClientFreshReleasesTests.swift",
+      "lines": 246,
+      "sha256": "f759f4f15cfef73f0f855d13307f52dcdd807c82210caf4a891f650f81edbc9f"
+    },
+    {
+      "path": "CassetteTests/ListenBrainzClientSimilarArtistsTests.swift",
+      "lines": 152,
+      "sha256": "4ebc36d90f335d7579d86fec077f7fb6c77bd7e25e1071bfd7e73e952fbb0290"
+    },
+    {
+      "path": "CassetteTests/ListenBrainzClientTests.swift",
+      "lines": 205,
+      "sha256": "c0bb644522af7016315504bb151332167a34eb9a2c308a84821f00d029eeeaf7"
+    },
+    {
+      "path": "CassetteTests/ListenBrainzRecommendationProviderTests.swift",
+      "lines": 741,
+      "sha256": "bfad97fc9039dc2abdc1a015a5bf751d383ee88d642db99d4c172d2c04eb19c6"
+    },
+    {
+      "path": "CassetteTests/ListenBrainzServiceTests.swift",
+      "lines": 250,
+      "sha256": "a6c855680f361b24ba1f8916ff0a44323c0a09c2928bd6dba12ebb2d4bb7e950"
+    },
+    {
+      "path": "CassetteTests/ListenBrainzSettingsViewModelTests.swift",
+      "lines": 198,
+      "sha256": "c46d867f92c03a8d18845fad4aba4ea90f9aadf395b49b1fd581837ad42d0a46"
+    },
+    {
+      "path": "CassetteTests/ListenBrainzTokenValidationTests.swift",
+      "lines": 181,
+      "sha256": "c0815a4f173d548bc118677ff11fed90a4e24e181490ddf4661637aa51c3ff13"
+    },
+    {
+      "path": "CassetteTests/LocalAccountDataCleanupTests.swift",
+      "lines": 52,
+      "sha256": "3507f1ce8b5732f987147e0a2abe317e78b37c80e43621e9787ab8e6aaee95b5"
+    },
+    {
+      "path": "CassetteTests/LocalSeekSmoothnessTests.swift",
+      "lines": 156,
+      "sha256": "2a948d46648469bb22b2be3c361dc1c42b9f8a679f39c84cb1ed1f7cddf00b1c"
+    },
+    {
+      "path": "CassetteTests/LyricDisplayBuilderTests.swift",
+      "lines": 268,
+      "sha256": "c7da75d07a15fc7110e37aab47f00229b27273155f64184ac2145fdafe5fc342"
+    },
+    {
+      "path": "CassetteTests/LyricDocumentBuilderTests.swift",
+      "lines": 157,
+      "sha256": "3a24e7b654f4a6f89b9ec510cc3639a4e7d954b2306348b547ead908252cceaf"
+    },
+    {
+      "path": "CassetteTests/LyricPlaybackTimelineTests.swift",
+      "lines": 45,
+      "sha256": "f95f16ebc5c5a22754df4fccad9bd01bbbe6cbbbf4bd6eca19bfa86c38331f33"
+    },
+    {
+      "path": "CassetteTests/LyricTranslationBundlerTests.swift",
+      "lines": 62,
+      "sha256": "4f3c61663ffd30c4b90fee3206d434287d80323dd7d11fcdb7eca7b087ee78a7"
+    },
+    {
+      "path": "CassetteTests/LyricTranslationFailureTests.swift",
+      "lines": 26,
+      "sha256": "89ad98b7914e13e3ba6ea052a72456582046a96685decd763b1d4a321f69b8c8"
+    },
+    {
+      "path": "CassetteTests/LyricsAndChromeRegressionTests.swift",
+      "lines": 124,
+      "sha256": "c6fbdded8c2f90e8bdb6ac451b591cfbfef276f9fb216516399ae0135a2e9c28"
+    },
+    {
+      "path": "CassetteTests/LyricsPresentationRegressionTests.swift",
+      "lines": 91,
+      "sha256": "5fd9016c5c4bbe6ac2471f02e0f77491a3b0a43b8bfcc3f1b8cda0c2d5bd2276"
+    },
+    {
+      "path": "CassetteTests/LyricsServiceTests.swift",
+      "lines": 516,
+      "sha256": "930d99c142e2d2665308efacefe4b63dd71af1959d00a252065e01d1a6bed45f"
+    },
+    {
+      "path": "CassetteTests/LyricsSourceRaceTests.swift",
+      "lines": 136,
+      "sha256": "4a01e6cfd167d22a0a2bb2ba08931e7814b9016e9902d1180aa124a3d666e8c9"
+    },
+    {
+      "path": "CassetteTests/LyricsViewModelTests.swift",
+      "lines": 705,
+      "sha256": "850a061fbc9580b1de7b750ea70629b3d9ddca9750649ae536382ef99e38a4fb"
+    },
+    {
+      "path": "CassetteTests/MediaIdentityCompatibilityTests.swift",
+      "lines": 168,
+      "sha256": "e8832971d1fd1568afac67aa809a7125a08423a879f738ec57e81861df6d7565"
+    },
+    {
+      "path": "CassetteTests/NativePlaybackMeterTests.swift",
+      "lines": 51,
+      "sha256": "70f29c0242f0ae3ebec30286d38d103c7ec14d677ff50016fffc278af66df6f0"
+    },
+    {
+      "path": "CassetteTests/NavidromeJellyfinIDCodecTests.swift",
+      "lines": 38,
+      "sha256": "51030ea55c7fb9e46a0778da23e29c7a7c364e439e462d9122ac16b36b07604b"
+    },
+    {
+      "path": "CassetteTests/NetworkCostPolicyTests.swift",
+      "lines": 124,
+      "sha256": "abc99bb94ec40eaddb9145454ebb72ba8165659b108ef863a71bd31ba1a98209"
+    },
+    {
+      "path": "CassetteTests/NowPlayingArtworkLoaderTests.swift",
+      "lines": 61,
+      "sha256": "fe9eb054f6fad23e4cf094c5e23d81567440ee5cf7b2255e70081a5a660b1c75"
+    },
+    {
+      "path": "CassetteTests/OfflineDownloadRoundTripTests.swift",
+      "lines": 147,
+      "sha256": "2ebc95e1236d5e74f559d4c6e75fa084f70158469e303dc21330ab02b548f3be"
+    },
+    {
+      "path": "CassetteTests/OnDeviceLyricTranslationTests.swift",
+      "lines": 138,
+      "sha256": "8935f837e82b1139729909c48d22f66c510b8904f99c1ccf33a94b2a631c6260"
+    },
+    {
+      "path": "CassetteTests/OnboardingAppearanceTests.swift",
+      "lines": 49,
+      "sha256": "43a4e10d5748365c6e1abc3817db8a7dedfe8605a0b6e061016acce45488f45b"
+    },
+    {
+      "path": "CassetteTests/OnboardingViewModelTests.swift",
+      "lines": 278,
+      "sha256": "c11e3dfe544d49200f67fafec6f9a0790593377d5eb06175f4dba83c665be638"
+    },
+    {
+      "path": "CassetteTests/PerformanceBudgetTests.swift",
+      "lines": 249,
+      "sha256": "7fd2879d9cb462f3c3520334f9cb2eaf5e3d92fc412de0f6c610e9e1fcb2aee0"
+    },
+    {
+      "path": "CassetteTests/PlaybackBeatMeterTests.swift",
+      "lines": 79,
+      "sha256": "bd2f2ab688bf127c52c87699ce3d2bd39e85dbc17e8a06e08553c3910189131f"
+    },
+    {
+      "path": "CassetteTests/PlaybackBufferPolicyTests.swift",
+      "lines": 67,
+      "sha256": "523cf2d313c7f239538fbc037d72cf4bbf58bd9288dafdf8e2333e04c12fcff5"
+    },
+    {
+      "path": "CassetteTests/PlaybackControlAppearanceTests.swift",
+      "lines": 194,
+      "sha256": "25b4b7a0da1ed325cb3cd0173fa018a9a4ec820670190cef49e96c20a1bc8c3e"
+    },
+    {
+      "path": "CassetteTests/PlaybackDecisionPolicyTests.swift",
+      "lines": 286,
+      "sha256": "cced86763b06840ca2b0a3cd7a169363d07a3dcf35469168fc260c3092187dc7"
+    },
+    {
+      "path": "CassetteTests/PlaybackDetailsTests.swift",
+      "lines": 67,
+      "sha256": "c8929ce6c640697a40d67ae53fa164e4c5d7c2e44a2143b2f405abe3e10ef96c"
+    },
+    {
+      "path": "CassetteTests/PlaybackDurationPolicyTests.swift",
+      "lines": 75,
+      "sha256": "f433feafdb44495a41d2fd4737e9ddcb8b34fb2d2a27b20458b9f50eb0316c01"
+    },
+    {
+      "path": "CassetteTests/PlaybackEngineTests.swift",
+      "lines": 319,
+      "sha256": "96cef26a9b5a29ea11aa3e274dbcc8e40a2fc12b91d0e238ac8ef63bd2a35b36"
+    },
+    {
+      "path": "CassetteTests/PlaybackRecoveryPositionTests.swift",
+      "lines": 113,
+      "sha256": "75ecf948367a28e0ba4768c4b4d544ed7c590b9546a10329636c41850cf4869b"
+    },
+    {
+      "path": "CassetteTests/PlaybackRequestCancellationTests.swift",
+      "lines": 155,
+      "sha256": "ed80e64bc36f1c65404c9abc72f33ffda31cb03fd08c4befb6f0a65b699bc2b3"
+    },
+    {
+      "path": "CassetteTests/PlaybackSessionServiceTests.swift",
+      "lines": 92,
+      "sha256": "40f9bd762e28cee3d44b09985c9498c47287e72424c7bc462f7a743ee19f7c10"
+    },
+    {
+      "path": "CassetteTests/PlaybackSourceQualityTests.swift",
+      "lines": 61,
+      "sha256": "25cadf75c9065ff38a5defb00f39f22c8d080e8aa23da4c3ec44b01ae7f4f962"
+    },
+    {
+      "path": "CassetteTests/PlaylistDetailOfflineTests.swift",
+      "lines": 229,
+      "sha256": "a99e9b1422571db0452f4357f63c344158cfaad0a20cedf6fc74dfcf9b38a54e"
+    },
+    {
+      "path": "CassetteTests/PreparationETATests.swift",
+      "lines": 21,
+      "sha256": "b0a28550867818c3152a4a1f0f569b90dedcb59d94f764d1da937437fa8ac6c1"
+    },
+    {
+      "path": "CassetteTests/QueueBackfillTests.swift",
+      "lines": 116,
+      "sha256": "e70ba599b9264a21c5540d5d76eb103f26ae394139c0ba784deae9b5efc8455c"
+    },
+    {
+      "path": "CassetteTests/RCAuditRegressionTests.swift",
+      "lines": 443,
+      "sha256": "8cacf2deda9584c14ef2376c6bf577f7e7dd54bab482fc65f005a6be2dafaa61"
+    },
+    {
+      "path": "CassetteTests/RecommendationServiceIntegrationTests.swift",
+      "lines": 171,
+      "sha256": "732dd236f65dc4ddcd91cd1462b84915b047036d87c1fa9d3847a5d47fb64eb0"
+    },
+    {
+      "path": "CassetteTests/RecommendationServiceTests.swift",
+      "lines": 126,
+      "sha256": "425334eb793d0e53373f198742ba3a8406abec60d83f97cd127fe283b5f63f14"
+    },
+    {
+      "path": "CassetteTests/ReleaseCandidateRegressionTests.swift",
+      "lines": 217,
+      "sha256": "b46875ba7e7f4ccfd4bbcc8c0c91967113fc0128338dceceb748a3607ee3deee"
+    },
+    {
+      "path": "CassetteTests/ReplayGainServiceTests.swift",
+      "lines": 142,
+      "sha256": "bce712cbe59677ff06da8cd1aea49d208fc69fedb188e04954310e725b1131df"
+    },
+    {
+      "path": "CassetteTests/ScrobbleThresholdTests.swift",
+      "lines": 109,
+      "sha256": "b69e88c93607b5f365940a8e1e58c58bccc43b9ff94c55caa45e48fc1bff79fa"
+    },
+    {
+      "path": "CassetteTests/SearchHistorySnapshotTests.swift",
+      "lines": 35,
+      "sha256": "8693efca711e88f531c0911240e91773c170ceb6a295221be7d3e874e2f76717"
+    },
+    {
+      "path": "CassetteTests/SearchViewModelDebounceTests.swift",
+      "lines": 554,
+      "sha256": "7d3c6df5587579569d5114cb863745275bf954a00c75acbe49fec976b54ef732"
+    },
+    {
+      "path": "CassetteTests/SeekAndAACDownloadRegressionTests.swift",
+      "lines": 131,
+      "sha256": "595b373bf7e17940fcb79f5708f89c77e86406944e698c2a10589d7bc8ee0bea"
+    },
+    {
+      "path": "CassetteTests/ServerEndpointNormalizerTests.swift",
+      "lines": 34,
+      "sha256": "1eac20e2e079554f5cbc25b07d94493c015f4be7a6816971579264a746fe297d"
+    },
+    {
+      "path": "CassetteTests/ServerReachabilityMonitorTests.swift",
+      "lines": 131,
+      "sha256": "04aec7354da830216cb45a84b3514e07785981f569ce015b99124b75d321b281"
+    },
+    {
+      "path": "CassetteTests/ServerServiceTests.swift",
+      "lines": 260,
+      "sha256": "151010fbc85b1784b9c4235b583091104ceb0bab685428614b1a9791781b01bd"
+    },
+    {
+      "path": "CassetteTests/SettingsIconTests.swift",
+      "lines": 67,
+      "sha256": "9268108092197bf3e52a4bbcc5021852f40f073894ba76208b5d45b697726c27"
+    },
+    {
+      "path": "CassetteTests/ShareLinkValidationTests.swift",
+      "lines": 26,
+      "sha256": "80c610775654658fb5f6c4561a23a043893918c8e1160b8150d33c70a1321b29"
+    },
+    {
+      "path": "CassetteTests/SiriEntityMappingTests.swift",
+      "lines": 119,
+      "sha256": "612af43350c3ef1172aafbfed92efdd06af4f613931229b3b4d2e5a274ba6a5a"
+    },
+    {
+      "path": "CassetteTests/SongPreparationTests.swift",
+      "lines": 39,
+      "sha256": "2b2a00082f5a16f3173373fb3cafb14b4278932652d331baea58d7711552c1ab"
+    },
+    {
+      "path": "CassetteTests/SongsListViewModelTests.swift",
+      "lines": 292,
+      "sha256": "1396916c05f922daac0b61106e6b9738820c2b4634403a233333286649f92b76"
+    },
+    {
+      "path": "CassetteTests/StatsServiceTests.swift",
+      "lines": 129,
+      "sha256": "7788d41dbd4f3ef6ebcdd9cad02a861cac055946f38206ecc29192e34aadb156"
+    },
+    {
+      "path": "CassetteTests/StorySlideTimingTests.swift",
+      "lines": 34,
+      "sha256": "18e4101f4ec0893db58b55aeb6033cd20d4aad78e9e13ab22d464f396b7d3ad8"
+    },
+    {
+      "path": "CassetteTests/TTMLSemanticTests.swift",
+      "lines": 162,
+      "sha256": "8051a8075dfc4926aa239954dac9220514f2c2a98a4e861284628bad60849463"
+    },
+    {
+      "path": "CassetteTests/TranscodeHTTPSeekTests.swift",
+      "lines": 315,
+      "sha256": "364c7e219f1cbb94f59d0b9ce39c09b26f8bd4bfb384661576a71af609a9f88e"
+    },
+    {
+      "path": "CassetteTests/TranscodeSeekTests.swift",
+      "lines": 224,
+      "sha256": "64804c8c14004b6b08b308f5ab1a7584859411657905df58b1025cec1871432a"
+    },
+    {
+      "path": "CassetteTests/WrappedAggregationTests.swift",
+      "lines": 386,
+      "sha256": "a4115509c3c7e087f58f65cb3816a94fda3487c80c5702590c0160f598e408ca"
+    },
+    {
+      "path": "CassetteTests/WrappedPlaylistServiceTests.swift",
+      "lines": 324,
+      "sha256": "61fbbc73a282608ae91196f93753367ecf18a6ed61137a66d5fa8e14078dad27"
+    },
+    {
+      "path": "CassetteTests/WrappedStoryAvailabilityTests.swift",
+      "lines": 176,
+      "sha256": "77cefbc42cc0c230196bf89f7ec41c2bbca5417a481c758daab809688fe7056c"
+    },
+    {
+      "path": "CassetteTests/WrappedStreakTests.swift",
+      "lines": 244,
+      "sha256": "81c25943aebd228d8173d188bc70171d463746431b62acef9685a5d69293b998"
+    },
+    {
+      "path": "CassetteTests/WrappedYearTransitionTests.swift",
+      "lines": 229,
+      "sha256": "0c30b68284f4447ebeea2498a5de1b2b5386d52881be8a993fc3dc3c0fa10b0e"
+    },
+    {
+      "path": "CassetteUITests/CassetteUITests.swift",
+      "lines": 60,
+      "sha256": "974d431f614d6163f6d232a5b4e2e045d03dee24d3977fd66e8a80c25df29118"
+    },
+    {
+      "path": "CassetteUITests/CassetteUITestsLaunchTests.swift",
+      "lines": 40,
+      "sha256": "458f770cefcf1a94256dfd489c2a97dc308584579432c46d09b9246772b1568a"
+    },
+    {
+      "path": "CassetteUITests/ListeningJourneyUITests.swift",
+      "lines": 88,
+      "sha256": "baec51fa060394573970021c6b19ed30fbf835e7751bcf5ff637d69894865399"
+    },
+    {
+      "path": "Packages/SwiftSonic/Package.swift",
+      "lines": 40,
+      "sha256": "16d925edc2f5282fd19ec9329b3c9c7ec81f6bc6c6924084400b8beafe9df4ae"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Core/RetryPolicy.swift",
+      "lines": 112,
+      "sha256": "c93efc817efea6a6291494ae3dd3517c32a2903f830689a7f606877d4137c8cb"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Core/ServerCapabilities.swift",
+      "lines": 149,
+      "sha256": "1cdd040e13910c98ffce60bcdcf74275c50c14c1e7abcd480ebc35b19830f495"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Core/ServerConfiguration.swift",
+      "lines": 197,
+      "sha256": "0b8b7111962ebb6c9c5be900ba6dd019c7e3d259b0428608cab244e4bd1f4f4a"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Core/SwiftSonicClient.swift",
+      "lines": 431,
+      "sha256": "f24635b9ccc249844b487246227283c6ff2de75b8821525d8b9bc9faba1ecb16"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Core/SwiftSonicError.swift",
+      "lines": 257,
+      "sha256": "0b40dec7633d3f6f9b3b8d9b873bc366edd4664012349a841dbb868ca6109c01"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Core/SwiftSonicMetricsCollector.swift",
+      "lines": 61,
+      "sha256": "d9a547d450aeb4519b73033714486815e49a2cc9e60e82b8ee0557bcae9d4ea6"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Annotations.swift",
+      "lines": 121,
+      "sha256": "4256255bb23e9c8114614da198899f8483405092f170a01fd098ad71686bc118"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Bookmarks.swift",
+      "lines": 85,
+      "sha256": "a31a6e2c85a9c7a137eb11052ee96b956f6ba485a5c025777fa6a6851907d627"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Browsing.swift",
+      "lines": 315,
+      "sha256": "eccb332218776fca1d90b22d54edf93f80c24d28babb31f1988cd3997a443637"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Chat.swift",
+      "lines": 66,
+      "sha256": "de52283d8434c4c6269fe7a8c1b61d7e3b9cd9c79ac067cc7a15008306beb730"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Discovery.swift",
+      "lines": 215,
+      "sha256": "8624822f6ac738de9c66b85670b4aabb14397e2da66d3c0ffe9f7b6af823064d"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Jukebox.swift",
+      "lines": 159,
+      "sha256": "a740151a4072ae976086b1375b8d6ca67262c8944e9f4a1204331c5ee176d15a"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Lists.swift",
+      "lines": 312,
+      "sha256": "ccd27b7c83dd5b7c604b54412667ab18ca1e8fb697e545673d873aacf2408577"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Lyrics.swift",
+      "lines": 52,
+      "sha256": "0f91aa9aa7dd737ba5d11cc1262f4ee854b4d98f9c295c922695cef1ca90b1e0"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Media.swift",
+      "lines": 116,
+      "sha256": "19323d01ceb71ce7b73d686c5bdc50a85471c0caa802db6cc1703971ebdfb60d"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+NowPlaying.swift",
+      "lines": 46,
+      "sha256": "554aa51a7785c10ea77a28b39a293ffa140656c6436fb4d4e6882d28ee5a8007"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+PlayQueue.swift",
+      "lines": 87,
+      "sha256": "c245c1995a6fe93c83b11c8781869ef5c428a455f9cd78f68dc26d7c54b561d9"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+PlaybackReport.swift",
+      "lines": 75,
+      "sha256": "6a3faf660e55cc8423ac21c8a3a798464a4be568cf1bc473018a10121a4c3856"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Playlists.swift",
+      "lines": 157,
+      "sha256": "cfcd9ea72e38289ebb3a0285c5f36466a03891a427bd357c756dc9dd074b4025"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Podcasts.swift",
+      "lines": 143,
+      "sha256": "6926bffcd20424dcf3eb633940e332ea32942259e1478db230d7adc818b4207f"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Radio.swift",
+      "lines": 99,
+      "sha256": "df005599ab5ddba816db63ca69119c499fcfd3dbcca4b8aec922de540b51b92a"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Scan.swift",
+      "lines": 64,
+      "sha256": "c9a038ad7bd27488b2a4e041b3a154dd82a0ad3e337cc7fbf7806bd71b24c0f8"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Search.swift",
+      "lines": 141,
+      "sha256": "2ec7a6f9ce3b8712ec2f738076ae52bf11a3fb0aabfbf789979ead7597765e85"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Shares.swift",
+      "lines": 132,
+      "sha256": "2e73af3c35ac4d84f941eb0ba9e62a6bdde3ae582a0c20f20e4e082d384e7a6a"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+System.swift",
+      "lines": 114,
+      "sha256": "adf04a322298ccca9961bbc965a2c857074d721de441b9137525bf853832f4ef"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Endpoints/SwiftSonicClient+Users.swift",
+      "lines": 157,
+      "sha256": "516985808de0c6e698781b526a26f31cf17da9c09f2f0ee7083e5a52cb42d7ec"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Internal/CryptoHelpers.swift",
+      "lines": 51,
+      "sha256": "7ee5bfa10c37d064738431bb2f044aca98b58040c01f0573368ba3f6f3249dba"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Internal/LossyDecodableArray.swift",
+      "lines": 65,
+      "sha256": "c9af656b825c4729b57ee60f0ae4baa5988a6b54217de983d3a3f75c3cf6c5e5"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Internal/RequestBuilder.swift",
+      "lines": 129,
+      "sha256": "fde877badc37070c235e95848696df28e105b875a9e6cf9a1b1666ed579de447"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Internal/SubsonicEnvelope.swift",
+      "lines": 114,
+      "sha256": "5e78a56f355d2f47fa34b9e23101af880b2b210d3cf37b28915aa7974d9069a7"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Internal/URLExtensions.swift",
+      "lines": 49,
+      "sha256": "9944da0f6ec189e3accc4434134219b86663d9304824f5cbb1607e50abee73ae"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Album.swift",
+      "lines": 199,
+      "sha256": "902680f2ce974aee80f2e252ab1f8661e5d5efabbf35e6da39a10506568abb5b"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Artist.swift",
+      "lines": 121,
+      "sha256": "a6cfca7ff6ee677c0bd18868c6c8faad4eac526ca8006920cf3b7b5b0daa8dfa"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Bookmark.swift",
+      "lines": 52,
+      "sha256": "6c7540cad695bfb3d4c3be6605fc592b0a959196d98de3733157e49691b6215c"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/ChatMessage.swift",
+      "lines": 39,
+      "sha256": "951ba331ef209c002717568e2b82e8e0f458d1db6b06442ac44eaf86558db4f5"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Directory.swift",
+      "lines": 39,
+      "sha256": "c460dd8ffe8090b20b7b674ccbe63017a1827e0e9363c818bf25a2f7bae9dc8d"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Genre.swift",
+      "lines": 71,
+      "sha256": "c749ee5eeb810d0d87002db5a2798aea9af9ba35eb0cb6b12aeda00d4049c647"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/InternetRadioStation.swift",
+      "lines": 25,
+      "sha256": "1e548277b5a0251ebedfe2f3ee45a36772b522988d5389d93ebf4941f3c5834b"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Jukebox.swift",
+      "lines": 62,
+      "sha256": "d6518292daf37604f4ec5f541c656f000a874a0194091e646fd644ec806c9e24"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/License.swift",
+      "lines": 20,
+      "sha256": "4448d19225baf75b0ba8cd2ed9c9052ea57369ee352502edd2ac79918c9630fa"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Lyrics.swift",
+      "lines": 216,
+      "sha256": "385b3048bb429f95f7ffe68ea9b432cd9815287d0e6cd7ea1f129b2506b3436f"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/MusicFolder.swift",
+      "lines": 16,
+      "sha256": "93801e21c316fd063ea3e36bad29f2a301b38d3bba7b2de7ee3a150b5138a0e7"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/NowPlayingEntry.swift",
+      "lines": 51,
+      "sha256": "989fa24591302a459e0528799d8d301a1e228fb81370375755ddff1be420a8e3"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Playlist.swift",
+      "lines": 120,
+      "sha256": "c5ba10c5c8254f55d3848e836ebaed54e11faf427a1dca53d489741f3fc04ab0"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Podcast.swift",
+      "lines": 129,
+      "sha256": "607eeaf40cebc4e01fb69daa35aa98cf263ba2452b00c92d8d6fd622231a61ce"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/SavedPlayQueue.swift",
+      "lines": 55,
+      "sha256": "24e51e5e592cfac1ed3fead317d3d7852f01cf57f724deb8e3af0fc13d5d2469"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/ScanStatus.swift",
+      "lines": 71,
+      "sha256": "602b3a3418afa350f9a0c3cd654ce5a3eef0b23e68d9cc5f30af65da24c90cfa"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/SearchResult.swift",
+      "lines": 70,
+      "sha256": "67b40a39bcd5cd36509969e64cace8ddeda7a86d57b92b62f8951a66ef077957"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Share.swift",
+      "lines": 56,
+      "sha256": "7f19a4ba2981a6c11e5c7c6eeef5b4be5094c1f4f176c1b9432b8a90a654e72a"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/SharedModels.swift",
+      "lines": 186,
+      "sha256": "6480a265eb80c04d3343c07ac1ff498a8de4b13c9e736ca61e778225f5e38471"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Song.swift",
+      "lines": 294,
+      "sha256": "3208e607d68aae40e886c120981b5efd0d2aa25eb6ff0f8606134ff54d159806"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/Starred.swift",
+      "lines": 47,
+      "sha256": "ce508657dcf3cf8a4f828cf721d584969d35f3014b8b09d58eae6c3408d00c3f"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Models/User.swift",
+      "lines": 196,
+      "sha256": "0a79ae2ef0bee2ec349271e4e9dce6002f814b0f433db06d71e6d79d8eb2148d"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Navidrome/NavidromeNativeAPI.swift",
+      "lines": 150,
+      "sha256": "837838b0afeac723f7d31f68c82e71e3bcd9b0510077772522a992450483d336"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Navidrome/NavidromeNativeAPIError.swift",
+      "lines": 40,
+      "sha256": "a9beece89f812de672a8b51404092393124efa4986373e2bbdce541c9ca8928d"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Navidrome/NavidromePlaylistCoverUploading.swift",
+      "lines": 63,
+      "sha256": "ba9a6df8c1077e95e7106b2304023b6242e811f0699c7c253ff2aaf7f1d0d335"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Navidrome/NavidromeShareCreating.swift",
+      "lines": 50,
+      "sha256": "1ee5f3af217bfd2dfa9f68e4fc60b8df766dfa535f2a0c964ce6cfa2f547677b"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Transport/HTTPTransport.swift",
+      "lines": 44,
+      "sha256": "be5d41333b766c32f32064bfd3feac761335240fd5a086ce6141d560108f5148"
+    },
+    {
+      "path": "Packages/SwiftSonic/Sources/swiftsonic/Transport/URLSessionTransport.swift",
+      "lines": 102,
+      "sha256": "fba24e087e9320da7390caa35fbcb3872b423bc3eb41e6cde5f2a37c700fbc78"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/AnnotationsTests.swift",
+      "lines": 271,
+      "sha256": "5d0773429d468ea7b59d7fc05436e3f3ddb113fe29fc5b5e7019cd9777d21e5b"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/BookmarksTests.swift",
+      "lines": 123,
+      "sha256": "b130a4891de8e130c1bd1b6f2b25fed0e991e2a5be073a918e94f8b014d161c4"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/BrowsingTests.swift",
+      "lines": 316,
+      "sha256": "539aa8c575f68f016157920f0eb4ccdaf11a9e5e6b31de762fb2c9c4f2afcf14"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/ChatTests.swift",
+      "lines": 117,
+      "sha256": "b68bdd664c52e6a1d6835d2d7aab51f4d0425def9f835c3bcd8597d9f984f635"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/DiscoveryTests.swift",
+      "lines": 246,
+      "sha256": "e7c2abd957cc76c2dc5825843aa89399eca25c3f0b9d2615c8ea2ff65dcad102"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/HashableTests.swift",
+      "lines": 482,
+      "sha256": "437369f0d4662f17c31da84342bcca0045ea32ceca6b6c70219f97974f88a1e4"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/IntegrationTests.swift",
+      "lines": 150,
+      "sha256": "39445872d1cda9b98934893886664b22da7749bc061c1edef32d7154a9189a54"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/JukeboxTests.swift",
+      "lines": 212,
+      "sha256": "9db2f69aef09094d297da6f93fdae38d38b9692c6233f7a86d0809770bdd3194"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/ListsTests.swift",
+      "lines": 277,
+      "sha256": "b4d55610b0e4a9d1af8cdd84d5ee332300a434a4e9c53c9122fab81536a4df46"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/LyricsTests.swift",
+      "lines": 222,
+      "sha256": "62c02383ead545d260b6bf1274a7667e45f858dc932309ea5d9926c60f244638"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/MediaTests.swift",
+      "lines": 160,
+      "sha256": "27020b0c145c6a7be59907aa5472e0337d3e559a393ab00b14d8eb9f85b3370f"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/NavidromeNativeAPITests.swift",
+      "lines": 311,
+      "sha256": "150694038fcb618011a2c7b14a70bbfc6d6d27b36a46a6c558e165616a2a8cff"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/NoLeakTests.swift",
+      "lines": 270,
+      "sha256": "1db9377e65b6c62a90fd5bc9959a7eb3b79b5c62ddcc2cb5e61a5248379dac90"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/NowPlayingTests.swift",
+      "lines": 93,
+      "sha256": "8fe8d6589d9a208091599da697f5b38bd65925d309b4979cd1a813f277dbc5d0"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/PlayQueueTests.swift",
+      "lines": 131,
+      "sha256": "5a740f1dd5402445771a0229dd8e1c82b57c6d208a90b6721ef5abdf2da052b5"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/PlaybackReportTests.swift",
+      "lines": 100,
+      "sha256": "a238555603ec5466188e822f9496a452d6ada181dc5fbddb97589d48112ffe0c"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/PlaylistsTests.swift",
+      "lines": 309,
+      "sha256": "305b7bfd7e4dbcc1cadd25850fcd0fa77ad85e83e409b6c6033e635f12fbb23f"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/PodcastsTests.swift",
+      "lines": 186,
+      "sha256": "f10c1a3920e0caff0b56392c528db8cc678fb1f5daad30fe9e424fb5f5c81398"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/PublicInitTests.swift",
+      "lines": 343,
+      "sha256": "7cec2980eefec5efdebd37a3207dc8dd83e6a39bb2d32bc3bca01013727439c2"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/RadioTests.swift",
+      "lines": 147,
+      "sha256": "c4a25d3b09315dfe9cf0414c8afb77a2cbcedf7262925ad4aa88d5867f76c2ce"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/ResilienceTests.swift",
+      "lines": 341,
+      "sha256": "cdf1e2b5b7027e719f8d01fca5ba8c64202e8cef7e007b91d28016469eb2030d"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/RetryTests.swift",
+      "lines": 187,
+      "sha256": "a9e43e5771444c8a1c058ad1c0156800d1702d363d26628c11a471840620f30e"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/ScanTests.swift",
+      "lines": 83,
+      "sha256": "e0931cb4a2f577b5c40fe537cb98067f8886d42ba56d8ad0b08705f429d53a45"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/SearchTests.swift",
+      "lines": 242,
+      "sha256": "59d003c4993704298eece91f36524af8cd2f0109ea9ff6fa555d28451dc02460"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/SharesTests.swift",
+      "lines": 167,
+      "sha256": "7d4d39458e0b86bd7605d4c7aa28b39b33e9d0eb179ffd40a68d598f36e66789"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/Support/FixtureLoader.swift",
+      "lines": 28,
+      "sha256": "597587d47fbfdaeabe0a646d3d296f0c3f3a2fed4d128ecba5f8b2ac2dbe6324"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/Support/MockHTTPTransport.swift",
+      "lines": 113,
+      "sha256": "74067b4b8187e256fb36a46dd56dfac7414728f74fe4d8a05f873d2646e9c656"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/Support/MockURLProtocol.swift",
+      "lines": 59,
+      "sha256": "8f9e7429169a8e9b8c8afdfdf6a7740338f86c05ca2d5a75832b07469aded5f6"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/Support/ServerConfiguration+Test.swift",
+      "lines": 16,
+      "sha256": "f7ad02fecf387ea8364f356f21bed7eaef811c337fd45cedffc33cd27b9ed056"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/SystemTests.swift",
+      "lines": 353,
+      "sha256": "60f4f9ea08a1403cb762fcd9a9bcb07a345587f9d3f961459dc055a93693e05d"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/URLProtocolTests.swift",
+      "lines": 130,
+      "sha256": "59bc07602c042f37afd504cbbceeab36bd41497fa68c831de3bd9e5ae6e539fb"
+    },
+    {
+      "path": "Packages/SwiftSonic/Tests/swiftsonicTests/UserTests.swift",
+      "lines": 278,
+      "sha256": "39e378e5c5cdf4c83b5da4ae35db08178dde89008ebebc6b53c338c965c180ee"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/Helpers/SharedWidgetData.swift",
+      "lines": 50,
+      "sha256": "4910f6c0881b2283ddf2f4a6933bc30990ffcb8dfe18962b7c6f391b7fefe726"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/LibraryPreparation/LibraryPreparationLiveActivity.swift",
+      "lines": 195,
+      "sha256": "465b7fb9df916684877c56c4096d7fa8ccae16a0eaa77e0bbd2a032981052736"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/NowPlaying/NowPlayingEntry.swift",
+      "lines": 63,
+      "sha256": "84ce77dc9eb0dd3dd17fa1f3660c0444c614cc6add0ec3d60e322aa4141669e4"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/NowPlaying/NowPlayingMediumView.swift",
+      "lines": 54,
+      "sha256": "c5a0d3543ea4e1a781629dd6cb7641cac65e63fdd9f2338cdc74d49502a661b2"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/NowPlaying/NowPlayingSmallView.swift",
+      "lines": 59,
+      "sha256": "a3003986fa3474d7d5745e4d5474402b2833fbaf510aec86dff6e31466ba5f13"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/NowPlaying/NowPlayingWidgetComponents.swift",
+      "lines": 81,
+      "sha256": "89c97ff1cb42808920b5527ae22198e3c3577fa338b60f7ee1cfc1635c479c6a"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/PinnedWidget/PinnedEntry.swift",
+      "lines": 63,
+      "sha256": "29f7777af417881dfdab9f65282a061348d90602fca2131ffe231649ba6974f6"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/PinnedWidget/PinnedLargeView.swift",
+      "lines": 56,
+      "sha256": "1b1b531b3f0a10576e07792f47125c26d6521a398e420587160b65728469da59"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/PinnedWidget/PinnedMediumView.swift",
+      "lines": 46,
+      "sha256": "03acb843447ce17512ed7546cdb0adfd94f7ba3cfee3e7682d04a927ff5b7f6a"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/PinnedWidget/PinnedWidget.swift",
+      "lines": 34,
+      "sha256": "531585328295725691215b7a92b6448de4d977ff6fc82d05dcaa1cd47edcf01b"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/PinnedWidget/PinnedWidgetComponents.swift",
+      "lines": 65,
+      "sha256": "81fae767cac61c6be3babbe9fd1e868a29e4b19625aa21c47ccf200d0438b3ae"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/fr_mathieu_dubart_CassetteWidgets.swift",
+      "lines": 34,
+      "sha256": "42206898c00194897b91b2ae5eb7ab8e3ba0a0d74339d70d1bdf7176d98abf7f"
+    },
+    {
+      "path": "fr.mathieu-dubart.CassetteWidgets/fr_mathieu_dubart_CassetteWidgetsBundle.swift",
+      "lines": 18,
+      "sha256": "c8d4f3e568aae81cca765e29012ba285334eacbc94e8bf08f90eb9e5d7aeeff2"
+    }
+  ]
+}

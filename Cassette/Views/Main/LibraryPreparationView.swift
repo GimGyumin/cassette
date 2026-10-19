@@ -98,8 +98,8 @@ struct LibraryPreparationView: View {
 
     private var coverProgress: String? {
         guard phase == .covers, let state = container?.albumCoverPreloadService.state,
-              state.total > 0 else { return nil }
-        return "\(state.completed) / \(state.total)"
+              !state.isResolvingInventory && state.libraryTotal > 0 else { return nil }
+        return "\(state.availableCompleted) / \(state.libraryTotal)"
     }
 
     private func phaseAtOrPast(_ target: LibraryPreparationPhase) -> Bool {

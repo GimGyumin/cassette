@@ -15,6 +15,7 @@ struct PlaylistDetailView: View {
     let playlistId: String
     let initialName: String
     let coverArtId: String?
+    let generatedSource: GeneratedPlaylistSource?
     private let initialDominantColor: Color
     let initialCoverImage: PlatformImage?
     private let zoomSourceId: String?
@@ -24,6 +25,7 @@ struct PlaylistDetailView: View {
         playlistId = playlist.id
         initialName = playlist.name
         self.coverArtId = coverArtId
+        self.generatedSource = GeneratedPlaylistSource.fromLocalPlaylistID(playlist.id)
         self.initialDominantColor = initialDominantColor
         self.initialCoverImage = initialCoverImage
         self.zoomSourceId = zoomSourceId
@@ -37,6 +39,7 @@ struct PlaylistDetailView: View {
         playlistId = playlist.playlistId
         initialName = playlist.name
         self.coverArtId = coverArtId
+        self.generatedSource = GeneratedPlaylistSource.fromLocalPlaylistID(playlist.playlistId)
         self.initialDominantColor = initialDominantColor
         self.initialCoverImage = initialCoverImage
         self.zoomSourceId = zoomSourceId
@@ -46,10 +49,11 @@ struct PlaylistDetailView: View {
         _dominantColor = State(initialValue: initialDominantColor)
     }
 
-    init(playlistId: String, name: String, coverArtId: String? = nil, initialDominantColor: Color = .clear, initialCoverImage: PlatformImage? = nil, zoomSourceId: String? = nil, zoomNamespace: Namespace.ID? = nil) {
+    init(playlistId: String, name: String, coverArtId: String? = nil, initialDominantColor: Color = .clear, initialCoverImage: PlatformImage? = nil, zoomSourceId: String? = nil, zoomNamespace: Namespace.ID? = nil, generatedSource: GeneratedPlaylistSource? = nil) {
         self.playlistId = playlistId
         self.initialName = name
         self.coverArtId = coverArtId
+        self.generatedSource = generatedSource ?? GeneratedPlaylistSource.fromLocalPlaylistID(playlistId)
         self.initialDominantColor = initialDominantColor
         self.initialCoverImage = initialCoverImage
         self.zoomSourceId = zoomSourceId
@@ -59,17 +63,26 @@ struct PlaylistDetailView: View {
         _dominantColor = State(initialValue: initialDominantColor)
     }
 
+    init(generatedSource: GeneratedPlaylistSource) {
+        self.init(playlistId: generatedSource.id, name: generatedSource.title,
+                  initialDominantColor: Color(hex: "#24283E"), generatedSource: generatedSource)
+    }
+
     @Environment(\.appContainer) var container
     @Environment(\.dismiss) var dismiss
     @Environment(DominantColorExtractor.self) var colorExtractor
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
 
     private var usesDesktopDetail: Bool {
         CassetteWideLayout.usesDesktopDetail(horizontalSizeClass: horizontalSizeClass)
     }
     @State var viewModel: PlaylistDetailViewModel?
+    @State private var viewModelAccountID: UUID?
+    @State private var foregroundRefresh: Task<Void, Never>?
+    @ScaledMetric(relativeTo: .largeTitle) var heroTitleSize: CGFloat = 44
     @State var dominantColor: Color = .clear
     /// A user-picked gradient spec (if any) -> the hero renders CRISP from it instead of the JPEG. Resolved
     /// from PlaylistCoverStore on appear + after an edit (coverRefreshID). Nil for photo / server cover.
@@ -188,7 +201,7 @@ struct PlaylistDetailView: View {
         return downloadedFallbackSongs
     }
 
-    var body: some View {
+    private var playlistPresentation: some View {
         Group {
             if usesDesktopDetail {
                 desktopPlaylistBody
@@ -201,10 +214,16 @@ struct PlaylistDetailView: View {
         // mode broke the List's scrolling; nil restores the default (normal scroll) for the read-only view.
         .environment(\.editMode, isEditing ? Binding.constant(EditMode.active) : nil)
         #endif
-        .cassetteHideTopScrollEdgeEffect()
+        .cassetteSoftTopScrollEdge()
         .cassetteStatusBarScrim(isLightPage: atmosphere.isLight)
         .miniPlayerBottomMargin()
-        .refreshable { await viewModel?.load() }
+        .refreshable { await viewModel?.load(forceRefresh: true) }
+        .onChange(of: scenePhase) { _, phase in
+            guard generatedSource != nil, phase == .active else { return }
+            foregroundRefresh?.cancel()
+            foregroundRefresh = Task { await viewModel?.load(forceRefresh: true) }
+        }
+        .onDisappear { foregroundRefresh?.cancel() }
         .cassetteDestructiveAlert(
             "Remove downloaded playlist?",
             isPresented: $showDeleteAlert,
@@ -304,10 +323,10 @@ struct PlaylistDetailView: View {
             GeometryReader { proxy in
                 Color.clear
                     .onAppear {
-                        if !usesDesktopDetail { heroHeight = proxy.size.width }
+                        if !usesDesktopDetail { heroHeight = max(520, proxy.size.width * 1.45) }
                     }
                     .onChange(of: proxy.size.width) { _, w in
-                        if !usesDesktopDetail { heroHeight = w }
+                        if !usesDesktopDetail { heroHeight = max(520, w * 1.45) }
                     }
             }
         }
@@ -317,6 +336,7 @@ struct PlaylistDetailView: View {
         .chromeAppearance(atmosphere.preferredColorScheme)
         .navigationTitle("")
         .navigationBarTitleDisplayModeInline()
+        .toolbarRole(.editor)
         #if os(iOS)
         .navigationBarBackButtonHidden(isEditing)
         #else
@@ -328,23 +348,33 @@ struct PlaylistDetailView: View {
         #if os(iOS)
         .cassetteImmersiveStatusBar(colorScheme: atmosphere.preferredColorScheme)
         #endif
+    }
+
+    var body: some View {
+        playlistPresentation
         // Keyed on connectivity so the list re-loads from the right source when
         // NWPathMonitor flips isOnline — same pattern as PlaylistDetailMacOS.
-        .task(id: container?.serverState.isOnline) {
+        .task(id: "\(container?.serverState.activeServer?.id.uuidString ?? ""):\(container?.serverState.isOnline == true)") {
             guard let c = container else { return }
-            if viewModel == nil {
+            if viewModel == nil || viewModelAccountID != c.serverState.activeServer?.id {
                 viewModel = PlaylistDetailViewModel(
                     playlistId: playlistId,
                     libraryService: c.libraryService,
                     downloadService: c.downloadService,
                     playlistService: c.playlistService,
                     toastService: c.toastService,
-                    serverState: c.serverState
+                    serverState: c.serverState,
+                    generatedSource: generatedSource,
+                    generatedLoader: { @MainActor @Sendable force in
+                        await generatedSource?.snapshot(in: c, forceRefresh: force)
+                    }
                 )
+                viewModelAccountID = c.serverState.activeServer?.id
             }
             await viewModel?.load()
         }
         .task(id: effectiveCoverArtId) {
+            guard generatedSource == nil else { return }
             // Photo / server cover -> extract the dominant. Gradient playlists are themed from the spec base
             // color (cover-refresh task), not the JPEG, so gradient + body stay coherent.
             guard gradientSpec == nil else { return }
@@ -357,6 +387,12 @@ struct PlaylistDetailView: View {
             await loadDominantColor(coverArtId: artId)
         }
         .task(id: coverRefreshID) {
+            if let generatedSource {
+                let kind = generatedSource.mixKind ?? .essentials
+                dominantColor = Color(hex: "#24283E")
+                gradientSpec = PlaylistGradientSpec(shape: .mesh, baseColor: Color(hex: kind.gradientHexes.top))
+                return
+            }
             // A user-picked gradient -> render the hero CRISP from the spec (the JPEG stays the
             // cards/cross-device truth), AND theme the body straight from the (vibrance-boosted) spec base
             // color so gradient + background + body stay coherent, no JPEG re-extraction. Re-resolves after an

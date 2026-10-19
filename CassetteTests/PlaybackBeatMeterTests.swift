@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 import AVFoundation
 @testable import Cassette
 
@@ -48,5 +49,31 @@ struct PlaybackBeatMeterTests {
         #expect(PlaybackBeatMeter.bandEnergies(from: empty, bandCount: 4) == [0, 0, 0, 0])
         let buffer = try buffer(filledWith: { _ in 1 })
         #expect(PlaybackBeatMeter.bandEnergies(from: buffer, bandCount: 0).isEmpty)
+    }
+
+    @Test("Interleaved stereo reads both channels without advancing past storage")
+    func interleavedStereo() throws {
+        let format = try #require(AVAudioFormat(commonFormat: .pcmFormatFloat32,
+            sampleRate: 44100, channels: 2, interleaved: true))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1024))
+        buffer.frameLength = 1024
+        let data = try #require(buffer.floatChannelData)[0]
+        for frame in 0..<1024 { data[frame * 2] = 0; data[frame * 2 + 1] = 1 }
+        #expect(PlaybackBeatMeter.bandEnergies(from: buffer).allSatisfy { abs($0 - sqrt(0.5)) < 0.0001 })
+    }
+
+    @Test("Native Float64 PCM is analyzed without format conversion")
+    func nativeFloat64() throws {
+        var samples = Array(repeating: Double(0.25), count: 128)
+        let format = AudioStreamBasicDescription(mSampleRate: 48000, mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 8, mFramesPerPacket: 1, mBytesPerFrame: 8,
+            mChannelsPerFrame: 1, mBitsPerChannel: 64, mReserved: 0)
+        let result = samples.withUnsafeMutableBytes { bytes in
+            var list = AudioBufferList(mNumberBuffers: 1,
+                mBuffers: AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(bytes.count), mData: bytes.baseAddress))
+            return PlaybackBeatMeter.bandEnergies(bufferList: &list, format: format, frameCount: 128)
+        }
+        #expect(result == [0.25, 0.25, 0.25, 0.25])
     }
 }

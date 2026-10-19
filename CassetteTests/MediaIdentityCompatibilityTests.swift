@@ -7,6 +7,76 @@ import Testing
 @Suite("Remote media identity compatibility")
 @MainActor
 struct MediaIdentityCompatibilityTests {
+    @Test func batchedDownloadIdentitiesPreserveAliasesAndServerScope() async throws {
+        let container = try AppContainer(inMemory: true, engine: FakePlaybackEngine())
+        let server = UUID()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("downloads"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data([1]).write(to: directory.appendingPathComponent("downloads/fixture"))
+        let downloads = DownloadService(serverService: container.serverService, modelContainer: container.modelContainer,
+            toastService: ToastService(), mediaIdentityService: container.mediaIdentityService,
+            journal: BackgroundDownloadJournal(directory: directory.appendingPathComponent("journal")), storageDirectory: directory)
+        container.modelContainer.mainContext.insert(DownloadedTrack(songId: "old", serverId: server,
+            filePath: "fixture", fileSize: 1, mimeType: "audio/flac", title: "Song"))
+        try container.modelContainer.mainContext.save()
+        #expect(container.mediaIdentityService.registerAlias(oldID: "old", newID: "current", serverId: server,
+            entityType: .song, verificationSource: .serverResponse, confidence: 1))
+        #expect(await downloads.downloadedSongIds(serverId: server) == ["old", "current"])
+        #expect(await downloads.downloadedSongIds(serverId: UUID()).isEmpty)
+        #expect(container.mediaIdentityService.registerAlias(oldID: "current", newID: "newest", serverId: server,
+            entityType: .song, verificationSource: .serverResponse, confidence: 1))
+        #expect(await downloads.downloadedSongIds(serverId: server) == ["old", "current", "newest"])
+    }
+
+    @Test func backgroundCandidatesRefreshAfterAliasChangesAndStayScoped() async throws {
+        let container = try ModelContainer.cassette(inMemory: true)
+        let service = MediaIdentityService(modelContainer: container)
+        let server = UUID()
+        #expect(await service.candidateRemoteIDsInBackground(for: "old", serverId: server, entityType: .coverArt) == ["old"])
+        #expect(service.registerAlias(oldID: "old", newID: "middle", serverId: server, entityType: .coverArt, verificationSource: .serverResponse, confidence: 1))
+        #expect(service.registerAlias(oldID: "middle", newID: "current", serverId: server, entityType: .coverArt, verificationSource: .serverResponse, confidence: 1))
+        for id in ["old", "middle", "current"] {
+            let candidates = await service.candidateRemoteIDsInBackground(for: id, serverId: server, entityType: .coverArt)
+            #expect(Set(candidates) == ["old", "middle", "current"])
+            #expect(candidates.first == id)
+            #expect(Set(candidates) == Set(service.candidateRemoteIDs(for: id, serverId: server, entityType: .coverArt)))
+        }
+        #expect(await service.candidateRemoteIDsInBackground(for: "old", serverId: UUID(), entityType: .coverArt) == ["old"])
+        #expect(await service.candidateRemoteIDsInBackground(for: "old", serverId: server, entityType: .song) == ["old"])
+        #expect(service.registerAlias(oldID: "current", newID: "newest", serverId: server, entityType: .coverArt, verificationSource: .serverResponse, confidence: 1))
+        #expect(Set(await service.candidateRemoteIDsInBackground(for: "old", serverId: server, entityType: .coverArt)) == ["old", "middle", "current", "newest"])
+    }
+
+    @Test func backgroundCandidatesRetainIdentityLegaciesWithoutAnAliasRow() async throws {
+        let container = try ModelContainer.cassette(inMemory: true)
+        let server = UUID()
+        container.mainContext.insert(RemoteMediaIdentity(serverId: server, entityType: .album,
+            currentRemoteID: "current", legacyRemoteIDs: ["historic", "older"]))
+        try container.mainContext.save()
+        let service = MediaIdentityService(modelContainer: container)
+        #expect(Set(await service.candidateRemoteIDsInBackground(for: "historic", serverId: server, entityType: .album)) == ["historic", "older", "current"])
+        #expect(Set(await service.candidateRemoteIDsInBackground(for: "current", serverId: server, entityType: .album)) == ["historic", "older", "current"])
+    }
+
+    @Test func backgroundMenuQueriesReflectFavoriteAndPinWrites() async throws {
+        let container = try AppContainer(inMemory: true, engine: FakePlaybackEngine())
+        let server = ServerConfig(displayName: "Menu snapshot", baseURL: "https://example.invalid", username: "test")
+        container.serverState.activeServer = ServerSnapshot(from: server)
+        #expect(await container.favoritesService.isFavoriteInBackground(itemType: .album, itemId: "new") == false)
+        #expect(await container.pinService.isPinnedInBackground(itemType: .album, itemId: "new") == false)
+        container.modelContainer.mainContext.insert(FavoriteRecord(itemType: .album, itemId: "old", starredDate: Date(), serverId: server.id))
+        try container.modelContainer.mainContext.save()
+        #expect(container.mediaIdentityService.registerAlias(oldID: "old", newID: "new", serverId: server.id,
+            entityType: .album, verificationSource: .serverResponse, confidence: 1))
+        #expect(await container.favoritesService.isFavoriteInBackground(itemType: .album, itemId: "new"))
+        try container.pinService.pin(itemType: .album, itemId: "new", displayName: "Album",
+            displaySubtitle: "", coverArtId: nil, serverId: server.id)
+        #expect(await container.pinService.isPinnedInBackground(itemType: .album, itemId: "new"))
+        container.pinService.unpin(itemType: .album, itemId: "new")
+        #expect(await container.pinService.isPinnedInBackground(itemType: .album, itemId: "new") == false)
+    }
+
     @Test func aliasChainsCollapseAndRemainServerScoped() throws {
         let container = try ModelContainer.cassette(inMemory: true)
         let service = MediaIdentityService(modelContainer: container)

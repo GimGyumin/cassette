@@ -13,7 +13,10 @@ actor FavoritesService: FavoritesServiceProtocol {
     private nonisolated let serverState: ServerState
     private nonisolated let mediaIdentityService: MediaIdentityService
     nonisolated let modelContainer: ModelContainer
-    private lazy var backgroundContext: ModelContext = ModelContext(modelContainer)
+    private var mutationGeneration: UInt64 = 0
+    private var pendingMutations = 0
+    private struct MutationFlight { let id: UUID; let task: Task<Void, Error> }
+    private var mutations: [String: MutationFlight] = [:]
 
     init(
         libraryService: any LibraryServiceProtocol,
@@ -50,132 +53,139 @@ actor FavoritesService: FavoritesServiceProtocol {
 
     // MARK: - Star
 
-    func star(itemType: FavoriteType, itemId: String) async throws {
-        guard let serverId = await MainActor.run(body: { serverState.activeServer?.id }) else { return }
-        let currentID = await MainActor.run {
-            mediaIdentityService.resolveCurrentID(itemId, serverId: serverId, entityType: itemType.entityType)
-        }
-
+    func isFavoriteInBackground(itemType: FavoriteType, itemId: String) async -> Bool {
+        guard let sid = await MainActor.run(body: { serverState.activeServer?.id }) else { return false }
+        let candidates = await mediaIdentityService.candidateRemoteIDsInBackground(
+            for: itemId, serverId: sid, entityType: itemType.entityType
+        )
+        guard !Task.isCancelled else { return false }
         let type = itemType.rawValue
-        let existing = try backgroundContext.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
-            $0.serverId == serverId && $0.itemType == type
-        }))
-        let candidateIDs = await MainActor.run {
-            Set(mediaIdentityService.candidateRemoteIDs(for: currentID, serverId: serverId, entityType: itemType.entityType))
-        }
-        if existing.contains(where: { candidateIDs.contains($0.itemId) }) { return }
-
-        let record = FavoriteRecord(itemType: itemType, itemId: currentID, starredDate: Date(), serverId: serverId)
-        backgroundContext.insert(record)
-        do { try backgroundContext.save() }
-        catch { backgroundContext.rollback(); throw error }
-
-        do {
-            switch itemType {
-            case .song:   try await libraryService.star(songIds: [currentID], albumIds: [], artistIds: [])
-            case .album:  try await libraryService.star(songIds: [], albumIds: [currentID], artistIds: [])
-            case .artist: try await libraryService.star(songIds: [], albumIds: [], artistIds: [currentID])
-            }
-            Logger.favorites.info("Starred \(itemType.rawValue, privacy: .public) \(itemId, privacy: .public)")
-            NotificationCenter.default.post(name: .cassetteFavoritesChanged, object: nil)
-        } catch {
-            backgroundContext.delete(record)
-            try? backgroundContext.save()
-            throw error
-        }
+        var descriptor = FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
+            $0.serverId == sid && $0.itemType == type && candidates.contains($0.itemId)
+        })
+        descriptor.fetchLimit = 1
+        return (try? ModelContext(modelContainer).fetch(descriptor).isEmpty) == false
     }
 
-    // MARK: - Unstar
+    func star(itemType: FavoriteType, itemId: String) async throws {
+        try await mutate(itemType: itemType, itemId: itemId, starred: true)
+    }
 
     func unstar(itemType: FavoriteType, itemId: String) async throws {
-        guard let serverID = await MainActor.run(body: { serverState.activeServer?.id }) else { return }
+        try await mutate(itemType: itemType, itemId: itemId, starred: false)
+    }
+
+    private func mutate(itemType: FavoriteType, itemId: String, starred: Bool) async throws {
+        mutationGeneration &+= 1
+        pendingMutations += 1
+        defer { pendingMutations -= 1; mutationGeneration &+= 1 }
+        guard let sid = await MainActor.run(body: { serverState.activeServer?.id }) else { return }
+        let identity = try await MainActor.run { try serverState.requestIdentity(for: sid) }
         let currentID = await MainActor.run {
-            mediaIdentityService.resolveCurrentID(itemId, serverId: serverID, entityType: itemType.entityType)
+            mediaIdentityService.resolveCurrentID(itemId, serverId: sid, entityType: itemType.entityType)
         }
-        let candidates = await MainActor.run {
-            Set(mediaIdentityService.candidateRemoteIDs(for: currentID, serverId: serverID, entityType: itemType.entityType))
+        let key = "\(sid):\(itemType.rawValue):\(currentID)"
+        let previous = mutations[key]?.task
+        let id = UUID()
+        let task = Task {
+            // Preserve the order of consecutive taps, including when the earlier request fails.
+            _ = await previous?.result
+            try Task.checkCancellation()
+            try await self.performMutation(itemType: itemType, currentID: currentID, identity: identity, starred: starred)
         }
-        let sid = serverID
+        mutations[key] = MutationFlight(id: id, task: task)
+        defer { if mutations[key]?.id == id { mutations[key] = nil } }
+        try await task.value
+    }
+
+    private func performMutation(itemType: FavoriteType, currentID: String, identity: ServerRequestIdentity, starred: Bool) async throws {
+        let sid = identity.serverID
+        let candidates = await mediaIdentityService.candidateRemoteIDsInBackground(
+            for: currentID, serverId: sid, entityType: itemType.entityType)
+        try Task.checkCancellation()
         let type = itemType.rawValue
-        let records = try backgroundContext.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
-            $0.serverId == sid && $0.itemType == type
-        }))
-        guard let record = records.first(where: { candidates.contains($0.itemId) }) else { return }
-
-        let capturedServerId = record.serverId
-        let capturedDate = record.starredDate
-        backgroundContext.delete(record)
-        do { try backgroundContext.save() }
-        catch { backgroundContext.rollback(); throw error }
-
+        // Model objects never escape this synchronous database operation.
+        let previous: [(String, Date)] = try await MainActor.run {
+            guard serverState.requestIsCurrent(identity), !Task.isCancelled else { throw CancellationError() }
+            let context = ModelContext(modelContainer)
+            let rows = try context.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
+                $0.serverId == sid && $0.itemType == type && candidates.contains($0.itemId)
+            }))
+            let values = rows.map { ($0.itemId, $0.starredDate) }
+            rows.forEach { context.delete($0) }
+            if starred { context.insert(FavoriteRecord(itemType: itemType, itemId: currentID, starredDate: Date(), serverId: sid)) }
+            try context.save()
+            return values
+        }
         do {
-            switch itemType {
-            case .song:   try await libraryService.unstar(songIds: [currentID], albumIds: [], artistIds: [])
-            case .album:  try await libraryService.unstar(songIds: [], albumIds: [currentID], artistIds: [])
-            case .artist: try await libraryService.unstar(songIds: [], albumIds: [], artistIds: [currentID])
-            }
-            Logger.favorites.info("Unstarred \(itemType.rawValue, privacy: .public) \(itemId, privacy: .public)")
-            NotificationCenter.default.post(name: .cassetteFavoritesChanged, object: nil)
+            let songs = itemType == .song ? [currentID] : []
+            let albums = itemType == .album ? [currentID] : []
+            let artists = itemType == .artist ? [currentID] : []
+            if starred { try await libraryService.star(songIds: songs, albumIds: albums, artistIds: artists) }
+            else { try await libraryService.unstar(songIds: songs, albumIds: albums, artistIds: artists) }
         } catch {
-            let restored = FavoriteRecord(itemType: itemType, itemId: itemId, starredDate: capturedDate, serverId: capturedServerId)
-            backgroundContext.insert(restored)
-            try? backgroundContext.save()
+            // Account cleanup and rollback share MainActor: validation and the write cannot
+            // straddle logout or resurrect a previous account after its records were cleared.
+            try await MainActor.run {
+                guard serverState.requestIsCurrent(identity), !Task.isCancelled else { throw CancellationError() }
+                let context = ModelContext(modelContainer)
+                let rows = try context.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate {
+                    $0.serverId == sid && $0.itemType == type && candidates.contains($0.itemId)
+                }))
+                rows.forEach { context.delete($0) }
+                for (item, date) in previous {
+                    context.insert(FavoriteRecord(itemType: itemType, itemId: item, starredDate: date, serverId: sid))
+                }
+                try context.save()
+            }
             throw error
         }
+        guard await MainActor.run(body: { serverState.requestIsCurrent(identity) }) else { throw CancellationError() }
+        await MainActor.run { NotificationCenter.default.post(name: .cassetteFavoritesChanged, object: nil) }
     }
 
     // MARK: - Sync
 
     func syncFromServer() async throws {
-        guard let serverId = await MainActor.run(body: { serverState.activeServer?.id }) else { return }
-
+        guard pendingMutations == 0 else { return }
+        let generation = mutationGeneration
+        guard let sid = await MainActor.run(body: { serverState.activeServer?.id }) else { return }
+        let identity = try await MainActor.run { try serverState.requestIdentity(for: sid) }
         let starred = try await libraryService.getStarred2()
-
-        let descriptor = FetchDescriptor<FavoriteRecord>(
-            predicate: #Predicate<FavoriteRecord> { $0.serverId == serverId }
-        )
-        let existing = (try? backgroundContext.fetch(descriptor)) ?? []
-        var retainedRecordIDs = Set<String>()
-        var added = 0
-        var unchanged = 0
         let incoming: [(FavoriteType, String)] =
             (starred.song ?? []).map { (.song, $0.id) }
             + (starred.album ?? []).map { (.album, $0.id) }
             + (starred.artist ?? []).map { (.artist, $0.id) }
-
+        var resolved: [(FavoriteType, String, [String])] = []
         for (type, remoteID) in incoming {
-            let candidateIDs = await MainActor.run {
-                Set(mediaIdentityService.candidateRemoteIDs(
-                    for: remoteID,
-                    serverId: serverId,
-                    entityType: type.entityType
-                ))
-            }
-            if let record = existing.first(where: {
-                $0.itemType == type.rawValue && candidateIDs.contains($0.itemId)
-            }) {
-                retainedRecordIDs.insert(record.id)
-                unchanged += 1
-            } else {
-                let record = FavoriteRecord(
-                    itemType: type,
-                    itemId: remoteID,
-                    starredDate: Date(),
-                    serverId: serverId
-                )
-                backgroundContext.insert(record)
-                retainedRecordIDs.insert(record.id)
-                added += 1
-            }
+            try Task.checkCancellation()
+            let candidates = await mediaIdentityService.candidateRemoteIDsInBackground(
+                for: remoteID, serverId: sid, entityType: type.entityType)
+            resolved.append((type, remoteID, candidates))
         }
-
-        let toRemove = existing.filter { !retainedRecordIDs.contains($0.id) }
-        toRemove.forEach { backgroundContext.delete($0) }
-
-        try? backgroundContext.save()
-        Logger.favorites.info("Favorites synced: \(added, privacy: .public) added, \(toRemove.count, privacy: .public) removed, \(unchanged, privacy: .public) unchanged")
-        NotificationCenter.default.post(name: .cassetteFavoritesChanged, object: nil)
+        guard generation == mutationGeneration, pendingMutations == 0, !Task.isCancelled else { return }
+        let resolvedRecords = resolved
+        try await MainActor.run {
+            guard serverState.requestIsCurrent(identity), !Task.isCancelled else { throw CancellationError() }
+            let context = ModelContext(modelContainer)
+            let existing = try context.fetch(FetchDescriptor<FavoriteRecord>(predicate: #Predicate { $0.serverId == sid }))
+            let byKey = Dictionary(existing.map { ("\($0.itemType):\($0.itemId)", $0) }, uniquingKeysWith: { first, _ in first })
+            var retained = Set<String>()
+            for (type, remoteID, candidates) in resolvedRecords {
+                if let record = candidates.lazy.compactMap({ byKey["\(type.rawValue):\($0)"] }).first {
+                    retained.insert(record.id)
+                } else {
+                    let record = FavoriteRecord(itemType: type, itemId: remoteID, starredDate: Date(), serverId: sid)
+                    context.insert(record)
+                    retained.insert(record.id)
+                }
+            }
+            existing.filter { !retained.contains($0.id) }.forEach { context.delete($0) }
+            try context.save()
+        }
+        await MainActor.run { NotificationCenter.default.post(name: .cassetteFavoritesChanged, object: nil) }
     }
+
 }
 
 private extension FavoriteType {

@@ -37,52 +37,7 @@ nonisolated enum ArtworkTier: String, Sendable {
 /// Limits concurrent server cover fetches so they cannot saturate the TCP connection pool
 /// shared with the active audio stream. Uses a continuation-based semaphore so callers
 /// are suspended (not blocked) while waiting for a slot.
-private actor CoverFetchGate {
-    private let limit: Int
-    private var available: Int
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    init(limit: Int) { self.limit = limit; available = limit }
-
-    func acquire() async {
-        if available > 0 { available -= 1; return }
-        Logger.artworkCache.debug("[NET-COVER] gate: queued (limit=\(self.limit) busy, waiters=\(self.waiters.count + 1))")
-        await withCheckedContinuation { waiters.append($0) }
-    }
-
-    func release() {
-        if let waiter = waiters.first {
-            waiters.removeFirst()
-            waiter.resume()
-            // available unchanged — slot transferred directly to the waiter
-        } else {
-            available += 1
-        }
-    }
-}
-
-/// Caps parallel ImageIO thumbnails — unbounded disk decode stampedes starve audio (~5s spikes in logs).
-actor CoverDecodeGate {
-    private let limit: Int
-    private var available: Int
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    init(limit: Int) { self.limit = limit; available = limit }
-
-    func acquire() async {
-        if available > 0 { available -= 1; return }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-
-    func release() {
-        if let waiter = waiters.first {
-            waiters.removeFirst()
-            waiter.resume()
-        } else {
-            available += 1
-        }
-    }
-}
+private typealias CoverFetchGate = CoverDecodeGate
 
 // MARK: - ArtworkImageCache
 
@@ -110,11 +65,18 @@ final class ArtworkImageCache {
     )
     @ObservationIgnored
     private var cacheGeneration = 0
+    @ObservationIgnored private var accountScope: ServerRequestIdentity?
     @ObservationIgnored private var localImageSources: [String: String] = [:]
     /// Coalesces concurrent `load` calls for the same tier key (Home + Discover often
     /// request the same album thumb twice → duplicate network + flaky ImageIO decode).
     @ObservationIgnored
     private var inFlight: [String: Task<PlatformImage?, Never>] = [:]
+    private struct OriginalFlight {
+        let id: UUID
+        let task: Task<Bool, Never>
+        var consumers: Set<UUID>
+    }
+    @ObservationIgnored private var originalFlights: [String: OriginalFlight] = [:]
     @ObservationIgnored
     private var failedNetworkLoadUntil: [String: Date] = [:]
     nonisolated private static let networkFailureCooldown: TimeInterval = 60
@@ -122,21 +84,29 @@ final class ArtworkImageCache {
     private let downloadService: any DownloadServiceProtocol
     private let libraryService: any LibraryServiceProtocol
     private let serverService: (any ServerServiceProtocol)?
+    private let serverState: ServerState?
     private let session: URLSession
     // Caps in-flight server cover fetches to prevent saturating the TCP connection pool.
     private let fetchGate = CoverFetchGate(limit: 2)
     private let preparationFetchGate = CoverFetchGate(limit: 4)
     private let decodeGate = CoverDecodeGate(limit: 2)
 
-    init(downloadService: any DownloadServiceProtocol, libraryService: any LibraryServiceProtocol, serverService: (any ServerServiceProtocol)? = nil, session: URLSession? = nil) {
+    init(downloadService: any DownloadServiceProtocol, libraryService: any LibraryServiceProtocol, serverService: (any ServerServiceProtocol)? = nil, session: URLSession? = nil, serverState: ServerState? = nil) {
         self.downloadService = downloadService
         self.libraryService = libraryService
         self.serverService = serverService
+        self.serverState = serverState ?? serverService?.state
         let config = URLSessionConfiguration.default
+        ArtworkNetworkPolicy.configure(config)
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 30
         config.httpMaximumConnectionsPerHost = 2
         self.session = session ?? URLSession(configuration: config)
+    }
+
+    var allowsNetworkDownloads: Bool {
+        ArtworkNetworkPolicy.allowsDownload(isOnline: serverState?.isOnline ?? true,
+                                           isCellular: serverState?.isCellularConnection ?? false)
     }
 
     // MARK: - Public API
@@ -166,12 +136,14 @@ final class ArtworkImageCache {
         allowNetwork: Bool = true,
         playbackPriority: Bool = false
     ) async -> PlatformImage? {
-        guard let coverArtId else { return nil }
+        guard let coverArtId = coverArtId?.trimmingCharacters(in: .whitespacesAndNewlines), !coverArtId.isEmpty else { return nil }
 
         let key = cacheKey(id: coverArtId, tier: tier)
+        let generation = cacheGeneration
 
         // Original/downloaded artwork is authoritative, even if an older streaming thumbnail is in RAM.
-        if let local = await loadPlainDiskCover(coverArtId: coverArtId, tier: tier) { return local }
+        if let local = await loadPlainDiskCover(coverArtId: coverArtId, tier: tier) { return isCurrent(generation) ? local : nil }
+        guard isCurrent(generation), !Task.isCancelled else { return nil }
 
         // 1. RAM hit.
         if let hit = cache[key] {
@@ -180,13 +152,14 @@ final class ArtworkImageCache {
         }
 
         // Join an in-flight load for the same key instead of starting a duplicate fetch.
-        let flightKey = "\(key)#\(allowNetwork)#\(playbackPriority)"
+        let flightKey = "\(cacheGeneration)#\(key)#\(allowNetwork)#\(playbackPriority)"
         if let existing = inFlight[flightKey] {
-            return await existing.value
+            let result = await existing.value
+            return isCurrent(generation) ? result : nil
         }
 
         let task = Task { @MainActor [weak self] in
-            guard let self else { return nil as PlatformImage? }
+            guard let self, !Task.isCancelled else { return nil as PlatformImage? }
             defer { self.inFlight[flightKey] = nil }
             return await self.loadUncached(
                 coverArtId: coverArtId,
@@ -197,7 +170,8 @@ final class ArtworkImageCache {
             )
         }
         inFlight[flightKey] = task
-        return await task.value
+        let result = await task.value
+        return isCurrent(generation) ? result : nil
     }
 
     /// Downloads the ORIGINAL (full-resolution) cover art from the server and persists it as
@@ -208,25 +182,105 @@ final class ArtworkImageCache {
     func downloadOriginalAndCacheAsHero(
         coverArtId: String, cacheHero: Bool = true, preparationDirectory: URL? = nil
     ) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        let id = coverArtId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return false }
+        let key = "original:\(cacheKey(id: id, tier: .hero))"
         let generation = cacheGeneration
+        if let draining = originalFlights[key], draining.task.isCancelled {
+            _ = await draining.task.value
+            guard isCurrent(generation), !Task.isCancelled else { return false }
+            return await downloadOriginalAndCacheAsHero(coverArtId: id, cacheHero: cacheHero,
+                                                       preparationDirectory: preparationDirectory)
+        }
+        let consumer = UUID()
+        if originalFlights[key] == nil {
+            let flightID = UUID()
+            let task = Task { @MainActor [weak self] in
+                guard let self else { return false }
+                defer {
+                    if self.originalFlights[key]?.id == flightID { self.originalFlights[key] = nil }
+                }
+                return await self.performOriginalDownload(coverArtId: id, cacheHero: cacheHero,
+                                                         preparationDirectory: preparationDirectory)
+            }
+            originalFlights[key] = OriginalFlight(id: flightID, task: task, consumers: [])
+        }
+        guard let flight = originalFlights[key] else { return false }
+        originalFlights[key]?.consumers.insert(consumer)
+        defer { releaseOriginalConsumer(key: key, flightID: flight.id, consumer: consumer) }
+        return await withTaskCancellationHandler {
+            let result = await flight.task.value
+            guard result, isCurrent(generation), !Task.isCancelled else { return false }
+            // The producer may be a disk-only preparation request. A joined hero caller
+            // still needs its bounded RAM decode; loadPlainDiskCover coalesces that work.
+            if cacheHero {
+                guard await loadPlainDiskCover(coverArtId: id, tier: .hero) != nil else { return false }
+            }
+            return isCurrent(generation) && !Task.isCancelled
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.releaseOriginalConsumer(key: key, flightID: flight.id, consumer: consumer)
+            }
+        }
+    }
+
+    private func releaseOriginalConsumer(key: String, flightID: UUID, consumer: UUID) {
+        guard originalFlights[key]?.id == flightID else { return }
+        originalFlights[key]?.consumers.remove(consumer)
+        if originalFlights[key]?.consumers.isEmpty == true { originalFlights[key]?.task.cancel() }
+    }
+
+    #if os(iOS)
+    /// Hand off missing originals before iOS can suspend the library preparation task.
+    /// Disk filenames and the URLSession registry deduplicate both this batch and UI observers.
+    func enqueueBackgroundOriginals(coverIDs: [String], directory: URL) async {
+        let generation = cacheGeneration
+        await CassetteBackgroundDownloads.artwork.restoreArtworkTasks()
+        for id in coverIDs {
+            guard isCurrent(generation), !Task.isCancelled, allowsNetworkDownloads else { return }
+            guard let url = await libraryService.coverArtURL(id: id, size: nil),
+                  let request = try? await artworkRequest(url: url, generation: generation) else { continue }
+            guard isCurrent(generation), !Task.isCancelled, allowsNetworkDownloads else { return }
+            let original = OriginalArtwork.storageID(id)
+            let name = accountScope.map { DownloadService.coverStorageName(for: original, serverId: $0.serverID) } ?? original
+            CassetteBackgroundDownloads.artwork.enqueueArtwork(request: request,
+                destination: directory.appendingPathComponent(name))
+        }
+    }
+    #endif
+
+    private func performOriginalDownload(
+        coverArtId: String, cacheHero: Bool, preparationDirectory: URL?
+    ) async -> Bool {
         let key = cacheKey(id: coverArtId, tier: .hero)
+        let generation = cacheGeneration
 
         // Only a verified original counts as a completed download; tiered caches may be resized.
         let tieredDiskId = OriginalArtwork.storageID(coverArtId)
-        if await downloadService.localCoverArtURL(forId: tieredDiskId) != nil { return true }
+        if let existing = await diskURL(tieredDiskId, generation: generation) {
+            let valid = await Task.detached(priority: .utility) {
+                CassetteBackgroundDownloads.isValidArtwork(at: existing)
+            }.value
+            guard isCurrent(generation), !Task.isCancelled else { return false }
+            if valid { return true }
+            await removeDisk(tieredDiskId, generation: generation)
+        }
 
+        guard allowsNetworkDownloads else { return false }
         if shouldSkipNetworkFetch(forKey: key) { return false }
         guard let serverURL = await libraryService.coverArtURL(id: coverArtId, size: nil) else { return false }
 
         #if os(iOS)
         if !cacheHero, let preparationDirectory {
             do {
-                let request = await artworkRequest(url: serverURL)
-                let destination = preparationDirectory.appendingPathComponent(tieredDiskId)
+                let request = try await artworkRequest(url: serverURL, generation: generation)
+                let destinationID = accountScope.map { DownloadService.coverStorageName(for: tieredDiskId, serverId: $0.serverID) } ?? tieredDiskId
+                let destination = preparationDirectory.appendingPathComponent(destinationID)
                 _ = try await CassetteBackgroundDownloads.artwork.download(
-                    request: request, clientKey: tieredDiskId, persistentArtworkURL: destination
+                    request: request, clientKey: destinationID, persistentArtworkURL: destination
                 )
-                guard generation == cacheGeneration, !Task.isCancelled else { return false }
+                guard isCurrent(generation), !Task.isCancelled else { return false }
                 originalWasInstalled(coverArtId)
                 return true
             } catch {
@@ -237,13 +291,13 @@ final class ArtworkImageCache {
         #endif
 
         let gate = cacheHero ? fetchGate : preparationFetchGate
-        await gate.acquire()
+        guard await gate.acquire() else { return false }
         defer { await gate.release() }
-        guard !Task.isCancelled else { return false }
+        guard isCurrent(generation), !Task.isCancelled, allowsNetworkDownloads else { return false }
 
         let data: Data
         do {
-            let (bytes, response) = try await session.data(for: artworkRequest(url: serverURL))
+            let (bytes, response) = try await session.data(for: try await artworkRequest(url: serverURL, generation: generation))
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 rememberNetworkFailure(forKey: key)
                 return false
@@ -265,24 +319,25 @@ final class ArtworkImageCache {
                 guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
                 return CGImageSourceGetCount(source) > 0 && CGImageSourceGetStatus(source) == .statusComplete
             }.value
-            guard valid, generation == cacheGeneration, !Task.isCancelled else { return false }
-            await downloadService.persistCover(data, forId: tieredDiskId)
-            guard await downloadService.localCoverArtURL(forId: tieredDiskId) != nil else { return false }
+            guard valid, isCurrent(generation), !Task.isCancelled else { return false }
+            await persistDisk(data, id: tieredDiskId, generation: generation)
+            guard await diskURL(tieredDiskId, generation: generation) != nil else { return false }
             originalWasInstalled(coverArtId)
             return true
         }
 
         // Decode a hero thumbnail for immediate RAM display (ImageIO reads only what it needs).
-        await decodeGate.acquire()
+        guard await decodeGate.acquire() else { return false }
+        guard isCurrent(generation), !Task.isCancelled else { await decodeGate.release(); return false }
         let image: PlatformImage? = await Task.detached(priority: .utility) {
             ArtworkImageCache.thumbnailImage(from: data, maxDimension: ArtworkTier.hero.decodePixels)
         }.value
         await decodeGate.release()
-        guard let image, generation == cacheGeneration, !Task.isCancelled else { return false }
+        guard let image, isCurrent(generation), !Task.isCancelled else { return false }
         // Validate with ImageIO, then save the response verbatim. Never promote a resized @hero file.
-        await downloadService.persistCover(data, forId: tieredDiskId)
-        guard let originalURL = await downloadService.localCoverArtURL(forId: tieredDiskId),
-              generation == cacheGeneration, !Task.isCancelled else { return false }
+        await persistDisk(data, id: tieredDiskId, generation: generation)
+        guard let originalURL = await diskURL(tieredDiskId, generation: generation),
+              isCurrent(generation), !Task.isCancelled else { return false }
         for tier in [ArtworkTier.thumb, .hero] {
             let oldKey = cacheKey(id: coverArtId, tier: tier)
             cache.removeValue(forKey: oldKey)
@@ -295,7 +350,7 @@ final class ArtworkImageCache {
         Logger.artworkCache.debug(
             "[NET-COVER] original done id=\(coverArtId, privacy: .public) bytes=\(data.count, privacy: .public)"
         )
-        return await downloadService.localCoverArtURL(forId: tieredDiskId) != nil
+        return await diskURL(tieredDiskId, generation: generation) != nil
     }
 
     private func originalWasInstalled(_ coverArtId: String) {
@@ -308,40 +363,66 @@ final class ArtworkImageCache {
         NotificationCenter.default.post(name: OriginalArtwork.didInstall, object: coverArtId)
     }
 
-    private func artworkRequest(url: URL) async -> URLRequest {
+    private func artworkRequest(url: URL, generation: Int) async throws -> URLRequest {
+        guard isCurrent(generation), !Task.isCancelled else { throw CancellationError() }
         var request = URLRequest(url: url)
-        if let credentials = try? await serverService?.activeCredentials() {
-            for (key, value) in credentials.customHeaders { request.setValue(value, forHTTPHeaderField: key) }
+        ArtworkNetworkPolicy.apply(to: &request)
+        if let serverService {
+            guard let identity = accountScope else { throw CancellationError() }
+            let context = try await serverService.requestContext(serverID: identity.serverID)
+            guard context.identity == identity, isCurrent(generation) else { throw CancellationError() }
+            for (key, value) in context.credentials.customHeaders { request.setValue(value, forHTTPHeaderField: key) }
         }
         return request
     }
 
+    private func diskURL(_ id: String, generation: Int) async -> URL? {
+        guard isCurrent(generation), !Task.isCancelled else { return nil }
+        let url: URL?
+        if let sid = accountScope?.serverID { url = await downloadService.localCoverArtURL(forId: id, serverId: sid) }
+        else { url = await downloadService.localCoverArtURL(forId: id) }
+        return isCurrent(generation) && !Task.isCancelled ? url : nil
+    }
+
+    private func persistDisk(_ data: Data, id: String, generation: Int) async {
+        guard isCurrent(generation), !Task.isCancelled else { return }
+        if let sid = accountScope?.serverID { await downloadService.persistCover(data, forId: id, serverId: sid) }
+        else { await downloadService.persistCover(data, forId: id) }
+    }
+
+    private func removeDisk(_ id: String, generation: Int) async {
+        guard isCurrent(generation), !Task.isCancelled else { return }
+        if let sid = accountScope?.serverID { await downloadService.removeCover(forId: id, serverId: sid) }
+        else { await downloadService.removeCover(forId: id) }
+    }
+
     /// Coalesced, bounded decode of an original or legacy offline download (no network).
     func loadPlainDiskCover(coverArtId: String, tier: ArtworkTier) async -> PlatformImage? {
-        let generation = cacheGeneration
         let key = cacheKey(id: coverArtId, tier: tier)
-        let originalURL = await downloadService.localCoverArtURL(forId: OriginalArtwork.storageID(coverArtId))
+        let generation = cacheGeneration
+        let originalURL = await diskURL(OriginalArtwork.storageID(coverArtId), generation: generation)
         let localURL: URL
         if let originalURL { localURL = originalURL }
-        else if let legacy = await downloadService.localCoverArtURL(forId: coverArtId) { localURL = legacy }
+        else if let legacy = await diskURL(coverArtId, generation: generation) { localURL = legacy }
         else { return nil }
         if localImageSources[key] == localURL.path, let hit = cache[key] {
             touch(key)
             return hit
         }
-        guard generation == cacheGeneration, !Task.isCancelled else { return nil }
-        let flightKey = "local#\(key)#\(localURL.path)"
+        guard isCurrent(generation), !Task.isCancelled else { return nil }
+        let flightKey = "\(generation)#local#\(key)#\(localURL.path)"
         if let existing = inFlight[flightKey] { return await existing.value }
         let task = Task { @MainActor [weak self] () -> PlatformImage? in
             guard let self else { return nil }
             defer { self.inFlight[flightKey] = nil }
-            await self.decodeGate.acquire()
+            guard await self.decodeGate.acquire() else { return nil }
+            guard self.isCurrent(generation), !Task.isCancelled else { await self.decodeGate.release(); return nil }
             let image = await Task.detached(priority: .utility) {
                 guard let data = try? Data(contentsOf: localURL), !data.isEmpty else { return nil as PlatformImage? }
                 return ArtworkImageCache.thumbnailImage(from: data, maxDimension: tier.decodePixels)
             }.value
             await self.decodeGate.release()
-            guard generation == self.cacheGeneration, !Task.isCancelled else { return nil }
+            guard self.isCurrent(generation), !Task.isCancelled else { return nil }
             if let image {
                 self.localImageSources[key] = localURL.path
                 self.store(image: image, forKey: key, generation: generation)
@@ -360,6 +441,7 @@ final class ArtworkImageCache {
         playbackPriority: Bool
     ) async -> PlatformImage? {
         let generation = cacheGeneration
+        guard key == cacheKey(id: coverArtId, tier: tier), !Task.isCancelled else { return nil }
         let maxDim = tier.decodePixels
 
         // Another waiter may have filled RAM while we were scheduled.
@@ -377,17 +459,16 @@ final class ArtworkImageCache {
 
         // 2. Disk hit — tiered file only (`{id}@thumb` / `{id}@hero`).
         let tieredDiskId = "\(coverArtId)@\(tier.rawValue)"
-        if let localURL = await downloadService.localCoverArtURL(forId: tieredDiskId) {
-            // Reject oversized on-disk thumbs (full-res PNG/JPEG mislabeled as @thumb).
-            if let byteCount = Self.fileByteCount(at: localURL),
-               Self.diskFileLooksOversized(byteCount: byteCount, tier: tier) {
-                Logger.artworkCache.warning(
-                    "[DISK-OVERSIZE] id=\(coverArtId, privacy: .public) tier=\(tier.rawValue, privacy: .public) bytes=\(byteCount) — removing and refetching"
-                )
-                await downloadService.removeCover(forId: tieredDiskId)
-            } else {
+        if let localURL = await diskURL(tieredDiskId, generation: generation) {
+            // A large but valid local image is still a cache hit. Downsample it locally;
+            // deleting it before decoding needlessly downloads the same artwork again.
+            let oversized = Self.fileByteCount(at: localURL).map {
+                Self.diskFileLooksOversized(byteCount: $0, tier: tier)
+            } ?? false
+            do {
                 let gateStart = CFAbsoluteTimeGetCurrent()
-                await decodeGate.acquire()
+                guard await decodeGate.acquire() else { return nil }
+                guard isCurrent(generation), !Task.isCancelled else { await decodeGate.release(); return nil }
                 let gateMs = Int((CFAbsoluteTimeGetCurrent() - gateStart) * 1000)
                 let spawnStart = CFAbsoluteTimeGetCurrent()
                 let diskResult = await Task.detached(priority: .utility) {
@@ -417,11 +498,11 @@ final class ArtworkImageCache {
                             "[DISK] id=\(coverArtId, privacy: .public) tier=\(tier.rawValue, privacy: .public) gate=\(gateMs)ms exec=\(execMs)ms disk=\(diskMs)ms decode=\(decodeMs)ms wall=\(wallMs)ms bytes=\(data.count)"
                         )
                     }
-                    return (image, decodeMs, data.count, !isJPEG || slow, uti)
+                    return (image, decodeMs, data.count, !isJPEG || slow || oversized, uti)
                 }.value
                 await decodeGate.release()
                 if let image = diskResult.0 {
-                    guard generation == cacheGeneration, !Task.isCancelled else { return nil }
+                    guard isCurrent(generation), !Task.isCancelled else { return nil }
                     store(image: image, forKey: key, generation: generation)
                     // Migrate non-JPEG / slow-to-decode covers to opaque downscaled JPEG once.
                     if diskResult.3 {
@@ -429,9 +510,9 @@ final class ArtworkImageCache {
                             let jpeg = await Task.detached(priority: .utility) {
                                 image.jpgData(quality: 0.85)
                             }.value
-                            guard let self, let jpeg, generation == self.cacheGeneration,
+                            guard let self, let jpeg, self.isCurrent(generation),
                                   !Task.isCancelled else { return }
-                            await self.downloadService.persistCover(jpeg, forId: tieredDiskId)
+                            await self.persistDisk(jpeg, id: tieredDiskId, generation: generation)
                         }
                     }
                     Logger.artworkCache.debug(
@@ -440,14 +521,15 @@ final class ArtworkImageCache {
                     return image
                 }
                 // Corrupt tiered file — remove so the next attempt refetches.
-                await downloadService.removeCover(forId: tieredDiskId)
+                await removeDisk(tieredDiskId, generation: generation)
             }
         }
 
         // Full-library downloads store hero files; smaller surfaces must reuse them offline.
         if tier == .thumb,
-           let heroURL = await downloadService.localCoverArtURL(forId: "\(coverArtId)@hero") {
-            await decodeGate.acquire()
+           let heroURL = await diskURL("\(coverArtId)@hero", generation: generation) {
+            guard await decodeGate.acquire() else { return nil }
+            guard isCurrent(generation), !Task.isCancelled else { await decodeGate.release(); return nil }
             let result = await Task.detached(priority: .utility) {
                 guard let data = try? Data(contentsOf: heroURL),
                       let image = ArtworkImageCache.thumbnailImage(from: data, maxDimension: maxDim) else {
@@ -457,14 +539,14 @@ final class ArtworkImageCache {
             }.value
             await decodeGate.release()
             if let image = result.0 {
-                guard generation == cacheGeneration, !Task.isCancelled else { return nil }
-                if let data = result.1 { await downloadService.persistCover(data, forId: tieredDiskId) }
+                guard isCurrent(generation), !Task.isCancelled else { return nil }
+                if let data = result.1 { await persistDisk(data, id: tieredDiskId, generation: generation) }
                 store(image: image, forKey: key, generation: generation)
                 return image
             }
         }
 
-        guard allowNetwork else { return nil }
+        guard allowNetwork, allowsNetworkDownloads else { return nil }
 
         // 3. Server fetch — never open cover-art HTTP while backgrounded (iOS deprioritizes
         // plain HTTP and it contends with the audio stream during auto-skip).
@@ -489,7 +571,11 @@ final class ArtworkImageCache {
             return nil
         }
 
-        await fetchGate.acquire()
+        guard await fetchGate.acquire() else { return nil }
+        guard isCurrent(generation), !Task.isCancelled, allowsNetworkDownloads else {
+            await fetchGate.release()
+            return nil
+        }
         if let hit = cache[key] {
             touch(key)
             await fetchGate.release()
@@ -502,12 +588,18 @@ final class ArtworkImageCache {
     }
 
     private func serverFetch(coverArtId: String, key: String, tier: ArtworkTier, generation: Int) async -> PlatformImage? {
+        let originalKey = "original:\(cacheKey(id: coverArtId, tier: .hero))"
+        if originalFlights[originalKey] != nil {
+            _ = await downloadOriginalAndCacheAsHero(coverArtId: coverArtId, cacheHero: false)
+            if let original = await loadPlainDiskCover(coverArtId: coverArtId, tier: tier) { return original }
+        }
+        guard isCurrent(generation), !Task.isCancelled, allowsNetworkDownloads else { return nil }
         let maxDim = tier.decodePixels
         guard let serverURL = await libraryService.coverArtURL(id: coverArtId, size: maxDim) else { return nil }
         let t0 = Date()
         let data: Data
         do {
-            let (bytes, response) = try await session.data(for: artworkRequest(url: serverURL))
+            let (bytes, response) = try await session.data(for: try await artworkRequest(url: serverURL, generation: generation))
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 Logger.artworkCache.warning(
                     "[NET-COVER] failed id=\(coverArtId, privacy: .public) status=\(http.statusCode) duration=\(Int(Date().timeIntervalSince(t0) * 1000))ms"
@@ -534,7 +626,8 @@ final class ArtworkImageCache {
             return nil
         }
         let image: PlatformImage?
-        await decodeGate.acquire()
+        guard await decodeGate.acquire() else { return nil }
+        guard isCurrent(generation), !Task.isCancelled else { await decodeGate.release(); return nil }
         image = await Task.detached(priority: .utility) {
             ArtworkImageCache.thumbnailImage(from: data, maxDimension: maxDim)
         }.value
@@ -549,14 +642,14 @@ final class ArtworkImageCache {
         let persistData = await Task.detached(priority: .utility) {
             image.jpgData(quality: 0.85)
         }.value
-        guard generation == cacheGeneration, !Task.isCancelled else { return nil }
+        guard isCurrent(generation), !Task.isCancelled else { return nil }
         Logger.artworkCache.debug(
             "[NET-COVER] done id=\(coverArtId, privacy: .public) tier=\(tier.rawValue, privacy: .public) duration=\(Int(Date().timeIntervalSince(t0) * 1000))ms bytes=\(persistData?.count ?? 0, privacy: .public)"
         )
         failedNetworkLoadUntil[key] = nil
         store(image: image, forKey: key, generation: generation)
         if let persistData {
-            await downloadService.persistCover(persistData, forId: "\(coverArtId)@\(tier.rawValue)")
+            await persistDisk(persistData, id: "\(coverArtId)@\(tier.rawValue)", generation: generation)
         }
         return image
     }
@@ -588,24 +681,35 @@ final class ArtworkImageCache {
 
     nonisolated private static func isCancellation(_ error: Error) -> Bool {
         if error is CancellationError { return true }
-        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        if let urlError = error as? URLError,
+           [.cancelled, .dataNotAllowed, .internationalRoamingOff].contains(urlError.code) { return true }
         let ns = error as NSError
         return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
     }
 
     func invalidate(for coverArtId: String) async {
-        // Remove both tier RAM entries and their disk files, plus the plain-id offline file.
-        for key in ["\(coverArtId)@thumb", "\(coverArtId)@hero", coverArtId, OriginalArtwork.storageID(coverArtId)] {
+        let originalKey = "original:\(cacheKey(id: coverArtId, tier: .hero))"
+        if let flight = originalFlights[originalKey] {
+            flight.task.cancel()
+            _ = await flight.task.value
+        }
+        let keys = [cacheKey(id: coverArtId, tier: .thumb), cacheKey(id: coverArtId, tier: .hero)]
+        let generation = cacheGeneration
+        for key in keys {
             cache.removeValue(forKey: key)
             localImageSources[key] = nil
             failedNetworkLoadUntil[key] = nil
-            await downloadService.removeCover(forId: key)
         }
-        Logger.artworkCache.debug("ArtworkImageCache: invalidated \(coverArtId, privacy: .public) (RAM + disk)")
+        for id in ["\(coverArtId)@thumb", "\(coverArtId)@hero", coverArtId, OriginalArtwork.storageID(coverArtId)] {
+            await removeDisk(id, generation: generation)
+        }
     }
 
     func clearCache() {
+        for flight in originalFlights.values { flight.task.cancel() }
+        originalFlights.removeAll()
         for task in inFlight.values { task.cancel() }
+        inFlight.removeAll()
         // Visible callers may finish loading, but pre-warning work must not refill RAM.
         cacheGeneration &+= 1
         cache.removeAll()
@@ -615,12 +719,29 @@ final class ArtworkImageCache {
 
     // MARK: - Private
 
+    private func synchronizeAccount() {
+        let current = serverService.flatMap { service in
+            service.state.activeServer.flatMap { try? service.state.requestIdentity(for: $0.id) }
+        }
+        if current != accountScope {
+            clearCache()
+            accountScope = current
+        }
+    }
+
+    private func isCurrent(_ generation: Int) -> Bool {
+        synchronizeAccount()
+        return generation == cacheGeneration
+    }
+
     private func cacheKey(id: String, tier: ArtworkTier) -> String {
-        "\(id)@\(tier.rawValue)"
+        synchronizeAccount()
+        let scope = accountScope.map { "\($0.serverID.uuidString):\($0.revision)" } ?? "unscoped"
+        return "\(scope):\(ArtworkIdentity.key(id))@\(tier.rawValue)"
     }
 
     private func store(image: PlatformImage, forKey key: String, generation: Int) {
-        guard generation == cacheGeneration, !Task.isCancelled else { return }
+        guard isCurrent(generation), !Task.isCancelled else { return }
         cache.insert(image, forKey: key, cost: image.decodedMemoryCost)
     }
 

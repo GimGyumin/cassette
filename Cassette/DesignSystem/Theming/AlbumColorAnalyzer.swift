@@ -305,6 +305,9 @@ private nonisolated struct BorderStats {
     var isMostlyWhite: Bool {
         if nearWhiteRatio >= 0.80 { return true }
         if brightRatio >= 0.80 { return true }
+        // A dark portrait or a title stripe can occupy one side of a white sleeve.
+        // Do not average those two fields into a nonexistent silver background.
+        if nearWhiteRatio >= 0.55 && cornerWhiteRatio >= 0.45 && darkRatio < 0.45 { return true }
         if cornerWhiteRatio >= 0.75 && nearWhiteRatio >= 0.60 { return true }
         if cornerWhiteRatio >= 0.65 && meanBrightness >= 0.92 { return true }
         if nearWhiteRatio >= 0.65 && meanBrightness >= 0.93 { return true }
@@ -472,18 +475,21 @@ private nonisolated enum PastelField {
 private nonisolated enum MidSilver {
     static func detect(_ samples: [Sample]) -> RGB? {
         var satSum = 0.0, lSum = 0.0, n = 0.0
+        var midToneCount = 0.0
         var edgeSum = RGB(0, 0, 0), ew = 0.0
         for s in samples {
             let sat = s.rgb.saturation
             satSum += sat
             lSum += s.lab.L
             n += 1
+            if sat < 0.14, s.lab.L >= 45, s.lab.L <= 88 { midToneCount += 1 }
             if s.isBorder || s.edgeWeight > 0.6, sat < 0.14, s.rgb.mean < 0.96 {
                 edgeSum = edgeSum + s.rgb * s.edgeWeight
                 ew += s.edgeWeight
             }
         }
-        guard n > 0, satSum / n < 0.14, lSum / n >= 55, lSum / n <= 88, ew > 0 else { return nil }
+        guard n > 0, midToneCount / n >= 0.35,
+              satSum / n < 0.14, lSum / n >= 55, lSum / n <= 88, ew > 0 else { return nil }
         var hsb = (edgeSum / ew).hsb
         hsb.h = 0.58
         hsb.s = 0.03

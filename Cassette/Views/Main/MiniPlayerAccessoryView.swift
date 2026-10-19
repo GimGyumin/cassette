@@ -12,6 +12,8 @@ struct MiniPlayerAccessoryView: View {
     var onOpenLyrics: (() -> Void)? = nil
     /// Opens the full player already on the queue panel (iPad floating bar).
     var onOpenQueue: (() -> Void)? = nil
+    var usesSystemAccessory = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appContainer) private var container
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -21,52 +23,15 @@ struct MiniPlayerAccessoryView: View {
     private let swipeThreshold: CGFloat = 100
     private let velocityThreshold: CGFloat = 200
 
-    // Apple Music behaviour: the bar follows the frontmost themed page. `MainTabView` injects the
-    // page-derived scheme (`resolvedColorScheme`) here, so `.primary` / `.secondary` flip with the
-    // page instead of being pinned to one appearance.
+    // Semantic colors follow the system accessory's own appearance and contrast settings.
     private var typoColor: Color { .primary }
     private var typoSecondaryColor: Color { .secondary }
 
-    /// Surface wash behind the bar content.
-    ///
-    /// iOS 26 draws the tab-bar accessory glass *itself*, and resolves it from the app appearance,
-    /// while this bar's content follows the themed page. When those disagree — a light album page
-    /// inside a dark app, or the inverse — white-on-white / black-on-black was the result (the
-    /// mini player read as a washed-out pill with unreadable text). A wash in the content's own
-    /// direction keeps the bar legible whatever the system put behind it.
-    private var surfaceWash: Color {
-        colorScheme == .dark ? Color.black.opacity(0.42) : Color.white.opacity(0.55)
-    }
-
-    /// Current track's artwork colour, so the bar carries the album like every page does. Re-read
-    /// on each render, which is what makes the tint follow track changes immediately.
-    private var albumTint: Color? {
-        guard let track = container?.playerState.currentTrack else { return nil }
-        let coverArtId = container?.playbackCoverId(for: track) ?? track.effectiveCoverArtId
-        return container?.dominantColorExtractor.cachedColor(for: coverArtId)
-    }
-
     @ViewBuilder
     private var miniPlayerSurface: some View {
-        #if os(iOS)
-        if #available(iOS 26.0, *) {
-            // tabViewBottomAccessory supplies the native Liquid Glass. An opaque material capsule
-            // here would cover that system surface and make the player look like a flat pill.
-            Capsule()
-                .fill((albumTint ?? .clear).opacity(0.10))
-                .allowsHitTesting(false)
-        } else {
-            Capsule()
-                .fill(surfaceWash)
-                .overlay(Capsule().fill((albumTint ?? .clear).opacity(0.18)))
-                .allowsHitTesting(false)
+        if !usesSystemAccessory {
+            Capsule().fill(.regularMaterial).allowsHitTesting(false)
         }
-        #else
-        Capsule()
-            .fill(surfaceWash)
-            .overlay(Capsule().fill((albumTint ?? .clear).opacity(0.18)))
-            .allowsHitTesting(false)
-        #endif
     }
 
     private var hasTrack: Bool {
@@ -85,7 +50,7 @@ struct MiniPlayerAccessoryView: View {
     var body: some View {
         if let playerState = container?.playerState {
             Group {
-                if #available(macOS 26.0, iOS 26.0, *), !usesPadFloatingBar {
+                if #available(macOS 26.0, iOS 26.0, *), usesSystemAccessory {
                     MiniPlayerPlacementReader { isInline in
                         playerContent(playerState, isInline: isInline)
                     }
@@ -113,7 +78,7 @@ struct MiniPlayerAccessoryView: View {
         let isAvailable = hasTrack && playerState.isPlaybackAvailable
 
         Group {
-            if usesPadFloatingBar {
+            if usesPadFloatingBar && !isInline {
                 padFloatingBar(
                     playerState: playerState,
                     coverArtId: coverArtId,
@@ -123,7 +88,6 @@ struct MiniPlayerAccessoryView: View {
                     isAvailable: isAvailable,
                     isLiveStream: isLiveStream
                 )
-                .transition(.opacity)
             } else if isInline {
                 inlineBar(
                     coverArtId: coverArtId,
@@ -132,7 +96,6 @@ struct MiniPlayerAccessoryView: View {
                     playbackAppearance: playbackAppearance,
                     isAvailable: isAvailable
                 )
-                .transition(.opacity)
             } else {
                 expandedBar(
                     playerState: playerState,
@@ -143,14 +106,12 @@ struct MiniPlayerAccessoryView: View {
                     isAvailable: isAvailable,
                     isLiveStream: isLiveStream
                 )
-                .transition(.opacity)
             }
         }
-        .animation(CassetteAnimation.interactive, value: isInline)
         .offset(x: dragOffset)
         .opacity(1.0 - min(abs(dragOffset) / 200, 0.4))
         .modifier(MiniPlayerTapOpenModifier(
-            enabled: !usesPadFloatingBar && hasTrack,
+            enabled: (!usesPadFloatingBar || isInline) && hasTrack,
             open: { showingFullPlayer = true }
         ))
         .gesture(isAvailable && !isLiveStream && !usesPadFloatingBar ? swipeSkipGesture : nil)
@@ -199,14 +160,9 @@ struct MiniPlayerAccessoryView: View {
                 .frame(minWidth: 140, alignment: .trailing)
         }
         .padding(.horizontal, 20)
-        .frame(height: 64)
+        .frame(minHeight: 64)
         .frame(maxWidth: 920)
-        .background { padCapsuleBackground }
-        .overlay {
-            Capsule()
-                .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.08), lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(colorScheme == .dark ? 0.35 : 0.12), radius: 16, y: 4)
+        .background { if !usesSystemAccessory { padCapsuleBackground } }
         .frame(maxWidth: .infinity)
     }
 
@@ -267,12 +223,12 @@ struct MiniPlayerAccessoryView: View {
             } label: {
                 Image(systemName: playbackAppearance.systemImage)
                     .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(typoColor.opacity(isAvailable ? 1 : 0.35))
+                    .foregroundStyle(typoColor.opacity(hasTrack ? 1 : 0.35))
                     .frame(width: 36, height: 36)
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.borderless)
-            .disabled(!isAvailable)
+            .disabled(!hasTrack)
             .accessibilityLabel(playbackAppearance == .play ? String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Pause", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
             Button {
@@ -452,7 +408,7 @@ struct MiniPlayerAccessoryView: View {
 
             Spacer(minLength: 4)
 
-            playPauseButton(playbackAppearance: playbackAppearance, isAvailable: isAvailable, compact: true)
+            playPauseButton(playbackAppearance: playbackAppearance, compact: true)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -495,7 +451,7 @@ struct MiniPlayerAccessoryView: View {
                 Spacer(minLength: 0)
 
                 HStack(spacing: CassetteSpacing.s) {
-                    playPauseButton(playbackAppearance: playbackAppearance, isAvailable: isAvailable, compact: false)
+                    playPauseButton(playbackAppearance: playbackAppearance, compact: false)
                     if isAvailable && !isLiveStream {
                         Button {
                             HapticFeedback.light.trigger()
@@ -559,7 +515,7 @@ struct MiniPlayerAccessoryView: View {
         }
     }
 
-    private func playPauseButton(playbackAppearance: PlaybackControlAppearance, isAvailable: Bool, compact: Bool) -> some View {
+    private func playPauseButton(playbackAppearance: PlaybackControlAppearance, compact: Bool) -> some View {
         Button {
             HapticFeedback.medium.trigger()
             Task { await container?.playerService.togglePlayPause() }
@@ -567,13 +523,18 @@ struct MiniPlayerAccessoryView: View {
             Image(systemName: playbackAppearance.systemImage)
                 .font(compact ? .body.weight(.semibold) : .title3)
                 .foregroundStyle(typoColor)
-                .opacity(isAvailable ? 1.0 : 0.35)
+                .opacity(hasTrack ? 1.0 : 0.35)
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
-        .disabled(!isAvailable)
+        .disabled(!hasTrack)
         .accessibilityLabel(playbackAppearance == .play ? String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : String(localized: "Pause", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        .accessibilityValue(playbackAppearance == .pause
+            ? String(localized: "Playing", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+            : playbackAppearance == .loading
+                ? String(localized: "Loading", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                : String(localized: "Paused", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
     }
 
     private var swipeSkipGesture: some Gesture {
@@ -582,7 +543,7 @@ struct MiniPlayerAccessoryView: View {
                 guard !isAnimatingSwipe else { return }
                 let h = value.translation.width
                 guard abs(h) > abs(value.translation.height) else { return }
-                withAnimation(.interactiveSpring()) {
+                withAnimation(reduceMotion ? nil : .interactiveSpring()) {
                     dragOffset = h
                 }
             }
@@ -611,7 +572,7 @@ struct MiniPlayerAccessoryView: View {
         HapticFeedback.medium.trigger()
 
         let exitOffset: CGFloat = goNext ? -300 : 300
-        withAnimation(.easeIn(duration: 0.18)) {
+        withAnimation(reduceMotion ? nil : .easeIn(duration: 0.18)) {
             dragOffset = exitOffset
         }
 
@@ -625,7 +586,7 @@ struct MiniPlayerAccessoryView: View {
             let entryOffset: CGFloat = goNext ? 300 : -300
             await MainActor.run {
                 dragOffset = entryOffset
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                withAnimation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.75)) {
                     dragOffset = 0
                 }
                 isAnimatingSwipe = false
@@ -634,7 +595,7 @@ struct MiniPlayerAccessoryView: View {
     }
 
     private func bounceback() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)) {
             dragOffset = 0
         }
     }

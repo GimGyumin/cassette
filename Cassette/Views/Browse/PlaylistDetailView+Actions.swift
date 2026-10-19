@@ -16,7 +16,32 @@ extension PlaylistDetailView {
 
     @ToolbarContentBuilder
     var toolbarContent: some ToolbarContent {
-        if isEditing {
+        if generatedSource != nil {
+            #if os(macOS)
+            ToolbarItem(placement: .navigation) {
+                Button { dismiss() } label: { navBarIcon("chevron.left") }
+                    .buttonStyle(.plain)
+            }
+            #endif
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    if let vm = viewModel, !vm.isOffline { playlistDownloadMenuButtons(vm: vm) }
+                    Button {
+                        Task { await viewModel?.load(forceRefresh: true) }
+                    } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    ShareLink(item: playlistShareText(songCount: resolvedSongs(viewModel).count))
+                    Button {
+                        Task { await container?.playerService.playNext(resolvedSongs(viewModel)) }
+                    } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+                    .disabled(resolvedSongs(viewModel).isEmpty)
+                    Button {
+                        Task { await container?.playerService.addToQueue(resolvedSongs(viewModel)) }
+                    } label: { Label("Add to Queue", systemImage: "text.line.last.and.arrowtriangle.forward") }
+                    .disabled(resolvedSongs(viewModel).isEmpty)
+                } label: { navBarIcon("ellipsis") }
+                .accessibilityLabel("More options")
+            }
+        } else if isEditing {
             // Same themed hero-button surface as view mode (navBarIcon: opaque circle + headerTextColor) so the
             // edit CTAs match the non-edit ones — NOT system glass capsules, which read the wrong colour here.
             ToolbarItem(placement: .cancellationAction) {
@@ -62,28 +87,6 @@ extension PlaylistDetailView {
             }
             #endif
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showAddMusic = true
-                } label: {
-                    navBarIcon("plus")
-                }
-                .buttonStyle(.plain)
-                .disabled(container?.serverState.isOnline != true || viewModel?.playlistDetail == nil)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                CassetteShareButtonWithOptions(
-                    itemID: playlistId,
-                    shareOptions: ShareSettings.shared.makeAlbumOptions(
-                        albumName: viewModel?.name.isEmpty == false ? (viewModel?.name ?? initialName) : initialName
-                    ),
-                    fallbackText: playlistShareText(songCount: resolvedSongs(viewModel).count),
-                    style: .circle(foreground: headerTextColor)
-                )
-                .buttonStyle(.plain)
-                .disabled(viewModel == nil)
-                .accessibilityLabel(String(localized: "Share", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-            }
-            ToolbarItem(placement: .primaryAction) {
                 playlistMoreMenu
             }
         }
@@ -96,15 +99,13 @@ extension PlaylistDetailView {
         let pinned = container?.pinService.isPinned(itemType: .playlist, itemId: playlistId) == true
         let nowPlayingTitle = container?.playerState.currentTrack?.title
         Menu {
-            if let vm = viewModel, vm.isOffline != true {
-                ControlGroup {
-                    playlistDownloadMenuButtons(vm: vm)
-                    CassetteShareButtonWithOptions(
-                        itemID: playlistId,
-                        shareOptions: ShareSettings.shared.makeAlbumOptions(albumName: viewModel?.name.isEmpty == false ? (viewModel?.name ?? initialName) : initialName),
-                        fallbackText: playlistShareText(songCount: songs.count)
-                    )
-                }
+            ControlGroup {
+                if let vm = viewModel, vm.isOffline != true { playlistDownloadMenuButtons(vm: vm) }
+                CassetteShareButtonWithOptions(
+                    itemID: playlistId,
+                    shareOptions: ShareSettings.shared.makeAlbumOptions(albumName: viewModel?.name.isEmpty == false ? (viewModel?.name ?? initialName) : initialName),
+                    fallbackText: playlistShareText(songCount: songs.count)
+                )
             }
 
             if pinned {

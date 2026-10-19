@@ -19,7 +19,7 @@ extension PlayerService {
     // MARK: - Play
 
     func play(tracks: [DisplayableSong], startIndex: Int) async throws {
-        try await play(tracks: tracks, startIndex: startIndex, preservePlayingState: false)
+        try await play(tracks: tracks, startIndex: startIndex, preservePlayingState: false, explicitRequest: true)
     }
 
     /// Starts queue playback at `startIndex`. Track-to-track transitions reuse preparation
@@ -27,10 +27,22 @@ extension PlayerService {
     func play(
         tracks: [DisplayableSong],
         startIndex: Int,
-        preservePlayingState: Bool
+        preservePlayingState: Bool,
+        explicitRequest: Bool = false
     ) async throws {
-        guard tracks.indices.contains(startIndex) else { return }
+        guard await permitsNewTransportCommand(), stopBarrierCount == 0, tracks.indices.contains(startIndex) else { return }
+        if explicitRequest { clearInterruptionForExplicitPlayback() }
+        guard !transport.interrupted else { return }
+        transportCommandID &+= 1
+        transport.intent = .play
+        transport.terminalContext = nil
+        let resetContext = playbackContext
+        await audioObjectsResetTask?.value
+        guard contextIsCurrent(resetContext) else { return }
+        isRestoringSession = false
+        pendingRestoreInfo = nil
         playbackRequestTask?.cancel()
+        cancelAutoExtendFetch()
         playbackRequestID &+= 1
         let requestID = playbackRequestID
         let task = Task {
@@ -42,6 +54,7 @@ extension PlayerService {
         defer {
             if requestID == playbackRequestID { playbackRequestTask = nil }
         }
+        var wasCancelled = false
         do {
             try await withTaskCancellationHandler {
                 try await task.value
@@ -50,6 +63,14 @@ extension PlayerService {
             }
         } catch is CancellationError {
             // Superseded selection or pause/stop is not a playback failure.
+            wasCancelled = true
+        }
+        // A cancellation-insensitive resolver may return normally after cancellation.
+        // Settle that selection too, rather than leave the visible track loading forever.
+        if (wasCancelled || task.isCancelled), requestID == playbackRequestID,
+           transport.intent == .play, !transport.interrupted,
+           transport.terminalContext == nil, isTrackTransitionPending {
+            await pause()
         }
     }
 
@@ -57,8 +78,6 @@ extension PlayerService {
         tracks: [DisplayableSong], startIndex: Int, preservePlayingState: Bool
     ) async throws {
         try Task.checkCancellation()
-        playbackAcquisitionTask?.cancel()
-        playbackAcquisitionTask = nil
         let previousQueueCount = await MainActor.run { state.queue.count }
         try Task.checkCancellation()
         guard tracks.indices.contains(startIndex) else {
@@ -86,12 +105,14 @@ extension PlayerService {
         let alreadyPlaying = await MainActor.run {
             (
                 trackId: state.currentTrack?.id,
+                index: state.currentIndex,
                 position: state.position,
                 playbackState: state.playbackState
             )
         }
         if !isTrackTransitionPending, progressTask != nil,
            alreadyPlaying.trackId == tracks[startIndex].id,
+           alreadyPlaying.index == startIndex,
            tracks.map(\.id) == currentQueueIds,
            alreadyPlaying.position > 2,
            alreadyPlaying.playbackState.hasPlaybackIntent {
@@ -102,6 +123,8 @@ extension PlayerService {
             return
         }
         try Task.checkCancellation()
+        playbackAcquisitionTask?.cancel()
+        playbackAcquisitionTask = nil
         if await advancePreparedSystemTrack(tracks: tracks, startIndex: startIndex) { return }
         try Task.checkCancellation()
         // The AudioStreaming fallback still needs an engine start for an explicit selection,
@@ -112,6 +135,7 @@ extension PlayerService {
         stoppedAtEndOfQueue = false
         playbackEpoch &+= 1
         let epoch = playbackEpoch
+        let context = playbackContext
         cancelGaplessBridge()
         if tracks.map(\.id) != currentQueueIds {
             originalQueueOrder = nil
@@ -126,7 +150,7 @@ extension PlayerService {
         }
 
         guard let serverId = await MainActor.run(body: { serverService.state.activeServer?.id }) else {
-            await MainActor.run { state.playbackState = .error(.serverNotConfigured) }
+            await finishPlaybackFailure(.serverNotConfigured, context: context)
             throw CassetteError.serverNotConfigured
         }
 
@@ -159,7 +183,7 @@ extension PlayerService {
         // it stops *attributing* the outgoing engine's clock to the incoming track while the flag
         // above is set — see `startProgressTimer`. That was the bug behind a skip showing the
         // previous track's progress under the new title.
-        await MainActor.run {
+        guard await commitPresentation(context, { state in
             if state.currentRadio != nil {
                 Logger.player.debug("Ending live stream session — switching to queue playback")
             }
@@ -170,23 +194,30 @@ extension PlayerService {
             // (Jellyfin playbackInfo, credentials, a slow server), and making the title and
             // artwork wait for it is what made a skip feel like it took seconds to change track.
             state.currentTrack = song
+            state.currentPlaybackTrack = nil
             // Take the scrubber with it. Leaving the outgoing track's duration/position in place
             // while the ticker ran is what showed the *previous* track's progress under the new
             // track. Starting at 0:00 with the new duration is honest for the whole hand-over.
             state.duration = song.duration
             state.position = 0
+            state.pendingSeekPosition = nil
             state.isSeekable = song.duration > 0
             state.playbackState = .loading
-        }
+            return true
+        }) else { return }
 
+        // URL resolution happens before the engine's acquisition watchdog exists.
+        // Bound this phase too, including a resolver that is slow to honor cancellation.
+        let resolutionWatchdog = makePlaybackResolutionWatchdog(context: context, requestID: playbackRequestID)
+        defer { resolutionWatchdog.cancel() }
         var source: MediaSource
         do {
-            if preparedSource != nil,
-               let local = await downloadService.downloadedURL(forSongId: song.id, serverId: serverId) {
-                source = .downloaded(local)
-            } else if preparedSource != nil,
-                      let local = await cacheService.cachedURL(forSongId: song.id, serverId: serverId) {
-                source = .cached(local)
+            if let preparedSource,
+               let local = await preparedLocalURL(source: preparedSource, song: song, serverId: serverId) {
+                source = .downloaded(local, playbackSong: preparedSource.playbackSong)
+            } else if let preparedSource, preparedSource.playbackSong.map(AtmosVariantCatalogue.isAtmos) != true,
+                      let local = await cacheService.cachedURL(forSongId: preparedSource.playbackSong?.id ?? song.id, serverId: serverId) {
+                source = .cached(local, playbackSong: preparedSource.playbackSong)
             } else if let preparedSource,
                !preparedSource.isLocal || FileManager.default.fileExists(atPath: preparedSource.url.path) {
                 source = preparedSource
@@ -199,13 +230,17 @@ extension PlayerService {
         } catch let e as CassetteError {
             guard epoch == playbackEpoch, !Task.isCancelled else { return }
             isTrackTransitionPending = false
-            await MainActor.run { state.playbackState = .error(e) }
+            await finishPlaybackFailure(e, context: playbackContext)
             throw e
         } catch {
             guard epoch == playbackEpoch, !Task.isCancelled else { return }
-            // A transient (non-CassetteError) resolve failure — keychain race, network
-            // blip, or credential reentry — usually clears on a single retry. Retry once
-            // so intermittent "nothing played" doesn't silently park the player in `.idle`.
+            let failure = PlaybackFailure.classify(error)
+            guard PlaybackRecoveryPolicy.decide(failure, permitsAudio: transport.permitsAudio,
+                attempted: false, canRefresh: true) == .refreshSource else {
+                if failure.kind != .cancelled { await finishPlaybackFailure(.playbackFailed(failure), context: context) }
+                throw error
+            }
+            // One bounded retry for a transient source failure; normal startup stays linear.
             Logger.player.error("Playback resolve failed for '\(song.title, privacy: .public)' (id=\(song.id, privacy: .public)): \(String(describing: error), privacy: .public) — retrying once")
             try await Task.sleep(for: .milliseconds(450))
             guard epoch == playbackEpoch, !Task.isCancelled else { return }
@@ -215,23 +250,49 @@ extension PlayerService {
             } catch let e as CassetteError {
                 guard epoch == playbackEpoch, !Task.isCancelled else { return }
                 isTrackTransitionPending = false
-                await MainActor.run { state.playbackState = .error(e) }
+                await finishPlaybackFailure(e, context: playbackContext)
                 throw e
             } catch {
                 guard epoch == playbackEpoch, !Task.isCancelled else { return }
                 isTrackTransitionPending = false
                 Logger.player.error("Playback resolve retry failed for '\(song.title, privacy: .public)': \(String(describing: error), privacy: .public)")
-                await MainActor.run { state.playbackState = .error(.timeout) }
+                await finishPlaybackFailure(.playbackFailed(.classify(error)), context: context)
                 throw error
             }
         }
 
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        resolutionWatchdog.cancel()
         gaplessBridge.clearPreparedSource()
         Logger.player.info(
             "[TRANSITION-TIMING] resolve finished in \(Int(Date().timeIntervalSince(transitionStartedAt) * 1000), privacy: .public)ms for '\(song.title, privacy: .public)' (id=\(song.id, privacy: .public) queueIndex=\(startIndex, privacy: .public))"
         )
         await startPlayback(song: song, source: source, serverId: serverId, epoch: epoch, preservePlayingState: preservePlayingState)
+    }
+
+    func makePlaybackResolutionWatchdog(context: PlaybackContext, requestID: UInt64,
+                                        timeout: Duration = .seconds(30)) -> Task<Void, Never> {
+        Task { [weak self] in
+            do { try await Task.sleep(for: timeout) } catch { return }
+            guard let self else { return }
+            await self.expirePlaybackResolution(context: context, requestID: requestID)
+        }
+    }
+
+    private func expirePlaybackResolution(context: PlaybackContext, requestID: UInt64) async {
+        guard contextIsCurrent(context), requestID == playbackRequestID,
+              isTrackTransitionPending, transport.permitsAudio else { return }
+        Logger.player.error("[ACQUIRE] source resolution timed out before engine startup")
+        playbackRequestTask?.cancel()
+        await finishPlaybackFailure(.timeout, context: context, position: 0)
+    }
+
+    private func preparedLocalURL(source: MediaSource, song: DisplayableSong, serverId: UUID) async -> URL? {
+        let actual = source.playbackSong ?? song
+        if AtmosVariantCatalogue.isAtmos(actual) {
+            return await downloadService.downloadedOriginalURL(forSongId: actual.id, serverId: serverId)
+        }
+        return await downloadService.downloadedURL(forSongId: actual.id, serverId: serverId)
     }
 
     func startPlayback(
@@ -241,6 +302,8 @@ extension PlayerService {
         epoch: UInt64,
         preservePlayingState: Bool
     ) async {
+        let context = playbackContext
+        let publication = makePlaybackPublication()
         let previousJellyfinContext = outgoingSourceForHistory?.jellyfinPlaybackContext
         let previousPosition = outgoingPositionForHistory
         guard epoch == playbackEpoch, !Task.isCancelled else {
@@ -284,8 +347,7 @@ extension PlayerService {
         // Stop progress timer + detach prior Music Haptics before audio/engine work.
         stopProgressTimer()
         nowPlayingEpoch &+= 1
-        lastNowPlayingPushDate = .distantPast
-        await nowPlayingService?.setPlaybackRate(0)
+        await nowPlayingService?.setPlaybackRate(0, publication: makePlaybackPublication())
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
         await nowPlayingService?.clearISRC()
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
@@ -304,24 +366,26 @@ extension PlayerService {
         isFadingOut = false
 
         let config = await MainActor.run { replayGainSettings.config }
-        await replayGainService?.apply(track: song, config: config)
+        await applyReplayGain(track: source.playbackSong ?? song, config: config, context: context)
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
 
         // Change the visible track immediately, but keep playback in `.loading` until the
         // engine has been started below.
-        await MainActor.run {
+        guard await commitPresentation(context, { state in
             state.currentTrack = song
             state.duration = song.duration
             state.position = 0
+            state.pendingSeekPosition = nil
             // Keep the scrubber usable while the streaming parser is still discovering
             // its own duration. We already have a finite catalog duration and the engine
             // can queue an early seek request until parsing catches up.
             state.isSeekable = song.duration > 0
             state.playbackState = .loading
-        }
+            return true
+        }) else { return }
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
 
-        let songId = song.id
+        let songId = source.playbackSong?.id ?? song.id
         if Self.isListeningHistoryEnabled {
             Task { [libraryService] in
                 await libraryService.scrobble(songId: songId, submission: false)
@@ -345,6 +409,7 @@ extension PlayerService {
         endOfTrackStallProgress = -1
         lastObservedEngineProgress = 0
         seekState = .idle
+        seekNeedsCommit = false
         liveStreamStallTask?.cancel()
         liveStreamStallTask = nil
         currentSource = source
@@ -363,9 +428,10 @@ extension PlayerService {
 
         let fadingInAllowed: Bool
         #if os(iOS)
-        fadingInAllowed = shouldFadeIn && !useSystemPlayer && !PlayerService.isWirelessSystemRouteActive()
+        fadingInAllowed = shouldFadeIn && EngineCapabilities(native: useSystemPlayer,
+            wirelessRoute: PlayerService.isWirelessSystemRouteActive()).supportsSequentialFades
         #else
-        fadingInAllowed = shouldFadeIn && !useSystemPlayer
+        fadingInAllowed = shouldFadeIn && EngineCapabilities(native: useSystemPlayer, wirelessRoute: false).supportsSequentialFades
         #endif
 
         let duration = song.duration
@@ -377,10 +443,12 @@ extension PlayerService {
         // Publish the incoming track *before* the engine is started: an engine that begins
         // playing immediately (a downloaded or cached file) must not have its own confirmation
         // overwritten by this block.
-        await MainActor.run {
+        let isLimitedNetwork = await MainActor.run { serverService.state.isLimitedNetwork }
+        guard await commitPresentation(context, { state in
             state.currentTrack = song
             state.duration = duration
             state.position = 0
+            state.pendingSeekPosition = nil
             state.isSeekable = duration > 0
             // A fresh track stays `.loading` until an engine confirms real audio: AVPlayer's
             // time-control status, AudioStreaming's state callback, or measured progress in the
@@ -389,24 +457,23 @@ extension PlayerService {
             state.playbackState = .loading
             state.isPlaybackAvailable = true
             state.isDeliveringTranscodedAudio = isTranscoding
-        }
+            state.currentPlaybackTrack = source.playbackSong
+            return true
+        }) else { return }
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
 
-        if fadingInAllowed {
-            setEngineVolume(0)
-        }
         isTrackTransitionPending = false
         resetTrackAccumulator(isPlaying: false)
+        pendingFadeInDuration = fadingInAllowed ? crossfadeConfig.duration : nil
         startEnginePlayback(
             url: source.url,
             headers: source.customHeaders,
-            useSystemPlayer: useSystemPlayer
+            useSystemPlayer: useSystemPlayer,
+            isLimitedNetwork: isLimitedNetwork,
+            initialVolume: fadingInAllowed ? 0 : nil
         )
         if let context = source.jellyfinPlaybackContext {
             Task { [weak self] in await self?.reportJellyfinStarted(context, position: 0) }
-        }
-        if fadingInAllowed {
-            performFadeIn(duration: crossfadeConfig.duration)
         }
         if let started = transitionStartedAt {
             transitionStartedAt = nil
@@ -452,23 +519,22 @@ extension PlayerService {
             isrc: cachedISRC(for: song),
             trackId: song.id,
             queueIndex: nowPlayingState.0,
-            queueCount: nowPlayingState.1
+            queueCount: nowPlayingState.1,
+            publication: publication
         )
-        await nowPlayingService?.publishTrackChange(snapshot)
-        guard epoch == playbackEpoch, !Task.isCancelled else { return }
         await nowPlayingService?.update(with: snapshot)
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
         // Never background-cache Dolby/Atmos — lossy cache formats stereo-downmix the bitstream.
         // Also skip competing downloads on wireless system routes where bandwidth/route churn hurts playback.
         let skipEphemeralCache: Bool = {
-            if AudioQualityClassifier.shouldBypassEphemeralCache(song) { return true }
+            if AudioQualityClassifier.shouldBypassEphemeralCache(source.playbackSong ?? song) { return true }
             #if os(iOS)
             return PlayerService.isWirelessSystemRouteActive()
             #else
             return false
             #endif
         }()
-        if case .stream(let streamURL, let customHeaders, let jellyfinContext, _) = source,
+        if case .stream(let streamURL, let customHeaders, let jellyfinContext, _, _) = source,
            jellyfinContext == nil,
            !skipEphemeralCache {
             let cacheFormat = await MainActor.run { cacheSettings.cacheFormat }
@@ -496,12 +562,15 @@ extension PlayerService {
                 cacheDownloadTask = Task { [cacheService, downloadService, serverService, cacheSession, weak self] in
                     try? await Task.sleep(for: .seconds(30))
                     guard !Task.isCancelled, let self else { return }
+                    // Automatic offline storage already owns this song's full-file copy.
+                    // A different cache preset must not start a second encoding/transfer.
+                    guard !UserDefaults.standard.bool(forKey: Self.automaticDownloadUserDefaultsKey) else { return }
                     if await cacheService.cachedURL(forSongId: songId, serverId: serverId) != nil { return }
                     if await downloadService.isDownloaded(songId: songId, serverId: serverId) { return }
                     if await downloadService.isDownloading(songId: songId, serverId: serverId) { return }
                     let isLimited = await MainActor.run { serverService.state.isLimitedNetwork }
                     let isStillPlaying = await MainActor.run {
-                        self.state.currentTrack?.id == songId && self.state.playbackState == .playing
+                        self.state.currentTrack?.id == song.id && self.state.playbackState == .playing
                     }
                     guard !Task.isCancelled, isStillPlaying else { return }
                     if isLimited {
@@ -527,7 +596,7 @@ extension PlayerService {
             Logger.player.info("[SPATIAL] Skipping ephemeral cache for Dolby/multichannel '\(songId, privacy: .public)'")
         }
 
-        await scheduleAutomaticDownload(song: song, serverId: serverId)
+        await scheduleAutomaticDownload(song: source.playbackSong ?? song, serverId: serverId)
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
         await ensureGaplessPreparation()
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
@@ -540,9 +609,7 @@ extension PlayerService {
         preloadNextTrackArtwork()
         await evaluateAutoExtend()
         // Single widget entry on track start — onPlayStateChanged would redo cover/color work.
-        if let ws = widgetSyncService {
-            Task { await ws.onTrackStarted(song) }
-        }
+        await publishWidgetStatus(recordTrackStart: true)
         await reportOpenSubsonicPlayback(state: .playing, songId: song.id, positionMs: 0)
     }
 

@@ -38,8 +38,8 @@ extension PlayerService {
     private func fireScrobbleIfThresholdMet(song: DisplayableSong) {
         guard Self.isListeningHistoryEnabled else { return }
         let duration = song.duration
-        let songId = song.id
-        let segmentContrib = currentPlaySegmentStart.map { Date().timeIntervalSince($0) } ?? 0
+        let songId = currentSource?.playbackSong?.id ?? song.id
+        let segmentContrib = currentSegmentDuration
         let accumulated = accumulatedPlayedSeconds + segmentContrib
         guard detector.check(duration: duration, accumulated: accumulated) else { return }
         let startDate = trackPlayStartDate ?? Date()
@@ -58,13 +58,18 @@ extension PlayerService {
 
     // MARK: - Play-time accumulator
 
+    var currentSegmentDuration: TimeInterval {
+        segmentStartedUptime.map { max(0, ProcessInfo.processInfo.systemUptime - $0) } ?? 0
+    }
+
     func finalizePlaySegment() {
-        guard let start = currentPlaySegmentStart else { return }
-        accumulatedPlayedSeconds += Date().timeIntervalSince(start)
+        guard currentPlaySegmentStart != nil else { return }
+        accumulatedPlayedSeconds += currentSegmentDuration
         currentPlaySegmentStart = nil
     }
 
     func resetTrackAccumulator(isPlaying: Bool) {
+        accumulatorID = UUID()
         accumulatedPlayedSeconds = 0
         trackPlayStartDate = Date()
         currentPlaySegmentStart = isPlaying ? Date() : nil
@@ -79,9 +84,12 @@ extension PlayerService {
     ) async {
         guard Self.isListeningHistoryEnabled else { return }
         // Capture the outgoing counters before any suspension or track publication.
+        let context = playbackContext
+        let recordingID = accumulatorID
+        guard recordedAccumulatorID != recordingID else { return }
         let startDate = trackPlayStartDate
         let completed = wasTrackCompletedNaturally
-        let segmentContrib = currentPlaySegmentStart.map { Date().timeIntervalSince($0) } ?? 0
+        let segmentContrib = currentSegmentDuration
         let durationListened = accumulatedPlayedSeconds + segmentContrib
         let recordedTrack: DisplayableSong?
         if let overridingTrack {
@@ -98,6 +106,8 @@ extension PlayerService {
             return
         }
 
+        guard context == playbackContext, recordedAccumulatorID != recordingID else { return }
+        recordedAccumulatorID = recordingID
         let trackDuration = song.duration
         let dto = PlaybackEventDTO(
             trackId: song.id,
@@ -136,28 +146,33 @@ extension PlayerService {
             request.setValue(value, forHTTPHeaderField: key)
         }
 
-        let (tempURL, response) = try await session.download(for: request)
-        defer { try? FileManager.default.removeItem(at: tempURL) }
+        let identity = try await MainActor.run { try serverService.state.requestIdentity(for: serverId) }
+        let key = MediaTransferKey(accountID: serverId, revision: identity.revision, songID: songId, request: request)
+        let transferRequest = request
+        try await transferCoordinator.cache(key) { [cacheService] in
+            let (tempURL, response) = try await session.download(for: transferRequest)
+            defer { try? FileManager.default.removeItem(at: tempURL) }
 
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            struct CacheDownloadError: Error, Sendable { let statusCode: Int }
-            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw CacheDownloadError(statusCode: code)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                throw HTTPTransferFailure(response: response, stage: "audio cache response")
+            }
+
+            try AudioResponseValidator.validate(fileAt: tempURL, response: response, songId: songId, logger: Logger.cache)
+
+            try Task.checkCancellation()
+            let ext = streamURL.pathExtension
+            let mimeType = response.mimeType ?? (ext.isEmpty ? "audio/mpeg" : "audio/\(ext)")
+
+            let cachedURL = try await cacheService.storeTransferred(
+                fileAt: tempURL,
+                forSongId: songId,
+                serverId: serverId,
+                mimeType: mimeType,
+                key: key
+            )
+
+            Logger.player.info("Cached '\(songId, privacy: .public)'")
+            return try CachedMediaTransfer(url: cachedURL, response: response)
         }
-
-        try AudioResponseValidator.validate(fileAt: tempURL, response: response, songId: songId, logger: Logger.cache)
-
-        try Task.checkCancellation()
-        let ext = streamURL.pathExtension
-        let mimeType = response.mimeType ?? (ext.isEmpty ? "audio/mpeg" : "audio/\(ext)")
-
-        _ = try await cacheService.store(
-            fileAt: tempURL,
-            forSongId: songId,
-            serverId: serverId,
-            mimeType: mimeType
-        )
-
-        Logger.player.info("Cached '\(songId, privacy: .public)'")
     }
 }

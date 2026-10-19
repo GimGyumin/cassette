@@ -12,6 +12,8 @@ struct SearchResultsList: View {
 
     @Environment(\.appContainer) private var container
     @State private var songToAdd: DisplayableSong?
+    @State private var completedDownloads: Set<String> = []
+    @State private var pendingDownloads: Set<String> = []
 
     private var items: [SearchResultItem] {
         let filter: SearchCategory = showsSuggestions && !downloadsOnly ? .all : category
@@ -53,7 +55,7 @@ struct SearchResultsList: View {
                     .listRowInsets(EdgeInsets(top: 2, leading: 20, bottom: 2, trailing: 20))
                     .alignmentGuide(.listRowSeparatorLeading) { _ in 74 }
             }
-            if viewModel.isSearching || viewModel.isIndexing {
+            if viewModel.isSearching {
                 progressRow
             } else if let error = viewModel.searchError {
                 VStack(spacing: 10) {
@@ -67,6 +69,8 @@ struct SearchResultsList: View {
                 }
                 .frame(maxWidth: .infinity)
                 .listRowSeparator(.hidden)
+            } else if viewModel.isIndexing && viewModel.searchResults == nil {
+                progressRow
             } else if rows.isEmpty {
                 EmptyStateView(systemImage: "magnifyingglass", title: "No results", subtitle: "Try a different search term.")
                     .listRowSeparator(.hidden)
@@ -104,6 +108,7 @@ struct SearchResultsList: View {
             HStack(spacing: 0) {
                 Button { play(song) } label: { SearchResultLabel(item: item) }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("search.song.play.\(song.id)")
                 Menu {
                     Button("Play", systemImage: "play.fill") { play(song) }
                     Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") {
@@ -113,13 +118,31 @@ struct SearchResultsList: View {
                         Task { await container?.playerService.addToQueue(song) }
                     }
                     Button("Add to Playlist…", systemImage: "music.note.list") { songToAdd = song }
+                    Button(song.isDownloaded || completedDownloads.contains(song.id) ? "Downloaded" : "Download",
+                           systemImage: "arrow.down.circle") {
+                        guard let container, let serverID = container.serverState.activeServer?.id else { return }
+                        pendingDownloads.insert(song.id)
+                        Task {
+                            defer { pendingDownloads.remove(song.id) }
+                            do {
+                                try await container.downloadService.download(song: song.asSong(), serverId: serverID)
+                                completedDownloads.insert(song.id)
+                            } catch {
+                                container.toastService.showError(UserFacingError.downloadFailed.displayMessage)
+                            }
+                        }
+                    }
+                    .disabled(song.isDownloaded || completedDownloads.contains(song.id) || pendingDownloads.contains(song.id))
+                    .accessibilityIdentifier("search.song.download.\(song.id)")
                 } label: {
                     Image(systemName: "ellipsis").font(.title3.weight(.semibold))
                         .frame(width: 44, height: 44).contentShape(Rectangle())
                 }
                 .menuStyle(.borderlessButton)
                 .accessibilityLabel(String(localized: "More Options", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                .accessibilityValue(song.title)
+                .accessibilityValue(song.isDownloaded || completedDownloads.contains(song.id)
+                    ? String(localized: "Downloaded", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : song.title)
+                .accessibilityIdentifier("search.song.more.\(song.id)")
             }
             .songLongPressMenu(song)
         case .artist(let artist):

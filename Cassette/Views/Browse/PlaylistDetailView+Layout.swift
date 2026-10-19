@@ -71,7 +71,7 @@ extension PlaylistDetailView {
                 EmptyStateView(
                     systemImage: "exclamationmark.triangle",
                     title: "Unable to Load Playlist",
-                    subtitle: error.displayMessage,
+                    subtitle: vm.isGenerated ? String(localized: "Couldn’t build this mix right now.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : error.displayMessage,
                     action: .init(label: "Retry") { Task { await vm.load() } }
                 )
                 .listRowSeparator(.hidden)
@@ -86,7 +86,7 @@ extension PlaylistDetailView {
                 .listRowBackground(bodyColor)
             } else {
                 let serverId = container?.serverState.activeServer?.id ?? UUID()
-                let removeTrack: ((Int) -> Void)? = vm.isOffline ? nil : { index in
+                let removeTrack: ((Int) -> Void)? = (vm.isOffline || vm.isGenerated) ? nil : { index in
                     Task { await vm.removeTrack(at: index) }
                 }
                 PlaylistSongRows(
@@ -130,6 +130,10 @@ extension PlaylistDetailView {
     private func desktopPlaylistSidebar(vm: PlaylistDetailViewModel?) -> some View {
         let coverSize = CassetteWideLayout.heroCoverArtSize
         return VStack(alignment: .leading, spacing: CassetteSpacing.l) {
+            Group {
+            if let source = generatedSource {
+                PersonalMixArtwork(kind: source.mixKind ?? .essentials)
+            } else {
             CoverArtView(
                 id: effectiveCoverArtId,
                 size: 600,
@@ -137,6 +141,8 @@ extension PlaylistDetailView {
                 initialImage: initialCoverImage,
                 contentMode: .fill
             )
+            }
+            }
             .frame(width: coverSize, height: coverSize)
             .id(coverRefreshID)
             .shadow(color: .black.opacity(0.35), radius: 24, y: 12)

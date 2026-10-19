@@ -23,6 +23,7 @@ nonisolated struct URLSessionExternalFetcher: ExternalArtworkFetcher {
 
     nonisolated init() {
         let config = URLSessionConfiguration.default
+        ArtworkNetworkPolicy.configure(config)
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 30
         config.httpMaximumConnectionsPerHost = 2
@@ -30,7 +31,9 @@ nonisolated struct URLSessionExternalFetcher: ExternalArtworkFetcher {
     }
 
     func fetchData(from url: URL) async throws -> Data {
-        let (data, response) = try await session.data(from: url)
+        var request = URLRequest(url: url)
+        ArtworkNetworkPolicy.apply(to: &request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
@@ -91,7 +94,7 @@ actor ExternalArtworkCache {
 
     // MARK: - Public API
 
-    func image(for url: URL) async -> PlatformImage? {
+    func image(for url: URL, allowNetwork: Bool = true) async -> PlatformImage? {
         guard !isClearingCache else { return nil }
         // 1. Memory hit
         if let hit = memoryCache.value(forKey: url) {
@@ -104,14 +107,15 @@ actor ExternalArtworkCache {
         let fileURL = diskURL(for: url)
         let task = Task.detached(priority: .utility) { [fetcher, ttl, decodeGate] () -> PlatformImage? in
             // Keep disk reads, image decoding and writes off the UI and cache actors.
-            await decodeGate.acquire()
+            guard await decodeGate.acquire() else { return nil }
             let diskImage = Task.isCancelled ? nil : Self.diskImage(at: fileURL, ttl: ttl)
             await decodeGate.release()
             guard !Task.isCancelled else { return nil }
             if let diskImage { return diskImage }
+            guard allowNetwork else { return nil }
             do {
                 let data = try await fetcher.fetchData(from: url)
-                await decodeGate.acquire()
+                guard await decodeGate.acquire() else { return nil }
                 let image = Task.isCancelled ? nil : ArtworkImageCache.thumbnailImage(
                         from: data, maxDimension: ArtworkTier.hero.decodePixels
                 )

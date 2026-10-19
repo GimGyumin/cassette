@@ -6,7 +6,8 @@ struct LibraryPreparationAccountSection: View {
 
     var body: some View {
         if let container, container.serverState.activeServer != nil,
-           container.albumCoverPreloadService.state.isDownloading
+           (container.albumCoverPreloadService.state.isDownloading && !container.albumCoverPreloadService.state.isComplete)
+            || container.albumCoverPreloadService.state.isAnalyzingColors
             || container.libraryIndexService.isPreparing
             || container.libraryIndexService.lastError != nil
             || container.libraryPreparationService.phase.isPreparing
@@ -44,7 +45,7 @@ struct LibraryPreparationStatusView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         Text(text("Optimizing Your Library"))
                             .font(.title3.weight(.semibold))
-                        Text(BulkArtworkPreference.isEnabled
+                        Text(BulkArtworkPreference.isEnabled && container?.albumCoverPreloadService.state.isDownloading == true && container?.albumCoverPreloadService.state.isComplete != true
                             ? text("Keep using Cassette while your album covers download and your library is prepared for search. Progress is saved automatically, so completed downloads are not repeated.")
                             : text("Keep using Cassette while your library is prepared for search."))
                             .foregroundStyle(.secondary)
@@ -52,12 +53,16 @@ struct LibraryPreparationStatusView: View {
 
                         if let container {
                             let covers = container.albumCoverPreloadService.state
-                            if covers.isDownloading {
+                            if covers.isAnalyzingColors {
+                                Text(text("Analyzing cover colors…"))
+                                    .font(.subheadline.weight(.medium))
+                                ProgressView(value: Double(covers.colorsCompleted), total: Double(max(1, covers.colorsTotal)))
+                            } else if covers.isDownloading && !covers.isComplete {
                                 Text(text("Downloading album covers…"))
                                     .font(.subheadline.weight(.medium))
-                                if covers.total > 0 {
+                                if !covers.isResolvingInventory && covers.libraryTotal > 0 {
                                     ProgressView(value: covers.fraction)
-                                    Text("\(covers.completed) / \(covers.total)")
+                                    Text("\(covers.availableCompleted) / \(covers.libraryTotal)")
                                         .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                                 } else {
                                     ProgressView()

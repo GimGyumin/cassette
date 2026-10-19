@@ -27,6 +27,8 @@ struct ScrubberView: View {
     @State private var isSeeking = false
     @State private var displayPosition: TimeInterval = 0
     @State private var seekGeneration = 0
+    @State private var seekTask: Task<Void, Never>?
+    @State private var draggedTrackID: String?
 
     private var effectiveDuration: TimeInterval {
         playerState.duration > 0 ? playerState.duration : (playerState.currentTrack?.duration ?? 1)
@@ -35,7 +37,7 @@ struct ScrubberView: View {
     private var playbackQuality: AudioQualityKind? {
         guard !playerState.isLiveStream, let track = playerState.currentTrack else { return nil }
         return AudioQualityClassifier.displayablePlaybackQuality(
-            for: track,
+            for: playerState.currentPlaybackTrack ?? track,
             isExpensive: isExpensiveNetwork,
             isTranscoding: playerState.isDeliveringTranscodedAudio
         )
@@ -43,7 +45,7 @@ struct ScrubberView: View {
 
     private var positionBinding: Binding<TimeInterval> {
         Binding(
-            get: { (isDragging || isSeeking) ? displayPosition : playerState.position },
+            get: { (isDragging || isSeeking) ? displayPosition : (playerState.pendingSeekPosition ?? playerState.position) },
             set: { newValue in displayPosition = newValue }
         )
     }
@@ -54,13 +56,20 @@ struct ScrubberView: View {
                 value: positionBinding,
                 total: effectiveDuration,
                 onEditingChanged: { editing in
+                    if editing {
+                        draggedTrackID = playerState.currentTrack?.id
+                        if !isSeeking { displayPosition = playerState.position }
+                    }
                     isDragging = editing
                     if !editing {
+                        guard !playerState.isLiveStream,
+                              draggedTrackID == playerState.currentTrack?.id || draggedTrackID == nil else { return }
                         seekGeneration &+= 1
                         let generation = seekGeneration
                         isSeeking = true
                         let target = max(0, min(displayPosition, effectiveDuration))
-                        Task {
+                        seekTask?.cancel()
+                        seekTask = Task {
                             await playerService?.seek(to: target)
                             guard generation == seekGeneration else { return }
                             isSeeking = false
@@ -81,6 +90,14 @@ struct ScrubberView: View {
                 quality: playbackQuality
             )
         }
+        .onChange(of: playerState.currentTrack?.id) { _, _ in
+            seekTask?.cancel()
+            seekGeneration &+= 1
+            isDragging = false
+            isSeeking = false
+            displayPosition = playerState.position
+            // Retain the original gesture's identity until its release is discarded.
+        }
     }
 }
 
@@ -96,7 +113,7 @@ private struct ScrubberTimeLabels: View {
     }
 
     var body: some View {
-        let shown = overridePosition ?? playerState.position
+        let shown = overridePosition ?? playerState.pendingSeekPosition ?? playerState.position
         HStack {
             Text(hasPlayableDuration
                  ? Duration.seconds(shown).formatted(.time(pattern: .minuteSecond))
@@ -265,11 +282,11 @@ struct PlaybackControlsView: View {
             } label: {
                 Image(systemName: playerState.playbackState.controlAppearance.systemImage)
                     .font(.system(size: 44, weight: .semibold, design: .default))
-                    .foregroundStyle(isPlaybackAvailable ? Color.white : Color.white.opacity(0.4))
+                    .foregroundStyle(Color.white)
                     .frame(minWidth: showsShuffleRepeat ? 72 : 88, minHeight: showsShuffleRepeat ? 72 : 88)
                     .contentShape(Rectangle())
             }
-            .disabled(!isPlaybackAvailable)
+            .disabled(playerState.currentTrack == nil)
             .accessibilityLabel(playerState.playbackState.controlAppearance == .play ? "Play" : "Pause")
 
             if !playerState.isLiveStream {

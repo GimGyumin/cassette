@@ -26,38 +26,16 @@ struct EmptyStateView: View {
     var action: Action? = nil
 
     var body: some View {
-        VStack(spacing: CassetteSpacing.l) {
-            Image(systemName: systemImage)
-                .font(.system(.largeTitle, design: .default).weight(.light))
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-
-            VStack(spacing: CassetteSpacing.s) {
-                Text(title)
-                    .font(.cassetteSectionTitle)
-                    .multilineTextAlignment(.center)
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.cassetteBody)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 280)
-                }
-            }
-
+        ContentUnavailableView {
+            Label(title, systemImage: systemImage)
+        } description: {
+            if let subtitle { Text(subtitle) }
+        } actions: {
             if let action {
-                Button(action: action.handler) {
-                    Text(action.label)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, CassetteSpacing.xl)
-                        .padding(.vertical, CassetteSpacing.m)
-                        .cassetteAccentGlassCapsule()
-                }
-                .buttonStyle(.plain)
+                Button(action.label, action: action.handler)
+                    .cassetteAccentGlassButton()
             }
         }
-        .padding(CassetteSpacing.xxxl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

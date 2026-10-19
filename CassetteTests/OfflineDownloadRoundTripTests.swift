@@ -16,17 +16,23 @@ import SwiftSonic
 @MainActor
 struct OfflineDownloadRoundTripTests {
 
-    private func makeService() throws -> (service: DownloadService, container: ModelContainer, serverId: UUID) {
+    private func makeService() throws -> (service: DownloadService, container: ModelContainer, serverId: UUID, directory: URL) {
         let container = try ModelContainer.cassette(inMemory: true)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let service = DownloadService(
             serverService: MockServerService(),
             modelContainer: container,
-            toastService: ToastService()
+            toastService: ToastService(),
+            journal: BackgroundDownloadJournal(directory: directory.appendingPathComponent("journal")),
+            storageDirectory: directory
         )
-        return (service, container, UUID())
+        return (service, container, UUID(), directory)
     }
 
-    private func insertTrack(_ container: ModelContainer, songId: String, serverId: UUID, track: Int) {
+    private func insertTrack(_ container: ModelContainer, directory: URL, songId: String, serverId: UUID, track: Int) throws {
+        let file = directory.appendingPathComponent("downloads/\(serverId.uuidString)/\(songId).mp3")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 1234).write(to: file)
         container.mainContext.insert(
             DownloadedTrack(
                 songId: songId,
@@ -45,10 +51,11 @@ struct OfflineDownloadRoundTripTests {
 
     @Test("real localPlaylistData reconstructs tracks in stored playlist order")
     func reconstructsInOrder() async throws {
-        let (service, container, sid) = try makeService()
+        let (service, container, sid, directory) = try makeService()
+        defer { try? FileManager.default.removeItem(at: directory) }
         // Insert out of order on purpose; songIds defines the order, not insertion/track number.
-        insertTrack(container, songId: "s2", serverId: sid, track: 2)
-        insertTrack(container, songId: "s1", serverId: sid, track: 1)
+        try insertTrack(container, directory: directory, songId: "s2", serverId: sid, track: 2)
+        try insertTrack(container, directory: directory, songId: "s1", serverId: sid, track: 1)
         container.mainContext.insert(
             DownloadedPlaylist(
                 playlistId: "pl-1", serverId: sid, name: "Road Trip",
@@ -64,17 +71,19 @@ struct OfflineDownloadRoundTripTests {
 
     @Test("localPlaylistData returns nil when there is no downloaded playlist record")
     func nilWhenNoRecord() async throws {
-        let (service, _, sid) = try makeService()
+        let (service, _, sid, directory) = try makeService()
+        defer { try? FileManager.default.removeItem(at: directory) }
         let data = await service.localPlaylistData(playlistId: "missing", serverId: sid)
         #expect(data == nil)
     }
 
     @Test("localPlaylistData ignores tracks from a different server")
     func ignoresOtherServerTracks() async throws {
-        let (service, container, sid) = try makeService()
+        let (service, container, sid, directory) = try makeService()
+        defer { try? FileManager.default.removeItem(at: directory) }
         let otherServer = UUID()
-        insertTrack(container, songId: "s1", serverId: sid, track: 1)
-        insertTrack(container, songId: "s2", serverId: otherServer, track: 2) // wrong server
+        try insertTrack(container, directory: directory, songId: "s1", serverId: sid, track: 1)
+        try insertTrack(container, directory: directory, songId: "s2", serverId: otherServer, track: 2) // wrong server
         container.mainContext.insert(
             DownloadedPlaylist(
                 playlistId: "pl-1", serverId: sid, name: "Road Trip",
@@ -89,9 +98,10 @@ struct OfflineDownloadRoundTripTests {
 
     @Test("backfillPlaylistSongIds repairs an empty songIds from on-disk tracks, in order")
     func backfillRepairsEmptySongIds() async throws {
-        let (service, container, sid) = try makeService()
-        insertTrack(container, songId: "s1", serverId: sid, track: 1)
-        insertTrack(container, songId: "s2", serverId: sid, track: 2)
+        let (service, container, sid, directory) = try makeService()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try insertTrack(container, directory: directory, songId: "s1", serverId: sid, track: 1)
+        try insertTrack(container, directory: directory, songId: "s2", serverId: sid, track: 2)
         container.mainContext.insert(
             DownloadedPlaylist(
                 playlistId: "pl-1", serverId: sid, name: "Road Trip",
@@ -115,9 +125,10 @@ struct OfflineDownloadRoundTripTests {
 
     @Test("backfillPlaylistSongIds does not overwrite an already-populated songIds")
     func backfillLeavesPopulatedAlone() async throws {
-        let (service, container, sid) = try makeService()
-        insertTrack(container, songId: "s1", serverId: sid, track: 1)
-        insertTrack(container, songId: "s2", serverId: sid, track: 2)
+        let (service, container, sid, directory) = try makeService()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try insertTrack(container, directory: directory, songId: "s1", serverId: sid, track: 1)
+        try insertTrack(container, directory: directory, songId: "s2", serverId: sid, track: 2)
         container.mainContext.insert(
             DownloadedPlaylist(
                 playlistId: "pl-1", serverId: sid, name: "Road Trip",

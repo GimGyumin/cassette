@@ -334,6 +334,8 @@ struct RootViewMacOS: View {
     @ViewBuilder
     private func macOSDestinationView(_ destination: HomeDestination) -> some View {
         switch destination {
+        case .albumCollection(let collection):
+            AlbumShelfCollectionView(collection: collection)
         case .libraryAlbums:
             AlbumsListView()
         case .libraryArtists:
@@ -381,7 +383,7 @@ struct RootViewMacOS: View {
                 coverArtId: album.coverArtId
             )
         case .personalMix(let kind):
-            PersonalMixDetailView(kind: kind)
+            PlaylistDetailView(generatedSource: .personalMix(kind))
         }
     }
 

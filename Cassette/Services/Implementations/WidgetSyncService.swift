@@ -31,26 +31,33 @@ actor WidgetSyncService {
     /// Path to Documents/app.cassette/coverarts/ — same dir used by DownloadService.
     private let coversDirectory: URL
     private let serverState: ServerState
+    private let storageOverride: UserDefaults?
 
     private var lastReloadDate: Date?
-    private var lastPlayStateChangeDate: Date = .distantPast
+    private var trailingReloadTask: Task<Void, Never>?
+    private var lastPlaybackSequence: UInt64 = 0
     /// Avoid re-bridging / color work for the same cover during rapid play-state flips.
     private var lastBridgedCoverArtId: String?
     private var bridgedOriginals = Set<String>()
     private var accountGeneration: UInt64 = 0
+    private var accountIdentity: ServerRequestIdentity?
 
     func clearForLogout() throws {
         accountGeneration &+= 1
+        trailingReloadTask?.cancel()
+        trailingReloadTask = nil
+        accountIdentity = nil
+        writeShared { $0.removeObject(forKey: "cassette.widget.server") }
         lastBridgedCoverArtId = nil
         bridgedOriginals.removeAll()
         lastReloadDate = nil
-        SharedStorage.write { defaults in
+        writeShared { defaults in
             for key in [SharedStorageKey.recentlyPlayedItems, .pinnedItems, .dominantColors, .nowPlayingState] {
                 defaults.removeObject(forKey: key.rawValue)
             }
             WidgetCenter.shared.reloadAllTimelines()
         }
-        if let directory = SharedStorage.coverArtCacheDirectory,
+        if storageOverride == nil, let directory = SharedStorage.coverArtCacheDirectory,
            FileManager.default.fileExists(atPath: directory.path) {
             try FileManager.default.removeItem(at: directory)
         }
@@ -61,35 +68,70 @@ actor WidgetSyncService {
         modelContainer: ModelContainer,
         artworkCache: ArtworkImageCache,
         coversDirectory: URL,
-        serverState: ServerState
+        serverState: ServerState,
+        storage: UserDefaults? = nil
     ) {
         self.dominantColorExtractor = dominantColorExtractor
         self.modelContainer = modelContainer
         self.artworkCache = artworkCache
         self.coversDirectory = coversDirectory
         self.serverState = serverState
+        self.storageOverride = storage
+    }
+
+    private func readShared<Value>(_ body: (UserDefaults) -> Value) -> Value {
+        if let storageOverride { return body(storageOverride) }
+        return SharedStorage.read(body)
+    }
+
+    private func writeShared(_ body: @escaping (UserDefaults) -> Void) {
+        if let storageOverride { body(storageOverride) }
+        else { SharedStorage.write(body) }
+    }
+
+    private func prepareAccount() async -> ServerRequestIdentity? {
+        guard let identity = await MainActor.run(body: {
+            serverState.activeServer.flatMap { try? serverState.requestIdentity(for: $0.id) }
+        }) else { return nil }
+        if accountIdentity != identity {
+            let savedServer = readShared { $0.string(forKey: "cassette.widget.server") }
+            if savedServer != identity.serverID.uuidString {
+                try? clearForLogout()
+                writeShared { $0.set(identity.serverID.uuidString, forKey: "cassette.widget.server") }
+            }
+            accountIdentity = identity
+        }
+        return identity
+    }
+
+    private func isCurrent(_ identity: ServerRequestIdentity) async -> Bool {
+        await MainActor.run { serverState.requestIsCurrent(identity) }
     }
 
     // MARK: - Recently played + now playing
 
-    func onTrackStarted(_ song: DisplayableSong) async {
-        guard await MainActor.run(body: { serverState.activeServer != nil && !serverState.isSigningOut }) else { return }
+    func onTrackStarted(_ song: DisplayableSong, isPlaying: Bool = true, publication: PlaybackPublication? = nil) async {
+        guard let identity = await prepareAccount(), publication?.isCurrent != false else { return }
+        let publishState = acceptPlaybackPublication(publication)
         let coverArtId = song.coverArtId ?? song.id
         let info = SharedTrackInfo(
             id: song.id,
             title: song.title,
             artist: song.artist ?? "",
             albumID: song.albumId,
-            coverArtFilename: "\(coverArtId).jpg"
+            coverArtFilename: DownloadService.coverStorageName(for: coverArtId, serverId: identity.serverID) + ".jpg"
         )
 
         // Widget timeline reads `nowPlayingState` — must update here (not only on pause/resume).
-        let nowPlaying = SharedNowPlayingState(track: info, isPlaying: true, lastUpdated: Date())
-        if let encoded = try? JSONEncoder().encode(nowPlaying) {
-            SharedStorage.write { $0.set(encoded, forKey: SharedStorageKey.nowPlayingState.rawValue) }
+        let nowPlaying = SharedNowPlayingState(track: info, isPlaying: isPlaying, lastUpdated: Date())
+        if publishState, let encoded = try? JSONEncoder().encode(nowPlaying) {
+            writeShared { defaults in
+                if let publication { publication.commit { defaults.set(encoded, forKey: SharedStorageKey.nowPlayingState.rawValue) } }
+                else { defaults.set(encoded, forKey: SharedStorageKey.nowPlayingState.rawValue) }
+            }
         }
 
-        var items: [SharedTrackInfo] = SharedStorage.read { defaults in
+        var items: [SharedTrackInfo] = readShared { defaults in
             guard let data = defaults.data(forKey: SharedStorageKey.recentlyPlayedItems.rawValue),
                   let decoded = try? JSONDecoder().decode([SharedTrackInfo].self, from: data) else {
                 return []
@@ -102,11 +144,8 @@ actor WidgetSyncService {
         if items.count > 10 { items = Array(items.prefix(10)) }
 
         if let encoded = try? JSONEncoder().encode(items) {
-            SharedStorage.write { $0.set(encoded, forKey: SharedStorageKey.recentlyPlayedItems.rawValue) }
+            writeShared { $0.set(encoded, forKey: SharedStorageKey.recentlyPlayedItems.rawValue) }
         }
-
-        WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.nowPlaying)
-        lastReloadDate = Date()
 
         try? await bridgeCoverArt(coverArtId: coverArtId, allowNetwork: false)
         await syncDominantColors(forCoverArtIds: [coverArtId])
@@ -118,11 +157,9 @@ actor WidgetSyncService {
 
     // MARK: - Now playing state
 
-    func onPlayStateChanged(isPlaying: Bool, currentSong: DisplayableSong?) async {
-        guard await MainActor.run(body: { serverState.activeServer != nil && !serverState.isSigningOut }) else { return }
-        let now = Date()
-        guard now.timeIntervalSince(lastPlayStateChangeDate) > 0.3 else { return }
-        lastPlayStateChangeDate = now
+    func onPlayStateChanged(isPlaying: Bool, currentSong: DisplayableSong?, publication: PlaybackPublication? = nil) async {
+        guard let identity = await prepareAccount(), acceptPlaybackPublication(publication) else { return }
+        // Persist every final value; only timeline reloads may be throttled.
 
         let track: SharedTrackInfo? = currentSong.map { song in
             let coverArtId = song.coverArtId ?? song.id
@@ -131,29 +168,29 @@ actor WidgetSyncService {
                 title: song.title,
                 artist: song.artist ?? "",
                 albumID: song.albumId,
-                coverArtFilename: "\(coverArtId).jpg"
+                coverArtFilename: DownloadService.coverStorageName(for: coverArtId, serverId: identity.serverID) + ".jpg"
             )
         }
         let nowPlaying = SharedNowPlayingState(track: track, isPlaying: isPlaying, lastUpdated: Date())
         if let encoded = try? JSONEncoder().encode(nowPlaying) {
-            SharedStorage.write { $0.set(encoded, forKey: SharedStorageKey.nowPlayingState.rawValue) }
+            writeShared { defaults in
+                if let publication { publication.commit { defaults.set(encoded, forKey: SharedStorageKey.nowPlayingState.rawValue) } }
+                else { defaults.set(encoded, forKey: SharedStorageKey.nowPlayingState.rawValue) }
+            }
         }
-        let nowReload = Date()
-        if lastReloadDate == nil || nowReload.timeIntervalSince(lastReloadDate!) >= 0.8 {
-            lastReloadDate = nowReload
-            WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.nowPlaying)
-        }
+        requestNowPlayingReload()
         Logger.widget.debug("onPlayStateChanged: isPlaying=\(isPlaying)")
     }
 
     // MARK: - Pinned items
 
     func syncPinned() async {
-        guard await MainActor.run(body: { serverState.activeServer != nil && !serverState.isSigningOut }) else { return }
+        guard let identity = await prepareAccount() else { return }
+        let sid = identity.serverID
+        let (shared, coverArtIds): ([SharedPinnedItem], [String]) = {
         let context = ModelContext(modelContainer)
-        let descriptor = FetchDescriptor<PinnedItem>(sortBy: [SortDescriptor(\PinnedItem.sortOrder)])
+        let descriptor = FetchDescriptor<PinnedItem>(predicate: #Predicate { $0.serverId == sid }, sortBy: [SortDescriptor(\PinnedItem.sortOrder)])
         let dbItems = (try? context.fetch(descriptor)) ?? []
-
         let shared: [SharedPinnedItem] = dbItems.compactMap { item in
             let kind: SharedPinnedItem.Kind
             switch item.itemType {
@@ -168,16 +205,19 @@ actor WidgetSyncService {
                 kind: kind,
                 title: item.displayName,
                 subtitle: item.displaySubtitle,
-                coverArtFilename: item.coverArtId.map { "\($0).jpg" }
+                coverArtFilename: item.coverArtId.map { DownloadService.coverStorageName(for: $0, serverId: sid) + ".jpg" }
             )
         }
 
+        return (shared, dbItems.compactMap(\.coverArtId))
+        }()
+        guard await isCurrent(identity) else { return }
         if let encoded = try? JSONEncoder().encode(shared) {
-            SharedStorage.write { $0.set(encoded, forKey: SharedStorageKey.pinnedItems.rawValue) }
+            writeShared { $0.set(encoded, forKey: SharedStorageKey.pinnedItems.rawValue) }
         }
 
-        let coverArtIds = dbItems.compactMap(\.coverArtId)
         for id in coverArtIds {
+            guard await isCurrent(identity) else { return }
             try? await bridgeCoverArt(coverArtId: id)
         }
         await syncDominantColors(forCoverArtIds: coverArtIds)
@@ -205,16 +245,19 @@ actor WidgetSyncService {
     // MARK: - Dominant color sync
 
     func syncDominantColors(forCoverArtIds ids: [String]) async {
+        guard let identity = await prepareAccount() else { return }
         let generation = accountGeneration
         let allCached = await dominantColorExtractor.cachedColors()
-        guard generation == accountGeneration else { return }
-        let filtered = allCached.filter { ids.contains($0.key) }
+        guard await isCurrent(identity), generation == accountGeneration else { return }
+        let filtered = allCached.filter {
+            ids.contains($0.key) || ids.contains(DownloadService.coverStorageName(for: $0.key, serverId: identity.serverID))
+        }
         guard !filtered.isEmpty else { return }
         // Merge into existing App Group dictionary — replacing wiped other covers' colors.
-        SharedStorage.write { defaults in
+        writeShared { defaults in
             var merged = defaults.dictionary(forKey: SharedStorageKey.dominantColors.rawValue) as? [String: Int] ?? [:]
             for (key, value) in filtered {
-                merged[key] = value
+                merged[DownloadService.coverStorageName(for: key, serverId: identity.serverID)] = value
             }
             defaults.set(merged, forKey: SharedStorageKey.dominantColors.rawValue)
         }
@@ -226,19 +269,20 @@ actor WidgetSyncService {
     /// Copies a cover from the app's local cache into the App Group shared container
     /// as a 600×600 JPG at 80% quality. Idempotent — no-op if the file already exists.
     func bridgeCoverArt(coverArtId: String, allowNetwork: Bool = true) async throws {
+        guard let identity = await prepareAccount() else { return }
         let generation = accountGeneration
-        guard await MainActor.run(body: { serverState.activeServer != nil && !serverState.isSigningOut }) else { return }
         guard let sharedDir = SharedStorage.coverArtCacheDirectory else {
             throw WidgetSyncError.sharedContainerUnavailable
         }
         try SharedStorage.ensureDirectoriesExist()
 
-        let sharedURL = sharedDir.appendingPathComponent("\(coverArtId).jpg")
-        let originalPath = coversDirectory.appendingPathComponent(OriginalArtwork.storageID(coverArtId)).path
+        let storageID = DownloadService.coverStorageName(for: coverArtId, serverId: identity.serverID)
+        let sharedURL = sharedDir.appendingPathComponent(storageID + ".jpg")
+        let originalPath = coversDirectory.appendingPathComponent(DownloadService.coverStorageName(for: OriginalArtwork.storageID(coverArtId), serverId: identity.serverID)).path
         let hasOriginal = FileManager.default.fileExists(atPath: originalPath)
-        let needsOriginalUpgrade = hasOriginal && !bridgedOriginals.contains(coverArtId)
+        let needsOriginalUpgrade = hasOriginal && !bridgedOriginals.contains(storageID)
         let needsBridge = !FileManager.default.fileExists(atPath: sharedURL.path) || needsOriginalUpgrade
-        let sameAsLast = lastBridgedCoverArtId == coverArtId
+        let sameAsLast = lastBridgedCoverArtId == storageID
 
         // Same cover already bridged this session and file exists — skip heavy work.
         if sameAsLast, !needsBridge { return }
@@ -256,9 +300,9 @@ actor WidgetSyncService {
                 image.resized(maxDimension: 600).jpgData(quality: 0.8)
             }.value
             if let jpgData {
-                guard generation == accountGeneration else { return }
+                guard await isCurrent(identity), generation == accountGeneration else { return }
                 try jpgData.write(to: sharedURL, options: .atomic)
-                if hasOriginal { bridgedOriginals.insert(coverArtId) }
+                if hasOriginal { bridgedOriginals.insert(storageID) }
                 Logger.widget.debug("bridgeCoverArt: bridged \(coverArtId, privacy: .public) (\(jpgData.count) bytes)")
             }
         }
@@ -267,11 +311,42 @@ actor WidgetSyncService {
         let packed = await Task.detached(priority: .utility) {
             DominantColorExtractor.packedAverageColor(from: image)
         }.value
-        guard generation == accountGeneration else { return }
+        guard await isCurrent(identity), generation == accountGeneration else { return }
         _ = await MainActor.run {
-            dominantColorExtractor.storeColor(packed: packed, for: coverArtId)
+            guard serverState.requestIsCurrent(identity) else { return }
+            _ = dominantColorExtractor.storeColor(packed: packed, for: coverArtId)
         }
-        lastBridgedCoverArtId = coverArtId
+        lastBridgedCoverArtId = storageID
+    }
+
+    private func acceptPlaybackPublication(_ publication: PlaybackPublication?) -> Bool {
+        guard let publication else { return true }
+        guard publication.isCurrent, publication.sequence >= lastPlaybackSequence else { return false }
+        lastPlaybackSequence = publication.sequence
+        return true
+    }
+
+    private func requestNowPlayingReload() {
+        let remaining = max(0, 0.8 - Date().timeIntervalSince(lastReloadDate ?? .distantPast))
+        if remaining == 0 {
+            trailingReloadTask?.cancel()
+            trailingReloadTask = nil
+            lastReloadDate = Date()
+            if storageOverride == nil {
+                writeShared { _ in WidgetCenter.shared.reloadTimelines(ofKind: WidgetKind.nowPlaying) }
+            }
+        } else if trailingReloadTask == nil {
+            trailingReloadTask = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(remaining)) } catch { return }
+                guard let self else { return }
+                await self.finishTrailingReload()
+            }
+        }
+    }
+
+    private func finishTrailingReload() {
+        trailingReloadTask = nil
+        requestNowPlayingReload()
     }
 
     // MARK: - Throttled timeline reload

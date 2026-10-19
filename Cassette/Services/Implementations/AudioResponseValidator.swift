@@ -6,6 +6,37 @@
 import Foundation
 import OSLog
 
+/// HTTP diagnostics without authenticated URLs, headers, or server response bodies.
+nonisolated struct HTTPTransferFailure: Error, Sendable, LocalizedError, CustomStringConvertible {
+    let statusCode: Int
+    let retryAfter: TimeInterval?
+    let endpoint: String
+    let stage: String
+
+    init(response: URLResponse, stage: String, now: Date = Date()) {
+        let http = response as? HTTPURLResponse
+        statusCode = http?.statusCode ?? -1
+        retryAfter = Self.retryDelay(http?.value(forHTTPHeaderField: "Retry-After"), now: now)
+        endpoint = response.url?.lastPathComponent ?? "unknown"
+        self.stage = stage
+    }
+
+    var description: String { "\(stage): HTTP \(statusCode) endpoint=\(endpoint) retryAfter=\(retryAfter ?? -1)s" }
+    var errorDescription: String? { description }
+
+    static func retryDelay(_ value: String?, now: Date = Date()) -> TimeInterval? {
+        guard let value else { return nil }
+        if let seconds = Double(value.trimmingCharacters(in: .whitespaces)), seconds.isFinite {
+            return max(0, seconds)
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter.date(from: value).map { max(0, $0.timeIntervalSince(now)) }
+    }
+}
+
 /// Thrown when a downloaded payload is rejected before being committed as local audio.
 nonisolated struct AudioResponseRejection: Error, Sendable, CustomStringConvertible {
     let check: String
@@ -52,6 +83,14 @@ nonisolated enum AudioResponseValidator {
            mime.hasPrefix("text/") || mime == "application/xml" || mime == "application/json" {
             logger.warning("[VALIDATE] '\(songId, privacy: .public)' rejected — non-audio content type \(mime, privacy: .public)")
             throw AudioResponseRejection(check: "content-type", detail: mime)
+        }
+
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let prefix = try handle.read(upToCount: 8) ?? Data()
+        if prefix.count == 8, prefix.dropFirst(4) == Data("ftyp".utf8),
+           AudioFaststartRemuxer.topLevelBoxTypes(atPath: url.path)?.contains("ftyp") != true {
+            throw AudioResponseRejection(check: "mp4-box-size", detail: "invalid or truncated box layout")
         }
     }
 

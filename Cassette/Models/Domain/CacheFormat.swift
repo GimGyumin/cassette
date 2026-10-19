@@ -8,7 +8,7 @@ import Foundation
 /// User-configurable format for cached tracks. Exposed in Settings (phase 5).
 /// `.matchStream` caches the same format the server serves for streaming.
 /// Other cases force a specific transcode via Subsonic `format` + `maxBitRate` params.
-nonisolated enum CacheFormat: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum CacheFormat: String, CaseIterable, Identifiable, Sendable, Codable {
     case matchStream
     case flacOriginal
     case aac256

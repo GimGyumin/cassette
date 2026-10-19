@@ -78,6 +78,13 @@ struct SkeletonSongRow: View {
 
 private struct ShimmerModifier: ViewModifier {
     @State private var phase: CGFloat = -1
+    @State private var isVisible = false
+    @State private var governor = PerformanceGovernor.shared
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var shouldAnimate: Bool {
+        isVisible && scenePhase == .active && governor.budget.allowsDecorativeMotion
+    }
 
     func body(content: Content) -> some View {
         content
@@ -98,11 +105,15 @@ private struct ShimmerModifier: ViewModifier {
                 }
             }
             .clipped()
-            .onAppear {
-                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
-                    phase = 1
-                }
-            }
+            .onAppear { isVisible = true }
+            .onDisappear { isVisible = false; syncAnimation() }
+            .onChange(of: shouldAnimate) { _, _ in syncAnimation() }
+    }
+
+    private func syncAnimation() {
+        withAnimation(shouldAnimate ? .linear(duration: 1.4).repeatForever(autoreverses: false) : nil) {
+            phase = shouldAnimate ? 1 : -1
+        }
     }
 }
 

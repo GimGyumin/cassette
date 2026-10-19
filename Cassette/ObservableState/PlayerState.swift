@@ -14,10 +14,15 @@ import SwiftSonic
 @MainActor
 final class PlayerState {
     var currentTrack: DisplayableSong?
+    /// Audio metadata of a selected alternate file; currentTrack remains the visible identity.
+    var currentPlaybackTrack: DisplayableSong?
     var queue: [DisplayableSong] = []
     var currentIndex: Int = 0
     var playbackState: PlaybackState = .idle
     var position: TimeInterval = 0
+    /// UI clock stays at this absolute target until the active engine confirms the seek.
+    /// Applies equally to downloaded/cached files and remote streams.
+    var pendingSeekPosition: TimeInterval?
     var duration: TimeInterval = 0
     /// Reflects the active engine/format, not merely the presence of track metadata.
     /// Some streaming formats expose a duration but cannot actually seek.

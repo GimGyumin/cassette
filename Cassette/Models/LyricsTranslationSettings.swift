@@ -67,6 +67,15 @@ final class LyricsTranslationSettings: ObservableObject {
         didSet { defaults.set(strategyPreference.rawValue, forKey: "translationStrategyPreference") }
     }
 
+    @Published var appleIntelligencePrompt: String {
+        didSet { defaults.set(appleIntelligencePrompt, forKey: Self.appleIntelligencePromptKey) }
+    }
+
+    var translationIdentity: [String] {
+        [provider.rawValue, targetLanguage, strategyPreference.rawValue,
+         AppleIntelligenceLyricsTranslator.normalizedPrompt(appleIntelligencePrompt)]
+    }
+
     @Published var openAIAPIKey: String {
         didSet {
             let trimmed = openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -137,6 +146,7 @@ final class LyricsTranslationSettings: ObservableObject {
         // Settings toggles write through UserDefaults; refresh in-memory values on foreground.
         self.isTranslationEnabled = defaults.object(forKey: "isTranslationEnabled") as? Bool ?? true
         self.isAutoTranslateEnabled = defaults.bool(forKey: "isAutoTranslateEnabled")
+        self.appleIntelligencePrompt = defaults.string(forKey: Self.appleIntelligencePromptKey) ?? ""
         self.strategyPreference = TranslationStrategyPreference(
             rawValue: defaults.string(forKey: "translationStrategyPreference") ?? ""
         ) ?? .automatic
@@ -197,6 +207,9 @@ final class LyricsTranslationSettings: ObservableObject {
         ) ?? .automatic
         if strategyPreference != strategy { strategyPreference = strategy }
 
+        let prompt = defaults.string(forKey: Self.appleIntelligencePromptKey) ?? ""
+        if appleIntelligencePrompt != prompt { appleIntelligencePrompt = prompt }
+
         if let providerString = defaults.string(forKey: "translationProvider"),
            let savedProvider = TranslationProvider(rawValue: providerString),
            provider != savedProvider {
@@ -208,4 +221,5 @@ final class LyricsTranslationSettings: ObservableObject {
     }
 
     nonisolated static let openAIAPIKeyKey = "openAIAPIKey"
+    nonisolated static let appleIntelligencePromptKey = "cassette.translation.appleIntelligencePrompt"
 }

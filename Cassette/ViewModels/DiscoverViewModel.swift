@@ -163,6 +163,7 @@ final class DiscoverViewModel {
     private(set) var spatialAlbums: [AlbumID3] = []
     private(set) var isLoadingSpatialAlbums: Bool = false
     private var deferredPersonalMixTask: Task<Void, Never>?
+    private var deferredMixGeneration = 0
 
     init(
         libraryService: any LibraryServiceProtocol,
@@ -209,14 +210,14 @@ final class DiscoverViewModel {
             AppBootGate.markHomeReady()
             if DiscoverSectionsCache.isFresh {
                 // Shelves are fresh — don't storm getTopSongs alongside Home cover decode.
-                scheduleDeferredPersonalMixes(serverId: serverId)
+                scheduleDeferredPersonalMixes(serverId: serverId, forceRefresh: forceRefresh)
                 return
             }
             // Stale disk/memory content is already on screen — soft-refresh below.
         } else if !forceRefresh, !recentlyPlayed.isEmpty {
             fillMissingShelvesFromCache()
             AppBootGate.markHomeReady()
-            scheduleDeferredPersonalMixes(serverId: serverId)
+            scheduleDeferredPersonalMixes(serverId: serverId, forceRefresh: forceRefresh)
             return
         }
 
@@ -263,7 +264,7 @@ final class DiscoverViewModel {
                 serverId: serverId
             )
             // Mixes are the heaviest network burst — defer them off the cold-start critical path.
-            scheduleDeferredPersonalMixes(serverId: serverId)
+            scheduleDeferredPersonalMixes(serverId: serverId, forceRefresh: forceRefresh)
         } catch is CancellationError {
             isLoading = false
             AppBootGate.markHomeReady()
@@ -381,17 +382,20 @@ final class DiscoverViewModel {
         }
     }
 
-    private func scheduleDeferredPersonalMixes(serverId: String?) {
+    private func scheduleDeferredPersonalMixes(serverId: String?, forceRefresh: Bool = false) {
+        if forceRefresh { deferredPersonalMixTask?.cancel(); deferredPersonalMixTask = nil }
         guard deferredPersonalMixTask == nil else { return }
+        deferredMixGeneration += 1
+        let generation = deferredMixGeneration
         deferredPersonalMixTask = Task(priority: .utility) { @MainActor [weak self] in
             defer {
-                self?.deferredPersonalMixTask = nil
+                if self?.deferredMixGeneration == generation { self?.deferredPersonalMixTask = nil }
             }
             // `try?` keeps the closure non-throwing: sleep only throws on cancellation
             // (or an unlikely clock error), and the guard below handles cancellation.
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
-            await self?.loadPersonalMixes(serverId: serverId, forceRefresh: false, progressive: true)
+            await self?.loadPersonalMixes(serverId: serverId, forceRefresh: forceRefresh, progressive: true)
         }
     }
 
@@ -399,13 +403,19 @@ final class DiscoverViewModel {
         guard let personalMixService else { return }
         if progressive {
             if forceRefresh || personalMixes.isEmpty {
-                personalMixes = await personalMixService.mixes(serverId: serverId, forceRefresh: forceRefresh, limit: 1)
+                let mixes = await personalMixService.mixes(serverId: serverId, forceRefresh: forceRefresh, limit: 1)
+                guard !Task.isCancelled else { return }
+                personalMixes = mixes
             }
-            personalMixes = await personalMixService.mixes(serverId: serverId, forceRefresh: false)
+            let mixes = await personalMixService.mixes(serverId: serverId, forceRefresh: false)
+            guard !Task.isCancelled else { return }
+            personalMixes = mixes
             return
         }
         if !forceRefresh, !personalMixes.isEmpty { return }
-        personalMixes = await personalMixService.mixes(serverId: serverId, forceRefresh: forceRefresh)
+        let mixes = await personalMixService.mixes(serverId: serverId, forceRefresh: forceRefresh)
+        guard !Task.isCancelled else { return }
+        personalMixes = mixes
     }
 
     private func applyCache() {

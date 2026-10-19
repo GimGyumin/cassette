@@ -5,7 +5,8 @@
 
 import SwiftUI
 
-/// Reserves bottom scroll-content space for the floating mini player / BottomPlayerBar.
+/// The macOS overlay needs a content margin. iOS TabView accessories and safeAreaInset
+/// already reserve their own space, including during minimization and Dynamic Type changes.
 private struct MiniPlayerBottomMargin: ViewModifier {
     func body(content: Content) -> some View {
         #if os(macOS)
@@ -13,7 +14,6 @@ private struct MiniPlayerBottomMargin: ViewModifier {
             .contentMargins(.bottom, CassetteMacOSLayout.playerBarReservedHeight, for: .scrollContent)
         #else
         content
-            .contentMargins(.bottom, CassetteSpacing.miniPlayerBottomMargin, for: .scrollContent)
         #endif
     }
 }

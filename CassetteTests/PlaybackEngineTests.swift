@@ -17,6 +17,7 @@ import AudioStreaming
 nonisolated final class FakePlaybackEngine: AudioStreamingPlaybackEngine, @unchecked Sendable {
 
     enum Call: Equatable {
+        case resetAudioObjects
         case play(URL, [String: String])
         case queue(URL, [String: String])
         case removeFromQueue(URL)
@@ -61,6 +62,7 @@ nonisolated final class FakePlaybackEngine: AudioStreamingPlaybackEngine, @unche
     func queue(url: URL, headers: [String: String]) { record(.queue(url, headers)) }
     func removeFromQueue(url: URL) { record(.removeFromQueue(url)) }
     func stop() { record(.stop) }
+    func resetAfterMediaServicesReset() { record(.resetAudioObjects); state = .stopped }
     func pause() { record(.pause) }
     func resume() { record(.resume) }
     func recoverQueuedTransitionIfNeeded() { record(.recoverQueuedTransition) }
@@ -155,7 +157,7 @@ struct PlayerServiceEngineTests {
 
     @Test func acquisitionRecoveryOnlyTargetsTheCurrentRemoteTrackWithoutProgress() {
         for phase in [PlaybackState.buffering, .recovering] {
-            #expect(!PlayerService.shouldRecoverAcquiringPlayback(
+            #expect(PlayerService.shouldRecoverAcquiringPlayback(
                 trackMatches: true, playbackState: phase, engineProgress: 0,
                 sourceIsLocal: false, transitionPending: false
             ))

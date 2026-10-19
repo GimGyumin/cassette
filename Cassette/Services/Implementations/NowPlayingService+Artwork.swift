@@ -20,7 +20,9 @@ extension NowPlayingService {
         #if os(iOS)
         if #available(iOS 27.0, *), let controller = modernMediaSession as? CassetteMediaSessionController {
             await controller.invalidateArtwork()
-            await updateModernMediaSession(with: snapshot)
+            guard isCurrent(snapshot), let latest = currentSong?.projectingPlayback(),
+                  let revision = beginPublication(latest.publication) else { return }
+            await updateModernMediaSession(with: latest, revision: revision)
         }
         #endif
     }
@@ -230,6 +232,9 @@ extension NowPlayingService {
 
     func isCurrent(_ snapshot: NowPlayingSnapshot) -> Bool {
         guard let currentSong else { return false }
+        if let current = currentSong.publication, let candidate = snapshot.publication,
+           current.context.epoch != candidate.context.epoch { return false }
+        if currentSong.queueIndex != snapshot.queueIndex { return false }
         if currentSong.trackId != nil || snapshot.trackId != nil {
             return currentSong.trackId == snapshot.trackId
         }

@@ -10,6 +10,37 @@ import SwiftData
 import Observation
 @testable import Cassette
 
+private actor SearchIndexGate {
+    private var open = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    func wait() async {
+        if open { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func release() { open = true; waiter?.resume(); waiter = nil }
+}
+
+@MainActor
+struct SearchBrowseArtworkTests {
+    @Test func backgroundGenreLookupPreservesFirstMatchAndArtworkFallback() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("browse-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let library = SearchLibraryStub()
+        library.indexedSongs = try JSONDecoder().decode([Song].self, from: Data("""
+            [{"id":"pop-first","title":"First","genre":"Póp","coverArt":"cover-pop"},
+             {"id":"pop-second","title":"Second","genre":"Pop","coverArt":"later-cover"},
+             {"id":"jazz-fallback","title":"Jazz","genre":"Jazz"},
+             {"id":"hip-hop","title":"Rap","genre":"Hip-Hop/Rap","coverArt":"cover-rap"}]
+            """.utf8))
+        let index = LibraryIndexService(directory: directory)
+        #expect(await index.rebuildAndWait(using: library))
+        let covers = await index.browseCoverArtIDs(for: ["Pop", "Jazz", "Hip-Hop", "Classical"])
+        #expect(covers == ["Pop": "cover-pop", "Jazz": "jazz-fallback", "Hip-Hop": "cover-rap"])
+        index.clear()
+        #expect(await index.browseCoverArtIDs(for: ["Pop"]).isEmpty)
+    }
+}
+
 // MARK: - Counting stub
 
 /// Records `search` calls and replays a configurable outcome.
@@ -23,7 +54,11 @@ final class SearchLibraryStub: LibraryServiceProtocol {
         case fail(any Error)
     }
 
-    func song(id: String) async throws -> Song { throw URLError(.unknown) }
+    var songOperation: ((String) async throws -> Song)?
+    func song(id: String) async throws -> Song {
+        guard let songOperation else { throw URLError(.unknown) }
+        return try await songOperation(id)
+    }
     private(set) var searchCalls: [String] = []
     var behavior: Behavior = .succeed
 
@@ -47,39 +82,80 @@ final class SearchLibraryStub: LibraryServiceProtocol {
     var indexedPlaylists: [Playlist] = []
     var indexedSongs: [Song] = []
     var indexFailure: (any Error)?
+    var indexGate: (() async -> Void)?
     var songPageCap = 20
     private(set) var songOffsets: [Int] = []
+    var songsOperation: (() async throws -> [Song])?
     func librarySongs(offset: Int, count: Int) async throws -> [Song] {
+        if let songsOperation { return try await songsOperation() }
         songOffsets.append(offset)
         return Array(indexedSongs.dropFirst(offset).prefix(min(count, songPageCap)))
     }
+    var artistsOperation: (() async throws -> [ArtistIndex])?
     func artists() async throws -> [ArtistIndex] {
+        if let artistsOperation { return try await artistsOperation() }
+        await indexGate?()
         if let indexFailure { throw indexFailure }
         return []
     }
     func artist(id: String) async throws -> ArtistID3 { throw URLError(.unknown) }
-    func album(id: String) async throws -> AlbumID3 { throw URLError(.unknown) }
+    var albumOperation: ((String) async throws -> AlbumID3)?
+    func album(id: String) async throws -> AlbumID3 {
+        guard let albumOperation else { throw URLError(.unknown) }
+        return try await albumOperation(id)
+    }
     func fetchAllTracks(forArtistID artistID: String) async throws -> [DisplayableSong] { throw URLError(.unknown) }
-    func playlists() async throws -> [Playlist] { indexedPlaylists }
+    var playlistsOperation: (() async throws -> [Playlist])?
+    private(set) var playlistListCalls = 0
+    func playlists() async throws -> [Playlist] {
+        playlistListCalls += 1
+        if let playlistsOperation { return try await playlistsOperation() }
+        return indexedPlaylists
+    }
     func playlist(id: String) async throws -> PlaylistWithSongs { throw URLError(.unknown) }
     var coverURL: URL?
+    var coverURLOperation: ((String, Int?) async -> URL?)?
     private(set) var coverSizes: [Int?] = []
     func coverArtURL(id: String, size: Int?) async -> URL? {
         coverSizes.append(size)
+        if let coverURLOperation { return await coverURLOperation(id, size) }
         return coverURL
     }
     func streamURL(songId: String) async -> URL? { nil }
-    func star(songIds: [String], albumIds: [String], artistIds: [String]) async throws { throw URLError(.unknown) }
-    func unstar(songIds: [String], albumIds: [String], artistIds: [String]) async throws { throw URLError(.unknown) }
-    func getStarred2() async throws -> Starred2 { throw URLError(.unknown) }
-    func recentlyAddedAlbums(size: Int) async throws -> [AlbumID3] { throw URLError(.unknown) }
+    var mutationOperation: ((Bool) async throws -> Void)?
+    var starredOperation: (() async throws -> Starred2)?
+    func star(songIds: [String], albumIds: [String], artistIds: [String]) async throws {
+        guard let mutationOperation else { throw URLError(.unknown) }
+        try await mutationOperation(true)
+    }
+    func unstar(songIds: [String], albumIds: [String], artistIds: [String]) async throws {
+        guard let mutationOperation else { throw URLError(.unknown) }
+        try await mutationOperation(false)
+    }
+    func getStarred2() async throws -> Starred2 {
+        guard let starredOperation else { throw URLError(.unknown) }
+        return try await starredOperation()
+    }
+    var recentAlbumsOperation: (() async throws -> [AlbumID3])?
+    func recentlyAddedAlbums(size: Int) async throws -> [AlbumID3] {
+        guard let recentAlbumsOperation else { throw URLError(.unknown) }
+        return try await recentAlbumsOperation()
+    }
     func allAlbums() async throws -> [AlbumID3] { [] }
     func scrobble(songId: String, submission: Bool) async {}
     func recentlyPlayedAlbums(size: Int) async throws -> [AlbumID3] { throw URLError(.unknown) }
     func mostPlayedAlbums(size: Int) async throws -> [AlbumID3] { throw URLError(.unknown) }
     func randomSongs(size: Int) async throws -> [Song] { throw URLError(.unknown) }
-    func smartShuffleQueue(targetSize: Int) async throws -> [DisplayableSong] { throw URLError(.unknown) }
-    func similarBackfillQueue(targetSize: Int, excludedIds: Set<String>) async throws -> [DisplayableSong] { throw URLError(.unknown) }
+    var smartShuffleOperation: (() async throws -> [DisplayableSong])?
+    var backfillOperation: (() async throws -> [DisplayableSong])?
+    func smartShuffleQueue(targetSize: Int) async throws -> [DisplayableSong] {
+        guard let smartShuffleOperation else { throw URLError(.unknown) }
+        return try await smartShuffleOperation()
+    }
+    func similarBackfillQueue(targetSize: Int, excludedIds: Set<String>) async throws -> [DisplayableSong] {
+        guard let backfillOperation else { throw URLError(.unknown) }
+        return try await backfillOperation()
+    }
     func savePlayQueue(songIds: [String], currentIndex: Int, positionSeconds: Double) async throws { throw URLError(.unknown) }
     func getPlayQueue() async throws -> SavedPlayQueue? { throw URLError(.unknown) }
     func getArtistInfo(forArtistID artistID: String, count: Int) async throws -> ArtistInfo { throw URLError(.unknown) }
@@ -356,6 +432,30 @@ struct SearchPaginationTests {
 @Suite("Persistent library search index")
 @MainActor
 struct LibrarySearchIndexTests {
+    @Test func firstSearchReturnsServerResultsBeforeIndexCompletes() async throws {
+        let library = SearchLibraryStub()
+        let gate = SearchIndexGate()
+        library.indexGate = { await gate.wait() }
+        library.pageHandler = { _, _ in
+            SearchResult3(song: [DisplayableSong(id: "remote", title: "First song").asSong()])
+        }
+        let index = LibraryIndexService()
+        let vm = SearchViewModel(libraryService: library, libraryIndex: index)
+        await vm.search(query: "First")
+        #expect(index.isPreparing)
+        #expect(vm.songs.map(\.id) == ["remote"])
+        #expect(!vm.isSearching)
+        await gate.release()
+        await index.ensureIndexedAndWait(using: library)
+    }
+
+    @Test func offlineFirstSearchDoesNotSendAServerRequest() async {
+        let library = SearchLibraryStub()
+        let index = LibraryIndexService(networkAvailable: { false })
+        let vm = SearchViewModel(libraryService: library, libraryIndex: index)
+        await vm.search(query: "First", serverReachable: false)
+        #expect(library.searchCalls.isEmpty)
+    }
     @Test func unchangedLaunchRestoresSilentlyAndExplicitRebuildStillRefreshes() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

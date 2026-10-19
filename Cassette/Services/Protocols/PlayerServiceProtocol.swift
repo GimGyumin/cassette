@@ -36,6 +36,7 @@ protocol PlayerServiceProtocol: AnyObject, Sendable {
     func clearUpNext() async
     func moveInQueue(fromIndex: Int, toIndex: Int) async
     func restoreSession() async
+    func restoreLegacySession() async
     func handleNetworkRestored() async
     /// Starts live stream playback of an Internet Radio Station.
     /// Clears the current queue's playing state but preserves the queue itself.
@@ -66,11 +67,14 @@ protocol PlayerServiceProtocol: AnyObject, Sendable {
     /// Updates the stored gapless snapshot from GaplessSettings, arming or flushing the
     /// engine's pre-buffered next entry. Call whenever the user toggles gapless playback.
     func gaplessSettingsDidChange() async
+    func playbackVariantSettingsDidChange() async
     /// Stops the audio engine synchronously without going through the actor.
     /// Only safe to call during app termination (single-threaded, no concurrent access).
     nonisolated func stopAudioEngineSync()
 }
 
 extension PlayerServiceProtocol {
+    func restoreLegacySession() async {}
+    func playbackVariantSettingsDidChange() async {}
     func playbackDetails() async -> PlaybackDetails? { nil }
 }

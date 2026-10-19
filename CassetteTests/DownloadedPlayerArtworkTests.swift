@@ -1,4 +1,5 @@
 import Foundation
+import SwiftSonic
 import CoreGraphics
 import ImageIO
 #if canImport(UIKit)
@@ -12,7 +13,28 @@ import Testing
 @MainActor
 @Suite("Downloaded player artwork")
 struct DownloadedPlayerArtworkTests {
-    @Test func permanentCoverIsAvailableWithoutServerOrTieredCache() async throws {
+    @Test func playbackUsesKnownAlbumCoverWhenTrackMetadataOmitsIt() async throws {
+        let container = try AppContainer(inMemory: true, engine: FakePlaybackEngine())
+        let server = ServerConfig(displayName: "Artwork fallback", baseURL: "https://example.invalid", username: "test")
+        container.serverState.activeServer = ServerSnapshot(from: server)
+        let album = AlbumID3(id: "fallback-album", name: "Album", songCount: 1, duration: 100, coverArt: "saved-album-cover")
+        await container.libraryIndexService.registerAlbumVersions([album], serverId: server.id)
+        let song = DisplayableSong(id: "metadata-without-cover", title: "Song", albumId: album.id)
+        #expect(container.playbackCoverId(for: song) == "saved-album-cover")
+        let alternate = DisplayableSong(id: "alternate", title: "Alternate", albumId: album.id, coverArtId: "alternate-track-cover")
+        #expect(container.playbackCoverId(for: alternate) == "alternate-track-cover")
+        let data = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVQI12NgAAAAAgAB4iG8MwAAAABJRU5ErkJggg=="))
+        await container.downloadService.persistCover(data, forId: "saved-album-cover")
+        defer { Task { await container.downloadService.removeCover(forId: "saved-album-cover", serverId: server.id) } }
+        container.serverState.isExpensive = true
+        container.serverState.isCellularConnection = true
+        #expect(await container.artworkImageCache.load(coverArtId: container.playbackCoverId(for: song), tier: .hero) != nil)
+        container.serverState.activeServer = ServerSnapshot(from: ServerConfig(displayName: "Other", baseURL: "https://other.invalid", username: "other"))
+        // The other account may resolve its own album ID, never this account's cached mapping.
+        #expect(container.playbackCoverId(for: song) == song.albumId)
+    }
+
+    @Test func permanentCoverIsAvailableWithoutNetworkOrTieredCache() async throws {
         let container = try AppContainer(inMemory: true, engine: FakePlaybackEngine())
         container.serverState.activeServer = ServerSnapshot(from: ServerConfig(
             displayName: "Artwork test", baseURL: "https://example.invalid", username: "test"
@@ -22,10 +44,10 @@ struct DownloadedPlayerArtworkTests {
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVQI12NgAAAAAgAB4iG8MwAAAABJRU5ErkJggg=="
         ))
         await container.downloadService.persistCover(data, forId: id)
-        container.serverState.activeServer = nil
+        container.serverState.isOnline = false
 
         // A freshly opened player has no RAM hit and no {id}@hero derivative. The permanent
-        // download must be decoded locally; there isn't even a server configured for fallback.
+        // download must be decoded locally for the selected offline account, without networking.
         let image = await container.artworkImageCache.load(coverArtId: id, tier: .hero, allowNetwork: false)
         await container.downloadService.removeCover(forId: id)
         #expect(image != nil)

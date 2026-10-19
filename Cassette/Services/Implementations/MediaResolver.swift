@@ -27,6 +27,7 @@ actor MediaResolver: MediaResolverProtocol {
     private let mediaIdentityService: MediaIdentityService?
     private let jellyfinService: JellyfinService?
     private let speedProbe: NetworkSpeedProbe?
+    private let libraryIndex: LibraryIndexService?
 
     init(
         downloadService: any DownloadServiceProtocol,
@@ -36,7 +37,8 @@ actor MediaResolver: MediaResolverProtocol {
         streamingSettings: StreamingSettings,
         mediaIdentityService: MediaIdentityService? = nil,
         jellyfinService: JellyfinService? = nil,
-        speedProbe: NetworkSpeedProbe? = nil
+        speedProbe: NetworkSpeedProbe? = nil,
+        libraryIndex: LibraryIndexService? = nil
     ) {
         self.downloadService = downloadService
         self.cacheService = cacheService
@@ -46,17 +48,45 @@ actor MediaResolver: MediaResolverProtocol {
         self.mediaIdentityService = mediaIdentityService
         self.jellyfinService = jellyfinService
         self.speedProbe = speedProbe
+        self.libraryIndex = libraryIndex
     }
 
     func resolve(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource {
         try Task.checkCancellation()
+        let choice = await MainActor.run { () -> (DisplayableSong, ServerRequestIdentity)? in
+            guard streamingSettings.preferDolbyAtmos, let song, song.id == songId,
+                  let identity = try? serverState.requestIdentity(for: serverId),
+                  let candidate = libraryIndex?.preferredAtmosSong(for: song, serverId: serverId) else { return nil }
+            return (candidate, identity)
+        }
+        if let (candidate, identity) = choice {
+            do {
+                let source = try await resolveOriginal(songId: candidate.id, serverId: serverId, song: candidate)
+                try Task.checkCancellation()
+                guard await MainActor.run(body: { serverState.requestIsCurrent(identity) }) else { throw CancellationError() }
+                return source.withPlaybackSong(candidate)
+            } catch is CancellationError { throw CancellationError() }
+            catch {
+                guard await MainActor.run(body: { serverState.requestIsCurrent(identity) }) else { throw CancellationError() }
+                Logger.player.debug("Atmos variant unavailable — using requested song")
+            }
+        }
+        return try await resolveOriginal(songId: songId, serverId: serverId, song: song)
+    }
+
+    func resolveOriginal(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource {
+        try Task.checkCancellation()
         // Local files take priority over network routing and quality preferences. The stores
         // validate availability; a lossless preference must not trigger another download.
-        if let url = await downloadService.downloadedURL(forSongId: songId, serverId: serverId) {
+        let localURL = song.map(AtmosVariantCatalogue.isAtmos) == true
+            ? await downloadService.downloadedOriginalURL(forSongId: songId, serverId: serverId)
+            : await downloadService.downloadedURL(forSongId: songId, serverId: serverId)
+        if let url = localURL {
             try Task.checkCancellation()
             return .downloaded(url)
         }
-        if let url = await cacheService.cachedURL(forSongId: songId, serverId: serverId) {
+        if song.map(AtmosVariantCatalogue.isAtmos) != true,
+           let url = await cacheService.cachedURL(forSongId: songId, serverId: serverId) {
             try Task.checkCancellation()
             await cacheService.touch(songId: songId, serverId: serverId)
             return .cached(url)
@@ -64,28 +94,35 @@ actor MediaResolver: MediaResolverProtocol {
         let isOnline = await MainActor.run { serverState.isOnline }
         guard isOnline else { throw CassetteError.offlineUnavailable(songId: songId) }
 
+        let identity = try await MainActor.run { try serverState.requestIdentity(for: serverId) }
+        let source = try await resolveRemote(songId: songId, serverId: serverId, song: song, identity: identity)
+        try Task.checkCancellation()
+        guard await MainActor.run(body: { serverState.requestIsCurrent(identity) }) else { throw CancellationError() }
+        return source
+    }
+
+    private func resolveRemote(songId: String, serverId: UUID, song: DisplayableSong?, identity: ServerRequestIdentity) async throws -> MediaSource {
         let currentSongID = await MainActor.run {
             mediaIdentityService?.resolveCurrentID(songId, serverId: serverId, entityType: .song) ?? songId
         }
         let preserveBitstream = song.map { AudioQualityClassifier.shouldSkipTranscoding($0) } ?? false
-        // The playback method is not a setting any more, so there is no stored route to read:
-        // `PlaybackDecisionPolicy` derives Direct Play vs a server transcode per resolve from the
-        // configured quality, the current network and the source itself.
+        let requestedRoute = await MainActor.run { streamingSettings.jellyfinRoute }
         let jellyfinItemID = NavidromeJellyfinIDCodec.jellyfinGUID(fromCanonicalID: currentSongID)
-        // Whether this song is fetched through Jellyfin's PlaybackInfo route at all — a server
-        // capability plus a Jellyfin-mapped ID, not a user choice. Local files have already
-        // been resolved above; this decision applies only when streaming is needed.
         let usesJellyfinTransport = PlaybackDecisionPolicy.usesJellyfinTransport(
-            hasJellyfinService: jellyfinService != nil,
+            hasJellyfinService: jellyfinService != nil && requestedRoute != .openSubsonic,
             jellyfinItemID: jellyfinItemID
         )
+
+        if requestedRoute != .automatic, requestedRoute != .openSubsonic, !usesJellyfinTransport {
+            throw CassetteError.playbackMethodUnavailable
+        }
 
         // Which *quality policy* applies is a network-cost question, not a throughput question:
         // metered (cellular/hotspot) or Low Data Mode is what entitles the app to fall back to the
         // cellular format. A single slow measurement must not do that on Wi-Fi — it
         // only caps the stream below — otherwise a healthy home Wi-Fi link silently played lossy.
         let (usesCellularQuality, isLimited, configuredFormat) = await MainActor.run {
-            let metered = serverState.isExpensive || serverState.isNetworkConstrained
+            let metered = serverState.isCellularConnection || serverState.isExpensive || serverState.isNetworkConstrained
             let limited = serverState.isLimitedNetwork
             return (metered, limited, streamingSettings.formatForCurrentNetwork(isLimited: metered))
         }
@@ -107,14 +144,25 @@ actor MediaResolver: MediaResolverProtocol {
             isLimitedNetwork: usesCellularQuality,
             applyCeilingToExplicitChoice: applyCeilingToExplicitChoice
         )
-        let streamFormat = AdaptiveQualityPolicy.transportFormat(effectiveFormat)
+        // Automatic delivery must not override an explicit network quality selection.
+        // Preserve lossless originals only when that network allows Automatic/Lossless.
+        let preserveLossless = requestedRoute == .automatic
+            && (configuredFormat == .matchStream || configuredFormat == .flacOriginal)
+            && PlaybackDecisionPolicy.preservesLosslessOriginal(song: song)
+        let streamFormat: CacheFormat = preserveLossless ? .flacOriginal : AdaptiveQualityPolicy.transportFormat(effectiveFormat)
+        let isCellular = await MainActor.run { serverState.isCellularConnection }
+        let prefersCellularHLS = requestedRoute == .automatic && !preserveBitstream && streamFormat != .flacOriginal
+            && usesJellyfinTransport && isCellular
         try Task.checkCancellation()
-        let client = try await serverService.makeSwiftSonicClient()
-        let credentials = try await serverService.activeCredentials()
+        let context = try await serverService.requestContext(serverID: serverId)
+        guard context.identity == identity else { throw CancellationError() }
+        let client = context.client
+        let credentials = context.credentials
         try Task.checkCancellation()
         // Direct originals avoid capability/authentication/PlaybackInfo round trips and cannot
         // inherit a Jellyfin universal endpoint's default AAC encoder. Cache hits still win above.
-        if PlaybackDecisionPolicy.canStreamOriginalImmediately(format: streamFormat, song: song),
+        if requestedRoute == .automatic,
+           PlaybackDecisionPolicy.canStreamOriginalImmediately(format: streamFormat, song: song),
            let url = client.streamURL(id: currentSongID, maxBitRate: nil, format: "raw") {
             Logger.resolver.info("[ROUTE] original stream without negotiation id=\(currentSongID, privacy: .public)")
             return .stream(url, customHeaders: credentials.customHeaders)
@@ -138,7 +186,8 @@ actor MediaResolver: MediaResolverProtocol {
         // A concrete lossy format is already a complete route decision. Going through
         // PlaybackInfo first costs a round trip and Navidrome can omit MediaSources,
         // making an otherwise valid conversion look like an unknown raw source.
-        if streamFormat != .flacOriginal, !preserveBitstream,
+        if (requestedRoute == .automatic || requestedRoute == .openSubsonic),
+           streamFormat != .flacOriginal, !preserveBitstream, !prefersCellularHLS,
            let format = streamFormat.subsonicFormat,
            let url = client.streamURL(id: currentSongID,
                                       maxBitRate: streamFormat.subsonicMaxBitRate,
@@ -157,21 +206,19 @@ actor MediaResolver: MediaResolverProtocol {
             // answer "Direct Play is fine" for a lossless original even on a 1 Mbps link.
             let constraints = JellyfinPlaybackInfoRequest(
                 MaxStreamingBitrate: ceilingBitsPerSecond,
-                DeviceProfile: iOSAudioCapability.deviceProfile(maxStreamingBitrate: ceilingBitsPerSecond, preferLossless: streamFormat == .flacOriginal)
+                DeviceProfile: iOSAudioCapability.deviceProfile(maxStreamingBitrate: ceilingBitsPerSecond, preferLossless: streamFormat == .flacOriginal && requestedRoute == .automatic)
             )
             do {
-                let resolved = try await jellyfinService.perform(feature: .playbackInfo) { jellyfinClient -> JellyfinResolvedStream? in
-                    let playbackInfo = try await jellyfinClient.playbackInfo(
-                        itemID: jellyfinID,
-                        request: constraints
-                    )
+                let resolveStream: @Sendable (JellyfinClient) async throws -> JellyfinResolvedStream? = { jellyfinClient in
+                    // Explicit routes build their endpoint directly and do not depend on PlaybackInfo.
+                    let playbackInfo = requestedRoute == .automatic
+                        ? try await jellyfinClient.playbackInfo(itemID: jellyfinID, request: constraints)
+                        : JellyfinPlaybackInfo(mediaSources: [], playSessionId: nil)
                     try Task.checkCancellation()
                     let mediaSource = playbackInfo.mediaSources.first
                     let audioStream = mediaSource?.defaultAudioStream
                     let outcome = PlaybackDecisionPolicy.decide(PlaybackDecisionPolicy.Inputs(
-                        // Always Automatic: the setting is gone, so Direct Play vs transcode is
-                        // decided here instead of being ordered by the user.
-                        requestedRoute: .automatic,
+                        requestedRoute: requestedRoute,
                         supportsDirectPlay: mediaSource?.supportsDirectPlay,
                         supportsDirectStream: mediaSource?.supportsDirectStream,
                         supportsTranscoding: mediaSource?.supportsTranscoding,
@@ -186,15 +233,16 @@ actor MediaResolver: MediaResolverProtocol {
                         requiresBitstream: preserveBitstream,
                         sourceIsLocal: false,
                         preferLossless: streamFormat == .flacOriginal,
-                        requiresLossyEncoding: streamFormat != .flacOriginal
+                        requiresLossyEncoding: streamFormat != .flacOriginal,
+                        isCellular: prefersCellularHLS
                     ))
-                    let requestedRoute = outcome.route
+                    let selectedRoute = outcome.route
 
                     let codec = Self.jellyfinCodec(for: streamFormat)
                     let bitrate = ceilingBitsPerSecond ?? streamFormat.subsonicMaxBitRate.map { $0 * 1_000 }
                     let url: URL?
                     let playMethod: JellyfinPlayMethod
-                    switch requestedRoute {
+                    switch selectedRoute {
                     case .directPlay:
                         url = jellyfinClient.directStreamURL(
                             itemID: jellyfinID,
@@ -204,16 +252,21 @@ actor MediaResolver: MediaResolverProtocol {
                         )
                         playMethod = mediaSource?.supportsDirectPlay == true ? .directPlay : .directStream
                     case .universal:
-                        // `static=true` would ask the server to serve the file untouched, which
-                        // defeats the whole point of Universal Transcoding.
-                        url = jellyfinClient.progressiveAudioURL(
-                            itemID: jellyfinID,
-                            container: Self.jellyfinContainer(for: streamFormat),
-                            audioCodec: codec,
-                            audioBitRate: bitrate,
-                            mediaSourceID: mediaSource?.id,
-                            playSessionID: playbackInfo.playSessionId
-                        )
+                        if outcome.reason == .explicitRoute {
+                            url = jellyfinClient.universalAudioURL(
+                                itemID: jellyfinID, container: Self.jellyfinContainer(for: streamFormat),
+                                audioCodec: codec, maxStreamingBitrate: bitrate,
+                                mediaSourceID: mediaSource?.id, playSessionID: playbackInfo.playSessionId,
+                                staticStream: false
+                            )
+                        } else {
+                            // Keep the stable offset-capable progressive route for Automatic.
+                            url = jellyfinClient.progressiveAudioURL(
+                                itemID: jellyfinID, container: Self.jellyfinContainer(for: streamFormat),
+                                audioCodec: codec, audioBitRate: bitrate,
+                                mediaSourceID: mediaSource?.id, playSessionID: playbackInfo.playSessionId
+                            )
+                        }
                         playMethod = .transcode
                     case .hls:
                         // Preserve the server's segment/session/codec parameters. A hand-built URL
@@ -244,11 +297,19 @@ actor MediaResolver: MediaResolverProtocol {
                             itemID: jellyfinID,
                             mediaSourceID: mediaSource?.id,
                             playSessionID: playbackInfo.playSessionId,
-                            playMethod: playMethod
+                            playMethod: playMethod,
+                            route: selectedRoute
                         ),
-                        route: requestedRoute,
+                        route: selectedRoute,
                         reason: outcome.reason
                     )
+                }
+                let resolved: JellyfinResolvedStream?
+                if requestedRoute == .automatic {
+                    resolved = try await jellyfinService.perform(feature: .playbackInfo, operation: resolveStream)
+                } else {
+                    let jellyfinClient = try await jellyfinService.authenticatedClient()
+                    resolved = try await resolveStream(jellyfinClient)
                 }
                 try Task.checkCancellation()
                 if let resolved {
@@ -261,11 +322,13 @@ actor MediaResolver: MediaResolverProtocol {
                         jellyfin: resolved.context
                     )
                 }
+                if requestedRoute != .automatic { throw CassetteError.playbackMethodUnavailable }
                 Logger.resolver.debug(
                     "[ROUTE] '\(currentSongID, privacy: .public)' → OpenSubsonic fallback (no Jellyfin stream resolved, ceiling=\(ceilingBitsPerSecond ?? -1, privacy: .public)bps)"
                 )
             } catch {
                 try Task.checkCancellation()
+                if requestedRoute != .automatic { throw error }
                 Logger.resolver.debug(
                     "Jellyfin playback route unavailable for '\(currentSongID, privacy: .public)' — falling back to OpenSubsonic: \(error.localizedDescription, privacy: .public)"
                 )

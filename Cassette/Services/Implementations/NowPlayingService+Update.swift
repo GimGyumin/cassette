@@ -11,6 +11,22 @@ import UIKit
 #endif
 
 extension NowPlayingService {
+    func beginPublication(_ publication: PlaybackPublication?) -> Int? {
+        if let publication {
+            guard publication.isCurrent, publication.sequence >= lastPublicationSequence else { return nil }
+            lastPublicationSequence = publication.sequence
+        }
+        playbackGeneration &+= 1
+        return playbackGeneration
+    }
+
+    @MainActor
+    func commitNowPlaying(_ publication: PlaybackPublication?, revision: Int,
+                          _ update: @MainActor @Sendable () -> Void) {
+        guard playbackRevision.accept(revision) else { return }
+        if let publication { publication.commit(update) } else { update() }
+    }
+
     private nonisolated static func makeNowPlayingInfo(
         for snapshot: NowPlayingSnapshot,
         artwork: MPMediaItemArtwork? = nil
@@ -59,7 +75,11 @@ extension NowPlayingService {
     // MARK: - Update
 
     func update(with snapshot: NowPlayingSnapshot) async {
-        await updateModernMediaSession(with: snapshot)
+        let snapshot = snapshot.projectingPlayback()
+        let publication = snapshot.publication
+        guard let revision = beginPublication(publication) else { return }
+        await updateModernMediaSession(with: snapshot, revision: revision)
+        guard revision == playbackGeneration else { return }
         if snapshot.isLiveStream {
             artworkRetryTask?.cancel()
             artworkRetryTask = nil
@@ -74,7 +94,7 @@ extension NowPlayingService {
             // Duration and elapsed time are intentionally omitted — Control Center hides
             // the scrubber automatically when MPNowPlayingInfoPropertyIsLiveStream is true.
             let baseInfo = Self.makeNowPlayingInfo(for: snapshot)
-            await MainActor.run {
+            await commitNowPlaying(publication, revision: revision) {
                 guard artworkRevision.accept(generation) else { return }
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = baseInfo
                 #if os(macOS)
@@ -106,14 +126,15 @@ extension NowPlayingService {
         }
 
         await updateRemoteCommandsAvailability(isLiveStream: false)
+        guard revision == playbackGeneration, publication?.isCurrent != false else { return }
 
         let isTrackChange = !isCurrent(snapshot)
         if !isTrackChange {
-            if snapshot.artworkURL != nil { currentSong = snapshot }
+            currentSong = snapshot.preservingArtwork(from: currentSong)
             let generation = artworkGeneration
             // Position-only update (pause/resume/seek): merge into the existing dict so
             // artwork already loaded for the current track is preserved.
-            await MainActor.run {
+            await commitNowPlaying(publication, revision: revision) {
                 guard artworkRevision.matches(generation) else { return }
                 var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
                 info[MPMediaItemPropertyTitle] = snapshot.title
@@ -168,7 +189,7 @@ extension NowPlayingService {
         let generation = artworkGeneration
         pendingArtwork = nil
         let baseInfo = info
-        await MainActor.run {
+        await commitNowPlaying(publication, revision: revision) {
             guard artworkRevision.accept(generation) else { return }
             MPNowPlayingInfoCenter.default().nowPlayingInfo = baseInfo
             #if os(macOS)
@@ -191,11 +212,21 @@ extension NowPlayingService {
     // MARK: - Periodic position push
 
     func pushPosition(elapsed: TimeInterval, rate: Float, duration: TimeInterval) async {
-        guard elapsed >= 0, duration > 0, elapsed <= duration else { return }
+        await pushPosition(elapsed: elapsed, rate: rate, duration: duration, publication: nil)
+    }
+
+    func pushPosition(elapsed: TimeInterval, rate: Float, duration: TimeInterval, publication: PlaybackPublication?) async {
+        guard elapsed.isFinite, duration.isFinite, elapsed >= 0, duration > 0, elapsed <= duration,
+              let revision = beginPublication(publication) else { return }
+        if let song = currentSong {
+            currentSong = song.updatingPlayback(position: elapsed, rate: rate, duration: duration, publication: publication)
+        }
         #if os(iOS)
         if #available(iOS 27.0, *),
            let controller = modernMediaSession as? CassetteMediaSessionController {
-            await controller.updatePlayback(elapsed: elapsed, rate: rate)
+            await commitNowPlaying(publication, revision: revision) {
+                controller.updatePlayback(elapsed: elapsed, rate: rate)
+            }
         }
         #endif
         if !hasArtwork,
@@ -208,7 +239,7 @@ extension NowPlayingService {
                 artworkRetryTask = nil
             }
         }
-        await MainActor.run {
+        await commitNowPlaying(publication, revision: revision) {
             // Don't invent a Now Playing session before metadata (incl. ISRC) has been published.
             guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo,
                   info[MPMediaItemPropertyTitle] != nil else { return }
@@ -223,9 +254,11 @@ extension NowPlayingService {
     }
 
     func setISRC(_ isrc: String) async {
+        let publication = currentSong?.publication
+        guard let revision = beginPublication(nil) else { return }
         let trimmed = isrc.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        await MainActor.run {
+        await commitNowPlaying(publication, revision: revision) {
             guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo,
                   info[MPMediaItemPropertyTitle] != nil else { return }
             info[MPNowPlayingInfoPropertyInternationalStandardRecordingCode] = trimmed
@@ -235,10 +268,29 @@ extension NowPlayingService {
     }
 
     func setPlaybackRate(_ rate: Float) async {
-        await MainActor.run {
+        await setPlaybackRate(rate, publication: nil)
+    }
+
+    func setPlaybackRate(_ rate: Float, publication: PlaybackPublication?) async {
+        guard let revision = beginPublication(publication) else { return }
+        let latest = currentSong?.projectingPlayback()
+        if let latest {
+            currentSong = latest.updatingPlayback(position: latest.position, rate: rate, duration: latest.duration, publication: publication)
+        }
+        let position = latest?.position
+        #if os(iOS)
+        if #available(iOS 27.0, *), let controller = modernMediaSession as? CassetteMediaSessionController {
+            await commitNowPlaying(publication, revision: revision) {
+                let elapsed = position ?? (MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? NSNumber)?.doubleValue ?? 0
+                controller.updatePlayback(elapsed: elapsed, rate: rate)
+            }
+        }
+        #endif
+        await commitNowPlaying(publication, revision: revision) {
             guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo,
                   info[MPMediaItemPropertyTitle] != nil else { return }
             info[MPNowPlayingInfoPropertyPlaybackRate] = rate
+            if let position { info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = position }
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info
             #if os(macOS)
             MPNowPlayingInfoCenter.default().playbackState = rate > 0 ? .playing : .paused
@@ -247,7 +299,9 @@ extension NowPlayingService {
     }
 
     func clearISRC() async {
-        await MainActor.run {
+        let publication: PlaybackPublication? = nil
+        guard let revision = beginPublication(nil) else { return }
+        await commitNowPlaying(publication, revision: revision) {
             guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
             info.removeValue(forKey: MPNowPlayingInfoPropertyInternationalStandardRecordingCode)
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info
@@ -255,7 +309,10 @@ extension NowPlayingService {
     }
 
     func publishTrackChange(_ snapshot: NowPlayingSnapshot) async {
-        await updateModernMediaSession(with: snapshot)
+        let publication = snapshot.publication
+        guard let revision = beginPublication(publication) else { return }
+        await updateModernMediaSession(with: snapshot, revision: revision)
+        guard revision == playbackGeneration else { return }
         // Fresh dict without artwork so the previous track's ISRC/rate cannot linger
         // while we resolve cover art / credentials on the full update path.
         let info = Self.makeNowPlayingInfo(for: snapshot)
@@ -269,7 +326,7 @@ extension NowPlayingService {
         artworkRetryDate = .distantPast
         let generation = artworkGeneration
         let published = info
-        await MainActor.run {
+        await commitNowPlaying(publication, revision: revision) {
             guard artworkRevision.accept(generation) else { return }
             var metadata = published
             if let image = artworkImageCache.cached(for: snapshot.effectiveCoverArtId, tier: .hero)
@@ -284,12 +341,15 @@ extension NowPlayingService {
         await updateRemoteCommandsAvailability(isLiveStream: snapshot.isLiveStream)
     }
 
-    func updateModernMediaSession(with snapshot: NowPlayingSnapshot) async {
+    func updateModernMediaSession(with snapshot: NowPlayingSnapshot, revision: Int? = nil) async {
         #if os(iOS)
         if #available(iOS 27.0, *),
            let controller = modernMediaSession as? CassetteMediaSessionController {
             let serverId = await MainActor.run { serverState?.activeServer?.id }
-            await controller.update(snapshot, serverId: serverId)
+            let token = revision ?? playbackGeneration
+            await controller.update(snapshot, serverId: serverId, isCurrent: { [playbackRevision] in
+                playbackRevision.accept(token) && snapshot.publication?.isCurrent != false
+            })
         }
         #endif
     }

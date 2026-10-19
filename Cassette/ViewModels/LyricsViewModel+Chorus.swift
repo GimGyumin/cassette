@@ -93,9 +93,6 @@ extension LyricsViewModel {
         let currentMs = karaokePlaybackMs
         let visible = currentMs >= bgBegin && currentMs < bgEnd
 
-        print("activeChorus =", originalText.isEmpty ? "nil" : String(originalText.prefix(20)),
-              "visible =", visible, "time =", currentMs)
-
         return LyricChorusBlock(
             originalText: originalText,
             translationText: translationText,

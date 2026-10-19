@@ -19,15 +19,26 @@ extension PlayerService {
     // MARK: - Live Stream
 
     func playRadio(_ station: InternetRadioStation) async throws {
+        guard await permitsNewTransportCommand(), stopBarrierCount == 0 else { return }
+        clearInterruptionForExplicitPlayback()
+        transportCommandID &+= 1
+        transport.intent = .play
+        transport.terminalContext = nil
+        let resetContext = playbackContext
+        await audioObjectsResetTask?.value
+        guard contextIsCurrent(resetContext) else { return }
+        isRestoringSession = false
+        pendingRestoreInfo = nil
         playbackRequestTask?.cancel()
         playbackEpoch &+= 1
-        let radioEpoch = playbackEpoch
+        let context = playbackContext
+        let publication = makePlaybackPublication()
         cancelGaplessBridge()
         cancelPendingScrobble()
         cancelPendingCacheDownload()
         cancelFadeTasks()
         let source = try await mediaResolver.resolveRadio(station)
-        guard radioEpoch == playbackEpoch else { return }
+        guard contextIsCurrent(context), transport.permitsAudio else { return }
 
         #if os(iOS)
         let codecResult = await checkCodecSupport(url: source.url, headers: source.customHeaders)
@@ -44,9 +55,12 @@ extension PlayerService {
         }
         #endif
 
-        guard radioEpoch == playbackEpoch else { return }
+        guard contextIsCurrent(context), transport.permitsAudio else { return }
+        await applyReplayGain(track: nil, config: ReplayGainConfig(enabled: false, mode: .track, preAmp: 0, preventClipping: true), context: context)
+        guard contextIsCurrent(context), transport.permitsAudio else { return }
         isTrackTransitionPending = false
         stopProgressTimer()
+        cancelAutoExtendFetch()
         liveStreamStallTask?.cancel()
         liveStreamStallTask = nil
         currentSource = source
@@ -63,19 +77,22 @@ extension PlayerService {
         configureAudioSessionIfNeeded(preferMultichannel: false)
         #endif
 
-        await MainActor.run {
+        guard await commitPresentation(context, { state in
             state.currentTrack = nil
+            state.currentPlaybackTrack = nil
             state.currentRadio = station
             state.isSmartShuffleActive = false
             state.originalQueueEndIndex = nil
             state.playbackState = .loading
             state.position = 0
+            state.pendingSeekPosition = nil
             state.duration = 0
             state.isSeekable = false
             state.isDeliveringTranscodedAudio = false
-        }
+            return true
+        }) else { return }
 
-        guard radioEpoch == playbackEpoch else { return }
+        guard contextIsCurrent(context), transport.permitsAudio else { return }
         #if os(macOS)
         startEnginePlayback(url: source.url, headers: source.customHeaders, useSystemPlayer: true)
         #else
@@ -102,6 +119,7 @@ extension PlayerService {
             Logger.player.warning("[CREDENTIALS] activeCredentials failed, using empty headers: \(error, privacy: .public)")
             artworkHeaders = [:]
         }
+        guard contextIsCurrent(context) else { return }
         await nowPlayingService?.update(with: NowPlayingSnapshot(
             title: station.name,
             artist: "Live Radio",
@@ -114,9 +132,11 @@ extension PlayerService {
             coverArtId: station.coverArt,
             isLiveStream: true,
             radioStationName: station.name,
-            isrc: nil
+            isrc: nil,
+            publication: publication
         ))
 
+        guard contextIsCurrent(context) else { return }
         startPositionSaveTimer()
         Logger.player.info("Started live stream radio '\(station.name, privacy: .public)'")
     }
@@ -158,26 +178,26 @@ extension PlayerService {
     }
 
     private func startLiveStreamStallMonitor(stationName: String) {
+        let context = playbackContext
         liveStreamStallTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(8))
             guard !Task.isCancelled else { return }
             guard let self else { return }
             let (isStillLive, position) = await MainActor.run { (self.state.isLiveStream, self.state.position) }
             guard isStillLive, position < 1.0 else { return }
-            await self.handleLiveStreamFailure(stationName: stationName, error: nil)
+            await self.handleLiveStreamFailure(stationName: stationName, error: nil, expectedContext: context)
         }
     }
 
-    func handleLiveStreamFailure(stationName: String, error: Error?) async {
+    func handleLiveStreamFailure(stationName: String, error: Error?, expectedContext: PlaybackContext? = nil) async {
+        let context = expectedContext ?? playbackContext
         let isStillLive = await MainActor.run { state.isLiveStream }
-        guard isStillLive else { return }
+        guard isStillLive, contextIsCurrent(context), transport.terminalContext != context else { return }
 
         Logger.player.error("[RADIO-FAILSAFE] live stream '\(stationName, privacy: .public)' failed: \(error?.localizedDescription ?? "stall timeout", privacy: .public)")
 
-        stopProgressTimer()
-        stopEngine()
-
-        await MainActor.run {
+        await finishPlaybackFailure(error.map { .playbackFailed(.classify($0)) } ?? .timeout, context: context)
+        await commitPresentation(context) { state in
             state.currentRadio = nil
             state.playbackState = .idle
             toastService.show(
@@ -185,6 +205,7 @@ extension PlayerService {
                 style: .error,
                 duration: 5.0
             )
+            return true
         }
     }
 }

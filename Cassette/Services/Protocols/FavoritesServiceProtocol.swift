@@ -10,4 +10,11 @@ protocol FavoritesServiceProtocol: AnyObject {
     func unstar(itemType: FavoriteType, itemId: String) async throws
     func syncFromServer() async throws
     func isFavorite(itemType: FavoriteType, itemId: String) -> Bool
+    func isFavoriteInBackground(itemType: FavoriteType, itemId: String) async -> Bool
+}
+
+extension FavoritesServiceProtocol {
+    func isFavoriteInBackground(itemType: FavoriteType, itemId: String) async -> Bool {
+        isFavorite(itemType: itemType, itemId: itemId)
+    }
 }

@@ -153,7 +153,21 @@ nonisolated struct PerformanceBudget: Equatable, Sendable {
     /// k-means palette analysis of artwork — the most expensive non-audio CPU work in the app.
     /// Skipping it degrades to the memoized/cheap average colour, never to a broken screen.
     var allowsHeavyColorAnalysis: Bool {
-        isAppActive && !isConstrained && !isMemoryPressured
+        isAppActive && thermalPressure == .nominal && !isConstrained && !isMemoryPressured
+    }
+
+    /// Automatic model work yields to playback on warm or power-constrained devices.
+    /// A translation explicitly requested by the listener remains available.
+    var allowsAutomaticTranslation: Bool { allowsHeavyColorAnalysis }
+
+    /// Explicit downloads remain available. Opportunistic copies wait for a cooler,
+    /// foreground device so they do not compete with screen-off audio or battery saving.
+    var allowsAutomaticMediaDownloads: Bool {
+        isAppActive && thermalPressure == .nominal && !isLowPowerMode && !isMemoryPressured
+    }
+
+    var maximumConcurrentDownloads: Int {
+        isAppActive && thermalPressure == .nominal && !isLowPowerMode && !isMemoryPressured ? 3 : 1
     }
 
     /// Bulk (invisible) artwork prefetch keeps progressing while the device is warm, just slower;
@@ -189,22 +203,34 @@ nonisolated struct PerformanceBudget: Equatable, Sendable {
 
     /// Animated mesh hero (playlist / Wrapped headers) TimelineView interval.
     var meshFrameInterval: TimeInterval {
-        isLowPowerMode ? 1.0 / 8.0 : 1.0 / 12.0
+        isConstrained || thermalPressure == .fair ? 1.0 / 8.0 : 1.0 / 12.0
     }
 
-    /// Beat-meter publish period. The audio thread computes band energies at most this often, and
-    /// SwiftUI invalidates the full player / list equalizers at the same rate.
+    var artworkFramesPerSecond: Int { thermalPressure == .nominal ? 15 : 8 }
+
+    /// Warm devices keep lyrics timing and audio unchanged, but stop continuously
+    /// recomposing the decorative artwork field. Cover transitions remain available.
+    var allowsArtworkMotion: Bool {
+        allowsDecorativeMotion && thermalPressure == .nominal && !isMemoryPressured
+    }
+
+    /// Essential transport checks continue while screen-off, with coalesced wakeups.
+    var playbackProgressInterval: Duration {
+        isAppActive && !isConstrained ? .milliseconds(500) : .seconds(1)
+    }
+
+    /// Only visible list indicators read this meter. No player/lyrics parent observes it.
     var beatPublishInterval: TimeInterval {
-        isConstrained ? 0.40 : 0.25
+        isConstrained ? 0.40 : (thermalPressure == .fair ? 0.10 : 0.05)
     }
 
-    /// Lyrics tracking loop period. Karaoke words only read smoothly near 60 Hz; when the device
-    /// is constrained half that rate is indistinguishable on a moving line of text.
+    /// Word fill needs a smooth clock; line-only lyrics do not need frame-rate invalidation.
     func lyricsTickIntervalNs(karaokePlayback: Bool) -> UInt64 {
-        if isConstrained {
-            return karaokePlayback ? 33_333_333 : 50_000_000
+        if !isAppActive { return 1_000_000_000 }
+        if isConstrained || thermalPressure == .fair {
+            return karaokePlayback ? 50_000_000 : 150_000_000
         }
-        return karaokePlayback ? 16_666_666 : 33_333_333
+        return karaokePlayback ? 33_333_333 : 100_000_000
     }
 
     /// One-line description for device-side verification (Console.app / Xcode Instruments).

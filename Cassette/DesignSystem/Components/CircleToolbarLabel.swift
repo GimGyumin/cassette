@@ -5,20 +5,13 @@
 
 import SwiftUI
 
-/// Apple-Music-style circular toolbar action label: accent-filled with a white glyph when active, a subtle
-/// grey circle otherwise (cancel / disabled). Shared by the playlist edit + add-music sheets so their X / ✓
-/// read identically. Cross-platform.
+/// A toolbar owns its control background, hit target and pressed feedback.
 struct CircleToolbarLabel: View {
     let systemName: String
     var filled: Bool = false
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(filled ? Color.white : Color.primary)
-            .cassetteGlassButton(
-                size: 30,
-                tint: filled ? Color.cassetteAccent.opacity(0.78) : nil
-            )
+            .foregroundStyle(filled ? Color.cassetteAccent : Color.primary)
     }
 }

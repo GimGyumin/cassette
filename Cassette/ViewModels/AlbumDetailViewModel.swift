@@ -24,6 +24,8 @@ final class AlbumDetailViewModel {
     var coverArtId: String? = nil
     var artistId: String? = nil
     var songs: [DisplayableSong] = []
+    private var availableAtmosSongs: [DisplayableSong] = []
+    var audioQualities: [AudioQualityKind] { AudioQualityClassifier.albumQualities(in: songs + availableAtmosSongs) }
     /// Other editions of this album (remasters / anniversary / deluxe), same artist.
     var otherAlbumVersions: [AlbumID3] = []
     /// Other albums by the same artist (excludes the current album and `otherAlbumVersions`).
@@ -39,11 +41,13 @@ final class AlbumDetailViewModel {
     var downloadingIds: Set<String> = []
 
     private var loadedAlbum: AlbumID3?
+    var displayAlbumID: String { loadedAlbum?.id ?? libraryIndex?.primaryAlbumID(for: albumId) ?? albumId }
     private let albumId: String
     private let libraryService: any LibraryServiceProtocol
     private let downloadService: any DownloadServiceProtocol
     private let toastService: ToastService
     private let serverState: ServerState
+    private let libraryIndex: LibraryIndexService?
     private var loadGeneration = 0
 
     init(
@@ -51,13 +55,15 @@ final class AlbumDetailViewModel {
         libraryService: any LibraryServiceProtocol,
         downloadService: any DownloadServiceProtocol,
         toastService: ToastService,
-        serverState: ServerState
+        serverState: ServerState,
+        libraryIndex: LibraryIndexService? = nil
     ) {
         self.albumId = albumId
         self.libraryService = libraryService
         self.downloadService = downloadService
         self.toastService = toastService
         self.serverState = serverState
+        self.libraryIndex = libraryIndex
     }
 
     func load() async {
@@ -68,6 +74,8 @@ final class AlbumDetailViewModel {
         isPrimaryContentReady = false
         error = nil
         if serverState.isOnline {
+            // A local album may contain only downloaded tracks. Publish it only as an
+            // offline/failure fallback, never as the initial online catalog snapshot.
             await loadFromAPI(generation: generation)
         } else {
             isOffline = true
@@ -75,12 +83,12 @@ final class AlbumDetailViewModel {
         }
         guard generation == loadGeneration else { return }
         isLoading = false
-        isDownloadingAlbum = await downloadService.isDownloadingAlbum(albumId)
+        isDownloadingAlbum = await downloadService.isDownloadingAlbum(displayAlbumID)
     }
 
     private func loadFromAPI(generation: Int) async {
         do {
-            let apiAlbum = try await libraryService.album(id: albumId)
+            let apiAlbum = try await libraryService.displayAlbum(id: albumId)
             guard generation == loadGeneration else { return }
             // Empty-success guard: behind a captive proxy / Cloudflare-WARP edge the server
             // is reachable but answers 200 with no songs. That never throws, so the catch
@@ -92,7 +100,8 @@ final class AlbumDetailViewModel {
             guard let serverId = serverState.activeServer?.id else { return }
             let downloadedIds = await downloadService.downloadedSongIds(serverId: serverId)
             let prepared = try await DisplayableSong.prepare(
-                apiAlbum.song ?? [], downloadedIDs: downloadedIds, sortedBy: Self.albumTrackOrder
+                apiAlbum.song ?? [], downloadedIDs: downloadedIds,
+                fallbackCoverArtID: apiAlbum.coverArt, sortedBy: Self.albumTrackOrder
             )
             guard generation == loadGeneration, serverState.activeServer?.id == serverId else { return }
             albumName = apiAlbum.name
@@ -107,6 +116,7 @@ final class AlbumDetailViewModel {
             coverArtId = apiAlbum.coverArt
             artistId = apiAlbum.artistId
             songs = prepared
+            availableAtmosSongs = prepared.compactMap { libraryIndex?.preferredAtmosSong(for: $0, serverId: serverId) }
             isOffline = false
             isPrimaryContentReady = true
 
@@ -364,7 +374,8 @@ final class AlbumDetailViewModel {
         do {
             let artist = try await libraryService.artist(id: artistId)
             guard generation == loadGeneration else { return }
-            let siblings = (artist.album ?? []).filter { $0.id != albumId }
+            let siblings = await libraryService.presentedAlbums(artist.album ?? [])
+                .filter { $0.id != (loadedAlbum?.id ?? albumId) }
             let versions = AlbumVersionMatcher.otherVersions(
                 of: albumName,
                 excludingId: albumId,
@@ -464,13 +475,14 @@ final class AlbumDetailViewModel {
     @discardableResult
     private func loadFromLocal() async -> Bool {
         guard let serverId = serverState.activeServer?.id,
-              let data = await downloadService.localAlbumData(albumId: albumId, serverId: serverId),
+              let data = await downloadService.localAlbumData(albumId: displayAlbumID, serverId: serverId),
               !data.songs.isEmpty else { return false }
         albumName = data.albumName
         artistName = data.artistName
         coverArtId = data.coverArtId
         songCount = data.songs.count
         songs = data.songs
+        availableAtmosSongs = []
         isPrimaryContentReady = true
         // Offline records carry no year/genre/artistId — clear stale online values so a re-load after going
         // offline (the long-lived VM re-runs load() on connectivity change) doesn't keep showing them.
@@ -494,7 +506,9 @@ final class AlbumDetailViewModel {
         do {
             try await downloadService.download(album: album, serverId: serverId)
         } catch {
-            toastService.showError(UserFacingError.from(error).displayMessage)
+            if !UserFacingError.isCancellation(error) {
+                toastService.showError(UserFacingError.from(error).displayMessage)
+            }
         }
         let downloadedIds = await downloadService.downloadedSongIds(serverId: serverId)
         songs = songs.map { $0.withDownloaded(downloadedIds.contains($0.id)) }
@@ -502,6 +516,7 @@ final class AlbumDetailViewModel {
 
     func cancelAlbumDownload() async {
         guard let serverId = serverState.activeServer?.id else { return }
+        if let id = loadedAlbum?.id { await downloadService.cancelAlbumDownload(albumId: id, serverId: serverId) }
         for song in songs {
             await downloadService.cancelDownload(songId: song.id, serverId: serverId)
         }
@@ -550,7 +565,7 @@ final class AlbumDetailViewModel {
 
     func deleteDownload() async {
         guard let serverId = serverState.activeServer?.id else { return }
-        try? await downloadService.remove(albumId: albumId, serverId: serverId)
+        try? await downloadService.remove(albumId: displayAlbumID, serverId: serverId)
         songs = songs.map { $0.withDownloaded(false) }
     }
 }

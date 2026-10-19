@@ -31,19 +31,23 @@ Three deliberate simplifications for v1. Each is marked with
 
 ### SwiftData + Actor pattern
 
-`ModelContext` is main-thread-bound. Actor methods that read or write SwiftData
-must always create and use a `ModelContext` on the MainActor:
+`ModelContext` and its `@Model` objects must remain within their owning isolation
+boundary. UI-facing contexts stay on MainActor. Service operations may create a
+short-lived local context on their actor, provided that all fetch/mutation/save work
+is synchronous, with no suspension or context/model escaping the operation.
+`CacheService` uses this pattern so file publication and metadata updates cannot be
+interleaved by another cache operation:
 
 ```swift
-try await MainActor.run {
-    let context = ModelContext(modelContainer)
-    // fetch, insert, delete, save here
-}
+// Inside an actor-isolated synchronous operation:
+let context = ModelContext(modelContainer)
+// fetch, insert, delete, save here; do not await or return @Model objects
+try context.save()
 ```
 
-`@Model` objects (e.g. `ServerConfig`) **never** leave the `MainActor.run` closure.
-Return a `Sendable` DTO (`ServerSnapshot`, etc.) instead. This is the single rule
-that makes the entire service layer actor-safe with SwiftData.
+Share `ModelContainer`, not contexts. Return `Sendable` values or DTOs across actors.
+A long-lived background context requires its own model executor (`@ModelActor`);
+do not store an ordinary context on an actor and assume thread confinement follows.
 
 Tests must pass `inMemory: true` to `ModelContainer.cassette(inMemory:)` — Swift
 Testing parallelises tests, so each test must own its own in-memory store.
@@ -151,8 +155,7 @@ xcodebuild -scheme Cassette \
   | grep -E "warning:|error:" \
   | grep -v "/SourcePackages/" \
   | grep -v "appintentsmetadataprocessor" \
-  | grep -v "AppIcon.appiconset" \
-  | grep -v "ConformanceIsolation"
+  | grep -v "AppIcon.appiconset"
 
 # Test target (required) — the app-only gate let the test target rot unseen.
 # A macOS destination needs no simulator runtime, and runs the suite instead of
@@ -196,20 +199,12 @@ Each entry records source, cause, action taken, and when to revisit.
 
 ---
 
-### MediaSessionRepresentable conformance isolation
+### Resolved: MediaSessionRepresentable conformance isolation
 
-```
-warning: conformance of 'CassetteMediaSessionRepresentation' to protocol 'MediaSessionRepresentable'
-crosses into main actor-isolated code and can cause data races; this is an error in the Swift 6
-language mode [#ConformanceIsolation]
-```
-
-| Field    | Details |
-|----------|---------|
-| **Source** | `Cassette/Services/Playback/CassetteMediaSessionController.swift` — `CassetteMediaSessionRepresentation` |
-| **Cause** | The iOS 27 `NowPlaying` framework declares `MediaSessionRepresentable` without an isolation annotation, while Cassette's representation is `@MainActor` (it is mutated from the player and the UI). The isolation mismatch is theoretical: both sides live in the app process. |
-| **Action** | Fixed-by-exception. `@preconcurrency` on the conformance was measured and has no effect here, and there is no safe way to move `content` / `playbackSnapshot` off the main actor. Suppressed by the `ConformanceIsolation` filter in the quality-gate and CI commands; the doc comment at the declaration points here. |
-| **Revisit** | When the app target moves to the Swift 6 language mode, or when `MediaSessionRepresentable` documents its isolation contract. |
+The 2026-10-08 RC audit removed this exception. The representation's immutable
+`id` is explicitly `nonisolated` to satisfy `Identifiable`; mutable metadata stays
+on MainActor. `ConformanceIsolation` diagnostics must no longer be filtered from
+the warning gate.
 
 ---
 

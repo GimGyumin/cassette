@@ -21,6 +21,8 @@ final class DownloadedAlbum {
     var coverArtId: String?
     /// Relative path (from Documents/app.cassette/) to the cached cover art file. Nil if not downloaded.
     var localCoverArtPath: String?
+    /// Logical display membership can include an Atmos-only track from a separate server album.
+    var songIds: [String]?
 
     /// True when every track was successfully downloaded.
     var isComplete: Bool { tracksCount == totalTracksCount }
@@ -35,7 +37,8 @@ final class DownloadedAlbum {
         totalTracksCount: Int,
         downloadedAt: Date = Date(),
         coverArtId: String? = nil,
-        localCoverArtPath: String? = nil
+        localCoverArtPath: String? = nil,
+        songIds: [String]? = nil
     ) {
         self.id = id
         self.albumId = albumId
@@ -47,5 +50,6 @@ final class DownloadedAlbum {
         self.downloadedAt = downloadedAt
         self.coverArtId = coverArtId
         self.localCoverArtPath = localCoverArtPath
+        self.songIds = songIds
     }
 }

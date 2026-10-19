@@ -16,21 +16,32 @@ import OSLog
 /// rows can exist after sync. Restore and save use last-write-wins on `lastUpdated`.
 actor PlaybackSessionService {
     private let modelContainer: ModelContainer
-    // Lazy so the context is created on the actor's executor, not the MainActor caller of init.
-    private lazy var modelContext: ModelContext = ModelContext(modelContainer)
     /// Last persisted position — skip tiny deltas so SwiftData merges don't hitch the UI.
     private var lastSavedPosition: TimeInterval?
     private var lastSavedPayload: SessionPayload?
     private var lastSavedQueueData: Data?
     private var lastSavedUpdate: Date?
+    private var lastSavedKey: String?
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
     }
 
     /// Full save — queue + position + current track metadata + repeat mode.
-    func save(playerState: SessionPayload) {
-        let session = fetchOrCreateSession()
+    func save(playerState: SessionPayload, identity: PlaybackCheckpointIdentity? = nil,
+              publication: PlaybackPublication? = nil) {
+        guard publication?.isCurrent != false else { return }
+        if let identity {
+            guard identity.trackID == playerState.currentTrack?.id,
+                  identity.queueIndex == playerState.currentIndex,
+                  playerState.queue.indices.contains(identity.queueIndex),
+                  playerState.queue[identity.queueIndex].id == identity.trackID else { return }
+        }
+        let key = identity?.storageKey ?? "current"
+        if lastSavedKey != key { resetSaveCache() }
+        let modelContext = ModelContext(modelContainer)
+        let session = fetchOrCreateSession(in: modelContext, accountID: identity?.accountID)
+        session.id = key
         // A newer CloudKit winner invalidates our local no-op/queue cache.
         guard playerState != lastSavedPayload || session.lastUpdated != lastSavedUpdate else { return }
         let queueChanged = lastSavedPayload?.queue != playerState.queue
@@ -45,6 +56,7 @@ actor PlaybackSessionService {
         )
         do {
             try modelContext.save()
+            lastSavedKey = key
             lastSavedPayload = playerState
             lastSavedPosition = playerState.currentPosition
             lastSavedQueueData = session.queueData
@@ -56,15 +68,22 @@ actor PlaybackSessionService {
     }
 
     /// Lightweight position-only checkpoint, also used for immediate background flushes.
-    func savePosition(_ position: TimeInterval) {
-        guard position.isFinite, position >= 0 else { return }
-        guard let session = fetchWinningSession() else { return }
-        let matchesLastSave = session.lastUpdated == lastSavedUpdate
+    func savePosition(_ position: TimeInterval, identity: PlaybackCheckpointIdentity? = nil,
+                      publication: PlaybackPublication? = nil) {
+        guard position.isFinite, position >= 0, publication?.isCurrent != false else { return }
+        let modelContext = ModelContext(modelContainer)
+        guard let session = fetchWinningSession(in: modelContext, accountID: identity?.accountID) else { return }
+        if let identity {
+            guard session.id == identity.storageKey, session.currentTrackId == identity.trackID,
+                  session.currentIndex == identity.queueIndex else { return }
+        }
+        let matchesLastSave = session.id == lastSavedKey && session.lastUpdated == lastSavedUpdate
         if matchesLastSave, let last = lastSavedPosition, abs(position - last) < 1.0 { return }
         session.currentPosition = position
         session.lastUpdated = Date()
         do {
             try modelContext.save()
+            lastSavedKey = session.id
             lastSavedPosition = position
             // Preserve the known queue for the next full save, but don't mistake an older
             // pause snapshot for the now-persisted position.
@@ -83,16 +102,16 @@ actor PlaybackSessionService {
 
     /// Extracts and returns restoration data, keeping @Model objects on this actor's context.
     /// Applies last-write-wins across CloudKit duplicates, then prunes losers.
-    func loadRestoredSession() -> RestoredSession? {
+    func loadRestoredSession(accountID: UUID? = nil) -> RestoredSession? {
         resetSaveCache()
-        guard let session = consolidateToWinningSession() else {
+        let modelContext = ModelContext(modelContainer)
+        guard let session = consolidateToWinningSession(in: modelContext, accountID: accountID) else {
             Logger.session.info("No persisted session found")
             return nil
         }
         let queue = session.decodedQueue()
         guard !queue.isEmpty else {
-            Logger.session.info("Persisted session has empty queue — clearing")
-            clear()
+            Logger.session.info("Persisted session has empty or unreadable queue — preserving for recovery")
             return nil
         }
         // Negative / out-of-range indices must not reach `queue[index]` (crash on restore).
@@ -112,9 +131,20 @@ actor PlaybackSessionService {
         )
     }
 
-    func clear() {
+    /// Read metadata for startup artwork preparation without restoring transport or resetting
+    /// session checkpoint caches. Siri/live playback remains owned by PlayerService.
+    func currentTrackForArtworkPreparation(accountID: UUID? = nil) -> DisplayableSong? {
+        let modelContext = ModelContext(modelContainer)
+        guard let session = fetchWinningSession(in: modelContext, accountID: accountID) else { return nil }
+        let queue = session.decodedQueue()
+        guard !queue.isEmpty else { return nil }
+        return queue[max(0, min(session.currentIndex, queue.count - 1))]
+    }
+
+    func clear(accountID: UUID? = nil) {
         resetSaveCache()
-        let sessions = fetchAllCurrentSessions()
+        let modelContext = ModelContext(modelContainer)
+        let sessions = fetchAllCurrentSessions(in: modelContext, accountID: accountID)
         guard !sessions.isEmpty else { return }
         for session in sessions {
             modelContext.delete(session)
@@ -130,27 +160,28 @@ actor PlaybackSessionService {
     // MARK: - LWW helpers
 
     private func resetSaveCache() {
+        lastSavedKey = nil
         lastSavedPosition = nil
         lastSavedPayload = nil
         lastSavedQueueData = nil
         lastSavedUpdate = nil
     }
 
-    private func fetchOrCreateSession() -> PlaybackSession {
-        if let existing = consolidateToWinningSession() { return existing }
+    private func fetchOrCreateSession(in modelContext: ModelContext, accountID: UUID? = nil) -> PlaybackSession {
+        if let existing = consolidateToWinningSession(in: modelContext, accountID: accountID) { return existing }
         let new = PlaybackSession()
         modelContext.insert(new)
         return new
     }
 
-    private func fetchWinningSession() -> PlaybackSession? {
-        consolidateToWinningSession()
+    private func fetchWinningSession(in modelContext: ModelContext, accountID: UUID? = nil) -> PlaybackSession? {
+        consolidateToWinningSession(in: modelContext, accountID: accountID)
     }
 
     /// Keeps the newest `lastUpdated` session with `id == "current"` and deletes the rest.
     @discardableResult
-    private func consolidateToWinningSession() -> PlaybackSession? {
-        let sessions = fetchAllCurrentSessions()
+    private func consolidateToWinningSession(in modelContext: ModelContext, accountID: UUID? = nil) -> PlaybackSession? {
+        let sessions = fetchAllCurrentSessions(in: modelContext, accountID: accountID)
         guard !sessions.isEmpty else { return nil }
 
         let sorted = sessions.sorted { $0.lastUpdated > $1.lastUpdated }
@@ -170,11 +201,39 @@ actor PlaybackSessionService {
         return winner
     }
 
-    private func fetchAllCurrentSessions() -> [PlaybackSession] {
-        let descriptor = FetchDescriptor<PlaybackSession>(
-            predicate: #Predicate { $0.id == "current" }
-        )
-        return (try? modelContext.fetch(descriptor)) ?? []
+    private func fetchAllCurrentSessions(in modelContext: ModelContext, accountID: UUID? = nil) -> [PlaybackSession] {
+        // At most one current row per account, plus pre-existing sync duplicates. Filtering this
+        // small collection avoids changing the persisted model or guessing a legacy row's owner.
+        let sessions = (try? modelContext.fetch(FetchDescriptor<PlaybackSession>())) ?? []
+        if let accountID { return sessions.filter { $0.id.hasPrefix(PlaybackCheckpointIdentity.prefix(for: accountID)) } }
+        return sessions.filter { $0.id == "current" }
+    }
+
+    func hasSession(for accountID: UUID) -> Bool {
+        !fetchAllCurrentSessions(in: ModelContext(modelContainer), accountID: accountID).isEmpty
+    }
+
+    func hasLegacySession() -> Bool {
+        let context = ModelContext(modelContainer)
+        return fetchAllCurrentSessions(in: context).contains { !$0.decodedQueue().isEmpty }
+    }
+
+    /// Explicit recovery copies an unowned legacy queue; it never removes or relabels the
+    /// original and never replaces a session already saved for the selected account.
+    func copyLegacySession(to accountID: UUID, publication: PlaybackPublication) -> Bool {
+        guard publication.isCurrent else { return false }
+        let context = ModelContext(modelContainer)
+        guard fetchAllCurrentSessions(in: context, accountID: accountID).isEmpty,
+              let legacy = fetchAllCurrentSessions(in: context).max(by: { $0.lastUpdated < $1.lastUpdated }) else { return false }
+        let queue = legacy.decodedQueue()
+        guard !queue.isEmpty else { return false }
+        let index = min(max(0, legacy.currentIndex), queue.count - 1)
+        let identity = PlaybackCheckpointIdentity(accountID: accountID, trackID: queue[index].id,
+            queueIndex: index, revision: UUID().uuidString)
+        save(playerState: SessionPayload(currentIndex: index, currentPosition: max(0, legacy.currentPosition),
+            queue: queue, currentTrack: queue[index], repeatMode: legacy.decodedRepeatMode()),
+             identity: identity, publication: publication)
+        return fetchAllCurrentSessions(in: ModelContext(modelContainer), accountID: accountID).contains { $0.id == identity.storageKey }
     }
 }
 

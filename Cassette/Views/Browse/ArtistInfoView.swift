@@ -89,7 +89,7 @@ struct ArtistInfoView: View {
             }
         }
         .ignoresSafeArea(.container, edges: .top)
-        .cassetteHideTopScrollEdgeEffect()
+        .cassetteSoftTopScrollEdge()
         .background(pageColor.ignoresSafeArea())
         .navigationTitle("")
         #if os(iOS)

@@ -31,7 +31,9 @@ private final class ADLibraryStub: LibraryServiceProtocol {
     /// empty-but-successful (200, no songs) path that the catch block can't catch.
     func song(id: String) async throws -> Song { throw URLError(.unknown) }
     var albumResult: AlbumID3?
+    var albumOperation: (() async throws -> AlbumID3)?
     func album(id: String) async throws -> AlbumID3 {
+        if let albumOperation { return try await albumOperation() }
         if let albumResult { return albumResult }
         throw URLError(.notConnectedToInternet)
     }
@@ -103,9 +105,88 @@ private final class ADDownloadStub: DownloadServiceProtocol {
 @Suite("AlbumDetailViewModel — offline local fallback")
 @MainActor
 struct AlbumDetailOfflineTests {
+    @Test func successfulOnlineCatalogPublishesAllTracksTogether() async throws {
+        let library = ADLibraryStub()
+        var pending: CheckedContinuation<AlbumID3, any Error>?
+        library.albumOperation = { try await withCheckedThrowingContinuation { pending = $0 } }
+        let download = ADDownloadStub()
+        download.albumData = downloadedAlbum
+        let state = ServerState()
+        state.isOnline = true
+        state.activeServer = ServerSnapshot(from: ServerConfig(displayName: "Test", baseURL: "https://example.invalid", username: "u"))
+        let vm = AlbumDetailViewModel(albumId: "album-1", libraryService: library,
+            downloadService: download, toastService: ToastService(), serverState: state)
+        let album = try JSONDecoder().decode(AlbumID3.self, from: Data("""
+        {"id":"album-1","name":"Catalog","songCount":3,"duration":300,"created":0,"song":[{"id":"s1","title":"One","duration":100,"isDir":false},{"id":"s2","title":"Two","duration":100,"isDir":false},{"id":"s3","title":"Three","duration":100,"isDir":false}]}
+        """.utf8))
+        let load = Task { await vm.load() }
+        while pending == nil { await Task.yield() }
+        #expect(vm.songs.isEmpty)
+        #expect(!vm.isPrimaryContentReady)
+        pending?.resume(returning: album)
+        await load.value
+        #expect(vm.songs.map(\.id) == ["s1", "s2", "s3"])
+        #expect(vm.isPrimaryContentReady)
+        #expect(!vm.isOffline)
+    }
+
+    @Test func resumedCoverProgressCountsDiskFilesAndExcludesFailures() {
+        let state = AlbumCoverPreloadState()
+        state.alreadyPrepared = 60
+        state.total = 40
+        #expect(state.fraction == 0.6)
+        state.completed = 10
+        #expect(state.fraction == 0.7)
+        state.failed = 2
+        #expect(state.availableCompleted == 68)
+        #expect(state.libraryTotal == 100)
+        #expect(state.fraction == 0.68)
+    }
+
+    @Test func downloadedSubsetIsWithheldUntilOnlineCatalogOrFailure() async throws {
+        let library = ADLibraryStub()
+        var pending: CheckedContinuation<AlbumID3, any Error>?
+        library.albumOperation = { try await withCheckedThrowingContinuation { pending = $0 } }
+        let download = ADDownloadStub()
+        download.albumData = downloadedAlbum
+        let state = ServerState()
+        state.isOnline = true
+        state.activeServer = ServerSnapshot(from: ServerConfig(displayName: "Test", baseURL: "https://example.invalid", username: "u"))
+        let vm = AlbumDetailViewModel(albumId: "album-1", libraryService: library,
+            downloadService: download, toastService: ToastService(), serverState: state)
+        let load = Task { await vm.load() }
+        while pending == nil { await Task.yield() }
+        #expect(!vm.isPrimaryContentReady)
+        #expect(vm.songs.isEmpty)
+        #expect(vm.isLoading)
+        pending?.resume(throwing: URLError(.timedOut))
+        await load.value
+        #expect(vm.songs.count == 2)
+        #expect(vm.isPrimaryContentReady)
+        #expect(vm.error == nil)
+        #expect(!vm.isLoading)
+    }
+
+    @Test func oversizedValidCoverIsDecodedWithoutRefetching() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var data = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVQI12NgAAAAAgAB4iG8MwAAAABJRU5ErkJggg=="))
+        data.append(Data(repeating: 0, count: 300_000))
+        try data.write(to: file)
+        let download = ADDownloadStub()
+        download.coverURLs["cover@thumb"] = file
+        let library = SearchLibraryStub()
+        let cache = ArtworkImageCache(downloadService: download, libraryService: library)
+        #expect(await cache.load(coverArtId: "cover", tier: .thumb) != nil)
+        #expect(library.coverSizes.isEmpty)
+    }
+
     @Test("Uncached Automatic and Lossless request original bytes without negotiation on both networks")
     func uncachedOriginalRouting() async throws {
-        let settings = StreamingSettings()
+        let suite = "CassetteResolverTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = StreamingSettings(defaults: defaults)
         let oldWiFi = settings.wifiFormat
         let oldCellular = settings.cellularFormat
         defer {
@@ -137,17 +218,19 @@ struct AlbumDetailOfflineTests {
         let jellyfin = JellyfinService(serverService: server, keychain: MockKeychain(),
             modelContainer: try ModelContainer.cassette(inMemory: true),
             deviceIdentity: .init(id: "test", name: "Test", clientName: "Cassette", clientVersion: "1"), session: session)
+        let serverID = try #require(server.state.activeServer?.id)
         let resolver = MediaResolver(downloadService: ADDownloadStub(), cacheService: MockCacheService(),
             serverService: server, serverState: server.state, streamingSettings: settings, jellyfinService: jellyfin)
         for (index, client) in clients.enumerated() {
+            settings.jellyfinRoute = .automatic
             server.musicClient = client
             for format in [CacheFormat.matchStream, .flacOriginal] {
                 settings.wifiFormat = format
                 settings.cellularFormat = format
                 for cellular in [false, true] {
                     server.state.isExpensive = cellular
-                    let source = try await resolver.resolve(songId: songID, serverId: UUID(), song: song)
-                    guard case .stream(let url, let headers, let context, _) = source else {
+                    let source = try await resolver.resolve(songId: songID, serverId: serverID, song: song)
+                    guard case .stream(let url, let headers, let context, _, _) = source else {
                         Issue.record("Expected an original network stream")
                         return
                     }
@@ -163,28 +246,47 @@ struct AlbumDetailOfflineTests {
                     #expect(!AudioQualityClassifier.isLossyTranscodeStream(source))
                 }
             }
-            settings.wifiFormat = .aac256
-            settings.cellularFormat = .aac256
+            // The Wi-Fi preset must not leak into cellular playback, and source FLAC
+            // must not override explicitly selected AAC/Opus in Automatic delivery mode.
+            settings.wifiFormat = .flacOriginal
+            server.state.isCellularConnection = true
+            server.state.isExpensive = false // The concrete cellular path alone is sufficient.
+            // Exercise both music-client adapters without HLS negotiation. The separate
+            // routing policy tests cover HLS-capable PlaybackInfo responses.
+            let qualityResolver = MediaResolver(downloadService: ADDownloadStub(), cacheService: MockCacheService(),
+                serverService: server, serverState: server.state, streamingSettings: settings)
             let incompleteSong = DisplayableSong(id: songID, title: "Incomplete", audioFormat: "flac")
-            let converted = try await resolver.resolve(songId: songID, serverId: UUID(), song: incompleteSong)
-            guard case .stream(let url, _, _, _) = converted else {
-                Issue.record("Expected a converted network stream")
-                return
+            for quality in [CacheFormat.aac256, .aac128, .opus_128] {
+                settings.cellularFormat = quality
+                for route in [JellyfinPlaybackRoute.automatic, .openSubsonic] {
+                    settings.jellyfinRoute = route
+                    let converted = try await qualityResolver.resolve(songId: songID, serverId: serverID, song: incompleteSong)
+                    guard case .stream(let url, _, _, _, _) = converted else {
+                        Issue.record("Expected a converted network stream")
+                        return
+                    }
+                    let codec = try #require(quality.subsonicFormat)
+                    if index == 0 {
+                        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                        #expect(query.first { $0.name == "format" }?.value == codec)
+                        #expect(query.first { $0.name == "maxBitRate" }?.value == String(quality.subsonicMaxBitRate!))
+                    } else {
+                        #expect(url.path == "/proxy/jellyfin/Audio/\(guid)/stream.\(codec)")
+                        #expect(url.absoluteString.contains("Static=false"))
+                    }
+                    #expect(AudioQualityClassifier.isLossyTranscodeStream(converted))
+                }
             }
-            if index == 0 {
-                let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-                #expect(query.first { $0.name == "format" }?.value == "aac")
-            } else {
-                #expect(url.path == "/proxy/jellyfin/Audio/\(guid)/stream.aac")
-                #expect(url.absoluteString.contains("Static=false"))
-            }
-            #expect(AudioQualityClassifier.isLossyTranscodeStream(converted))
+            server.state.isCellularConnection = false
         }
     }
 
     @Test("Cached audio wins over lossless quality and bitstream streaming, online or offline")
     func cachedAudioHasPriority() async throws {
-        let settings = StreamingSettings()
+        let suite = "CassetteResolverTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = StreamingSettings(defaults: defaults)
         let oldWiFi = settings.wifiFormat
         let oldCellular = settings.cellularFormat
         defer {
@@ -207,7 +309,7 @@ struct AlbumDetailOfflineTests {
                 for format in ["FLAC", "EAC3"] {
                     let track = DisplayableSong(id: "cached", title: "Track", audioFormat: format)
                     let source = try await resolver.resolve(songId: track.id, serverId: UUID(), song: track)
-                    guard case .cached(let url) = source else {
+                    guard case .cached(let url, _) = source else {
                         Issue.record("A cached track must be resolved before streaming quality or routing")
                         return
                     }
@@ -215,6 +317,80 @@ struct AlbumDetailOfflineTests {
                 }
             }
         }
+    }
+
+    @Test("Manual server routes bypass Automatic fast paths and keep their original names")
+    func manualStreamingRoutes() async throws {
+        let suite = "CassetteManualRoutes." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = StreamingSettings(defaults: defaults)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UnexpectedPlaybackRequest.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let baseURL = try #require(URL(string: "https://music.example.com/proxy"))
+        let guid = "1234567890abcdef1234567890abcdef"
+        let songID = try #require(NavidromeJellyfinIDCodec.canonicalID(fromJellyfinGUID: guid))
+        let song = DisplayableSong(id: songID, title: "Original", audioFormat: "flac",
+            bitRate: 1_411, bitDepth: 16, samplingRate: 44_100, channelCount: 2)
+        let server = MockServerService()
+        server.state.isOnline = true
+        let serverID = UUID()
+        server.state.activeServer = ServerSnapshot(from: ServerConfig(id: serverID,
+            displayName: "Test", baseURL: baseURL.absoluteString, username: "u"))
+        server.credentials = ServerCredentials(password: "p", customHeaders: ["X-Test": "preserved"], jellyfinAccessToken: "test-token")
+        server.musicClient = SwiftSonicClient(configuration: ServerConfiguration(serverURL: baseURL, username: "u", password: "p"),
+            transport: StubHTTPTransport(outcome: .urlError(.unsupportedURL)), retryPolicy: .none)
+        let jellyfin = JellyfinService(serverService: server, keychain: MockKeychain(),
+            modelContainer: try ModelContainer.cassette(inMemory: true),
+            deviceIdentity: .init(id: "test", name: "Test", clientName: "Cassette", clientVersion: "1"), session: session)
+        let resolver = MediaResolver(downloadService: ADDownloadStub(), cacheService: MockCacheService(),
+            serverService: server, serverState: server.state, streamingSettings: settings, jellyfinService: jellyfin)
+        let cases: [(JellyfinPlaybackRoute, String, String)] = [
+            (.directPlay, "/Audio/" + guid + "/stream", "Direct Play"),
+            (.universal, "/Audio/" + guid + "/universal", "Universal Transcoding"),
+            (.hls, "/Audio/" + guid + "/main.m3u8", "HLS"),
+            (.originalFile, "/Items/" + guid + "/File", "Original File"),
+            (.openSubsonic, "/rest/stream", "OpenSubsonic"),
+        ]
+        for format in [CacheFormat.aac128, .flacOriginal] {
+            settings.wifiFormat = format
+            for (route, path, name) in cases {
+                settings.jellyfinRoute = route
+                let source = try await resolver.resolve(songId: songID, serverId: serverID, song: song)
+                #expect(source.url.path.contains(path))
+                #expect(source.customHeaders["X-Test"] == "preserved")
+                #expect(PlaybackDetails(source: source, usesSystemPlayer: true).method.rawValue == name)
+                if route != .openSubsonic { #expect(source.jellyfinPlaybackContext?.route == route) }
+                if route == .universal { #expect(source.url.absoluteString.contains("Static=false")) }
+            }
+        }
+    }
+
+    @Test("Unsupported manual Jellyfin routing fails instead of silently switching methods")
+    func unavailableManualRoute() async throws {
+        let suite = "CassetteUnsupportedRoute." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = StreamingSettings(defaults: defaults)
+        settings.jellyfinRoute = .hls
+        let server = MockServerService()
+        server.state.isOnline = true
+        server.state.activeServer = ServerSnapshot(from: ServerConfig(
+            displayName: "Test", baseURL: "https://example.invalid", username: "test"))
+        let serverID = try #require(server.state.activeServer?.id)
+        let cache = MockCacheService()
+        let resolver = MediaResolver(downloadService: ADDownloadStub(), cacheService: cache,
+            serverService: server, serverState: server.state, streamingSettings: settings)
+        let song = DisplayableSong(id: "not-jellyfin", title: "Track", audioFormat: "flac")
+        do {
+            _ = try await resolver.resolve(songId: song.id, serverId: serverID, song: song)
+            Issue.record("An unavailable explicit route must not be replaced by an automatic original URL")
+        } catch CassetteError.playbackMethodUnavailable { }
+        cache.cachedFileURL = URL(fileURLWithPath: "/tmp/cached-track.aac")
+        let local = try await resolver.resolve(songId: song.id, serverId: serverID, song: song)
+        #expect(local.isLocal)
     }
 
     @Test("Album separators retain their width and contrast on light and dark backgrounds")
@@ -227,7 +403,13 @@ struct AlbumDetailOfflineTests {
                 renderer.scale = 2
                 let image = try #require(renderer.cgImage)
                 #expect(image.width == Int(width * 2))
+                // The production divider has always been 0.5 pt on iOS and 1 pt on
+                // macOS. Keep an exact pixel assertion at the explicit 2x render scale.
+                #if os(iOS)
+                #expect(image.height == 1)
+                #else
                 #expect(image.height == 2)
+                #endif
                 var pixel = [UInt8](repeating: 0, count: 4)
                 let sampled = pixel.withUnsafeMutableBytes { bytes -> Bool in
                     guard let context = CGContext(data: bytes.baseAddress, width: 1, height: 1,
@@ -426,7 +608,8 @@ struct AlbumDetailOfflineTests {
         screen.cancel()
         await screen.value
         #expect(preload.isDeferred)
-        #expect(preload.state.isDownloading)
+        #expect(preload.state.isResolvingInventory)
+        #expect(!preload.state.isDownloading)
         #expect(library.allAlbumsCallCount == 1)
         #expect(scheduled >= 1)
         var backgroundJoined = false
@@ -490,6 +673,7 @@ struct AlbumDetailOfflineTests {
         await preload.downloadAllCovers()
         #expect(preload.state.isComplete)
         #expect(preload.state.alreadyPrepared == 1)
+        #expect(preload.state.fraction == 1)
         #expect(preload.state.total == 0)
         #expect(preload.state.failed == 0)
     }

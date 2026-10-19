@@ -15,6 +15,7 @@ nonisolated enum PersonalMixKind: String, Sendable, Hashable, CaseIterable {
     case essentials
     case getUp
     case chill
+    case focus
 
     var localizationKey: String {
         switch self {
@@ -23,6 +24,7 @@ nonisolated enum PersonalMixKind: String, Sendable, Hashable, CaseIterable {
         case .essentials: return "Your Essentials"
         case .getUp: return "Get Up!"
         case .chill: return "Chill"
+        case .focus: return "Focus"
         }
     }
 
@@ -34,6 +36,7 @@ nonisolated enum PersonalMixKind: String, Sendable, Hashable, CaseIterable {
         case .essentials: return ("#C44B9F", "#4A1638")
         case .getUp: return ("#F0A202", "#8B3A00")
         case .chill: return ("#3DB8A0", "#0F3D36")
+        case .focus: return ("#62D6D1", "#302478")
         }
     }
 }
@@ -43,6 +46,7 @@ nonisolated struct PersonalMix: Identifiable, Sendable, Hashable {
     let tracks: [DisplayableSong]
     /// Up to ~6 artist names for the card subtitle.
     let artistNames: [String]
+    var updatedAt: Date = Date()
 
     var id: String { kind.rawValue }
 }
@@ -52,6 +56,9 @@ nonisolated struct PersonalMix: Identifiable, Sendable, Hashable {
 actor PersonalMixService {
     private let libraryService: any LibraryServiceProtocol
     private let statsService: StatsService
+    private let serverState: ServerState?
+    private let now: @Sendable () -> Date
+    private var generation: UInt64 = 0
 
     private var cached: [PersonalMix] = []
     private var cachedAt: Date?
@@ -72,15 +79,24 @@ actor PersonalMixService {
         "soul", "lo-fi", "lofi", "classical", "chill", "folk"
     ]
 
-    init(libraryService: any LibraryServiceProtocol, statsService: StatsService) {
+    init(libraryService: any LibraryServiceProtocol, statsService: StatsService, serverState: ServerState? = nil,
+         now: @escaping @Sendable () -> Date = { Date() }) {
+        self.serverState = serverState
         self.libraryService = libraryService
         self.statsService = statsService
+        self.now = now
     }
 
     func mixes(serverId: String?, forceRefresh: Bool = false, limit: Int? = nil) async -> [PersonalMix] {
+        let identity = await requestIdentity(serverId: serverId)
+        guard serverState == nil || identity != nil else { return [] }
+        if cachedServerId != serverId || forceRefresh || cachedAt.map({ now().timeIntervalSince($0) >= Self.ttl }) == true {
+            clearCache(); cachedServerId = serverId
+        }
+        let revision = generation
         if !forceRefresh,
            let cachedAt,
-           Date().timeIntervalSince(cachedAt) < Self.ttl,
+           now().timeIntervalSince(cachedAt) < Self.ttl,
            cachedServerId == serverId,
            !cached.isEmpty {
             if let limit {
@@ -101,11 +117,12 @@ actor PersonalMixService {
         // Sequential builders — five `async let` fans out dozens of getAlbum / getSongsByGenre /
         // getTopSongs on plain HTTP and can RST the CFNetwork pool (HTTP/2 / QUIC parse failures).
         // Callers can pass `limit: 1` to paint the first card, then call again without a limit.
-        let kinds: [PersonalMixKind] = [.newMusic, .heavyRotation, .essentials, .getUp, .chill]
+        let kinds: [PersonalMixKind] = [.newMusic, .heavyRotation, .essentials, .getUp, .chill, .focus]
         var built = cached
         let have = Set(built.map(\.kind))
 
         for kind in kinds {
+            guard await isCurrent(identity, generation: revision) else { return [] }
             if let limit, built.count >= limit { break }
             if have.contains(kind) { continue }
             let mix: PersonalMix?
@@ -115,28 +132,47 @@ actor PersonalMixService {
             case .essentials: mix = await buildEssentials(serverId: serverId)
             case .getUp: mix = await buildGenreMix(kind: .getUp, genres: Self.getUpGenres)
             case .chill: mix = await buildGenreMix(kind: .chill, genres: Self.chillGenres)
+            case .focus: mix = await buildGenreMix(kind: .focus, genres: ["ambient", "classical", "instrumental", "lo-fi"])
             }
             if let mix {
                 built.append(mix)
             }
         }
 
+        guard await isCurrent(identity, generation: revision) else { return [] }
         cached = built
         cachedServerId = serverId
         if limit == nil {
             cachedComplete = true
-            cachedAt = Date()
+            cachedAt = now()
         } else {
             cachedComplete = false
             // Soft TTL so a crashed progressive fill can retry soon.
-            if cachedAt == nil { cachedAt = Date() }
+            if cachedAt == nil { cachedAt = now() }
         }
         Logger.recommendations.debug("Personal mixes: \(built.count, privacy: .public) card(s)")
         if let limit { return Array(built.prefix(limit)) }
         return built
     }
 
+    private func requestIdentity(serverId: String?) async -> ServerRequestIdentity? {
+        guard let serverState else { return nil }
+        return await MainActor.run {
+            guard let sid = serverState.activeServer?.id, sid.uuidString == serverId else { return nil }
+            return try? serverState.requestIdentity(for: sid)
+        }
+    }
+
+    private func isCurrent(_ identity: ServerRequestIdentity?, generation revision: UInt64) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        if let serverState, let identity {
+            guard await MainActor.run(body: { serverState.requestIsCurrent(identity) }) else { return false }
+        }
+        return revision == generation
+    }
+
     func clearCache() {
+        generation &+= 1
         cached = []
         cachedAt = nil
         cachedServerId = nil
@@ -145,9 +181,15 @@ actor PersonalMixService {
 
     /// Rebuilds (or returns cached) a single mix kind — used by mix detail refresh.
     func mix(kind: PersonalMixKind, serverId: String?, forceRefresh: Bool = false) async -> PersonalMix? {
+        let identity = await requestIdentity(serverId: serverId)
+        guard serverState == nil || identity != nil else { return nil }
+        if cachedServerId != serverId || forceRefresh || cachedAt.map({ now().timeIntervalSince($0) >= Self.ttl }) == true {
+            clearCache(); cachedServerId = serverId
+        }
+        let revision = generation
         if !forceRefresh,
            let cachedAt,
-           Date().timeIntervalSince(cachedAt) < Self.ttl,
+           now().timeIntervalSince(cachedAt) < Self.ttl,
            cachedServerId == serverId,
            let hit = cached.first(where: { $0.kind == kind }) {
             return hit
@@ -160,8 +202,10 @@ actor PersonalMixService {
         case .essentials: built = await buildEssentials(serverId: serverId)
         case .getUp: built = await buildGenreMix(kind: .getUp, genres: Self.getUpGenres)
         case .chill: built = await buildGenreMix(kind: .chill, genres: Self.chillGenres)
+        case .focus: built = await buildGenreMix(kind: .focus, genres: ["ambient", "classical", "instrumental", "lo-fi"])
         }
 
+        guard await isCurrent(identity, generation: revision) else { return nil }
         if let built {
             if let idx = cached.firstIndex(where: { $0.kind == kind }) {
                 cached[idx] = built
@@ -169,7 +213,7 @@ actor PersonalMixService {
                 cached.append(built)
             }
             cachedServerId = serverId
-            if cachedAt == nil { cachedAt = Date() }
+            if cachedAt == nil { cachedAt = now() }
         } else {
             cached.removeAll { $0.kind == kind }
         }
@@ -340,7 +384,7 @@ actor PersonalMixService {
     private func makeMix(kind: PersonalMixKind, tracks: [DisplayableSong]) -> PersonalMix? {
         guard tracks.count >= Self.minTracks else { return nil }
         let names = Self.uniqueArtistNames(from: tracks, limit: Self.subtitleArtistLimit)
-        return PersonalMix(kind: kind, tracks: Array(tracks.prefix(Self.targetTracks)), artistNames: names)
+        return PersonalMix(kind: kind, tracks: Array(tracks.prefix(Self.targetTracks)), artistNames: names, updatedAt: now())
     }
 
     private static func uniqueArtistNames(from tracks: [DisplayableSong], limit: Int) -> [String] {

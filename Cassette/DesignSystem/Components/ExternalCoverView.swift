@@ -25,10 +25,12 @@ struct ExternalCoverView<Placeholder: View>: View {
                 placeholder()
             }
         }
-        .task(id: url) {
+        .task(id: "\(url?.absoluteString ?? ""):\(container?.serverState.isCellularConnection == true):\(container?.serverState.isOnline == true)") {
             image = nil
             guard let url else { return }
-            image = await container?.externalArtworkCache.image(for: url)
+            let allowed = ArtworkNetworkPolicy.allowsDownload(isOnline: container?.serverState.isOnline ?? true,
+                                                             isCellular: container?.serverState.isCellularConnection ?? false)
+            image = await container?.externalArtworkCache.image(for: url, allowNetwork: allowed)
         }
     }
 }

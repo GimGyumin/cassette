@@ -20,9 +20,11 @@ final class DownloadedTrack {
     var jellyfinID: String?
     var serverId: UUID
     var albumId: String?
-    var filePath: String        // relative to Documents/app.cassette/downloads/
+    var filePath: String        // relative to the shared Documents/app.cassette/audio/ inventory
     var fileSize: Int64
     var mimeType: String
+    /// Optional for a lightweight migration. Unknown legacy files are not reused as Atmos originals.
+    var isOriginalAudio: Bool?
     var downloadedAt: Date
     // Denormalized metadata for offline display (no network required in offline mode)
     var title: String
@@ -66,6 +68,7 @@ final class DownloadedTrack {
         filePath: String,
         fileSize: Int64,
         mimeType: String,
+        isOriginalAudio: Bool? = nil,
         downloadedAt: Date = Date(),
         title: String,
         artist: String? = nil,
@@ -104,6 +107,7 @@ final class DownloadedTrack {
         self.filePath = filePath
         self.fileSize = fileSize
         self.mimeType = mimeType
+        self.isOriginalAudio = isOriginalAudio
         self.downloadedAt = downloadedAt
         self.title = title
         self.artist = artist

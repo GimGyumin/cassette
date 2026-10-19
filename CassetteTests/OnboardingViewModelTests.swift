@@ -76,7 +76,9 @@ final class MockServerService: ServerServiceProtocol {
         guard let musicClient else { throw CassetteError.notImplemented }
         return musicClient
     }
+    var credentialsOperation: (() async throws -> ServerCredentials)?
     func activeCredentials() async throws -> ServerCredentials {
+        if let credentialsOperation { return try await credentialsOperation() }
         guard let credentials else { throw CassetteError.notImplemented }
         return credentials
     }

@@ -5,6 +5,7 @@
 
 import Testing
 import SwiftUI
+import CoreGraphics
 @testable import Cassette
 
 /// Verifies the appearance-independent raw analysis → independent Light/Dark palette
@@ -13,6 +14,30 @@ import SwiftUI
 /// are represented by representative single-color seeds here and require image fixtures
 /// for full-fidelity verification.
 struct ArtworkColorAnalysisTests {
+    @Test func whiteSleeveWithDarkPortraitAndSideLetteringDoesNotTurnSilver() throws {
+        let context = try #require(CGContext(data: nil, width: 128, height: 128, bitsPerComponent: 8,
+            bytesPerRow: 512, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 128, height: 128))
+        context.setFillColor(CGColor(gray: 0.04, alpha: 1))
+        context.fill(CGRect(x: 108, y: 0, width: 20, height: 128))
+        context.fill(CGRect(x: 30, y: 0, width: 60, height: 106))
+        let palette = AlbumColorAnalyzer.generateArtworkPalette(from: try #require(context.makeImage()))
+        let rgb = try #require(ArtworkColorMath.srgb(palette.background))
+        #expect(min(rgb.0, rgb.1, rgb.2) >= 0.95)
+        let page = AlbumAtmosphere.from(palette: palette)
+        #expect(page.isLight)
+        #expect(page.contentColor == .black)
+    }
+
+    @Test(arguments: [0.60, 0.70, 0.82])
+    func mediumGrayAlbumUsesLegibleInk(brightness: Double) throws {
+        let page = AlbumAtmosphere.from(dominantColor: Color(.sRGB, red: brightness, green: brightness, blue: brightness))
+        #expect(page.isLight)
+        #expect(page.contentColor == .black)
+        #expect(contrast(page.contentColor, on: page.pageColor) >= 4.5)
+    }
+
 
     nonisolated private static let seeds: [(name: String, color: Color)] = [
         ("pure-black", Color(red: 0.00, green: 0.00, blue: 0.00)),

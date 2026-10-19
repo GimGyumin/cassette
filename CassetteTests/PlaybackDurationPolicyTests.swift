@@ -4,6 +4,11 @@ import SwiftSonic
 @testable import Cassette
 
 struct PlaybackDurationPolicyTests {
+    @Test func offsetStreamDurationNeverChangesTheOriginalSongLength() {
+        #expect(PlaybackDurationPolicy.resolve(catalog: 180, engine: 179.2, engineIsEstimate: true, preserveCatalog: true) == 180)
+        #expect(PlaybackDurationPolicy.resolve(catalog: 180, engine: .infinity, engineIsEstimate: true, preserveCatalog: true) == 180)
+        #expect(PlaybackDurationPolicy.resolve(catalog: 0, engine: 40, engineIsEstimate: true, preserveCatalog: true) == 40)
+    }
     @Test func transcodingLengthCannotInflateFourMinuteSongTo101Minutes() {
         #expect(PlaybackDurationPolicy.resolve(catalog: 247, engine: 6061, engineIsEstimate: true) == 247)
     }

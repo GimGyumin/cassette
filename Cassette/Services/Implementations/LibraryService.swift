@@ -13,21 +13,33 @@ actor LibraryService: LibraryServiceProtocol {
     private let modelContainer: ModelContainer
     private let downloadService: any DownloadServiceProtocol
     private let statsService: StatsService
+    private let libraryIndex: LibraryIndexService?
     private var cachedClient: SwiftSonicClient?
+    private var cachedIdentity: ServerRequestIdentity?
+    private var cacheGeneration: UInt64 = 0
+    private nonisolated struct Token: Sendable {
+        let identity: ServerRequestIdentity
+        let generation: UInt64
+    }
+    private nonisolated struct Flight<Value: Sendable>: Sendable {
+        let id = UUID()
+        let task: Task<Value, Error>
+    }
     private var artistNameIndex: [String: ArtistID3]?
     private var indexBuildTask: Task<Void, Never>?
-    private var artistInfoCache: [String: ArtistInfo] = [:]
+    private nonisolated struct CachedArtistInfo { let info: ArtistInfo; let requestedCount: Int }
+    private var artistInfoCache = ExpiringBoundedCache<String, CachedArtistInfo>(countLimit: 128, costLimit: 8_000, lifetime: 300)
     /// Short-lived detail caches — cut repeat getArtist/getAlbum when album↔artist navigation stacks.
-    private var artistDetailCache: [String: ArtistID3] = [:]
-    private var albumDetailCache: [String: AlbumID3] = [:]
-    private var artistInFlight: [String: Task<ArtistID3, Error>] = [:]
-    private var albumInFlight: [String: Task<AlbumID3, Error>] = [:]
+    private var artistDetailCache = ExpiringBoundedCache<String, ArtistID3>(countLimit: 64, costLimit: 8_000, lifetime: 300)
+    private var albumDetailCache = ExpiringBoundedCache<String, AlbumID3>(countLimit: 128, costLimit: 20_000, lifetime: 300)
+    private var artistInFlight: [String: Flight<ArtistID3>] = [:]
+    private var albumInFlight: [String: Flight<AlbumID3>] = [:]
     /// Similar-artist counts satisfied by each cached ArtistInfo (so count:0 can't block count:20).
-    private var artistInfoCachedCount: [String: Int] = [:]
     /// Coalesce concurrent getAlbumList2 / getStarred2 (Home + Library + Discover stampede).
     private var albumListCache: [String: [AlbumID3]] = [:]
-    private var albumListInFlight: [String: Task<[AlbumID3], Error>] = [:]
-    private var starred2InFlight: Task<Starred2, Error>?
+    private var albumListInFlight: [String: Flight<[AlbumID3]>] = [:]
+    private var starred2InFlight: (id: UUID, task: Task<Starred2, Error>)?
+    private var starred2Generation: UInt64 = 0
     private var starred2Cached: Starred2?
     private var starred2CachedAt: Date?
     nonisolated private static let starred2TTL: TimeInterval = 30
@@ -39,74 +51,135 @@ actor LibraryService: LibraryServiceProtocol {
     /// one independently re-pages the library and storms `getAlbumList2`.
     private var allAlbumsCached: [AlbumID3]?
     private var allAlbumsCachedAt: Date?
-    private var allAlbumsInFlight: Task<[AlbumID3], Error>?
+    private var allAlbumsInFlight: Flight<[AlbumID3]>?
+    private var albumPresentationCatalog: AtmosVariantCatalogue?
 
     init(
         serverService: any ServerServiceProtocol,
         modelContainer: ModelContainer,
         downloadService: any DownloadServiceProtocol,
-        statsService: StatsService
+        statsService: StatsService,
+        libraryIndex: LibraryIndexService? = nil
     ) {
         self.serverService = serverService
         self.modelContainer = modelContainer
         self.downloadService = downloadService
         self.statsService = statsService
+        self.libraryIndex = libraryIndex
+    }
+
+    func presentedAlbums(_ albums: [AlbumID3]) async -> [AlbumID3] {
+        if let cachedIdentity,
+           !(await MainActor.run { serverService.state.requestIsCurrent(cachedIdentity) }) { return [] }
+        if let albumPresentationCatalog { return albumPresentationCatalog.presented(albums) }
+        guard let libraryIndex else { return AtmosAlbumPolicy.presented(albums) }
+        return await libraryIndex.presentedAlbums(albums)
+    }
+
+    func displayAlbum(id: String) async throws -> AlbumID3 {
+        let requested = try await album(id: id)
+        let token = try token()
+        // getArtist is bounded to this artist and provides a cold-start pairing without
+        // waiting for an entire library scan. Missing artist metadata stays unmerged.
+        let siblings: [AlbumID3]
+        if let artistID = requested.artistId {
+            siblings = (try? await artist(id: artistID).album) ?? [requested]
+        } else if let libraryIndex {
+            siblings = await libraryIndex.variantAlbums(for: requested)
+        } else { siblings = [requested] }
+        try await requireCurrent(token)
+        let catalog = siblings.contains(where: { $0.id == requested.id }) ? siblings : siblings + [requested]
+        let pairs = AtmosAlbumPolicy.pairs(in: catalog)
+        let baseID = pairs[requested.id] ?? requested.id
+        let base = baseID == requested.id ? requested : try await album(id: baseID)
+        try await requireCurrent(token)
+        var entries = base.song ?? []
+        let originals = entries.map { DisplayableSong(from: $0) }
+        var versions = [base]
+        for variant in catalog where pairs[variant.id] == baseID {
+            let detail = try? await album(id: variant.id)
+            try await requireCurrent(token)
+            if let detail { versions.append(detail) }
+            for song in detail?.song ?? [] {
+                let candidate = DisplayableSong(from: song)
+                // Retain every original occurrence; only append variant-exclusive songs.
+                if !originals.contains(where: { AtmosVariantCatalogue.compatible($0, candidate) }),
+                   !entries.contains(where: { $0.id == song.id }) { entries.append(song) }
+            }
+        }
+        if let libraryIndex {
+            await libraryIndex.registerAlbumVersions(versions, serverId: token.identity.serverID)
+            try await requireCurrent(token)
+        }
+        if entries.map(\.id) == (base.song ?? []).map(\.id) { return base }
+        return AtmosAlbumPolicy.combining(base, songs: entries)
     }
 
     private func client() async throws -> SwiftSonicClient {
-        // Fast path: cached client returned without touching the MainActor.
-        // The periodic player time observer fires on the MainActor every 0.5s during playback,
-        // so any await MainActor.run on the hot path causes multi-second stalls.
-        if let cached = cachedClient {
-            Logger.library.debug("[CLIENT] cache hit")
-            return cached
+        let identity = try await MainActor.run {
+            guard let sid = serverService.state.activeServer?.id else { throw CassetteError.serverNotConfigured }
+            return try serverService.state.requestIdentity(for: sid)
         }
-        Logger.library.debug("[CLIENT] cache miss → makeSwiftSonicClient")
+        if let cachedClient, cachedIdentity == identity { return cachedClient }
+        if cachedIdentity != identity {
+            clearClientCache()
+            cachedIdentity = identity
+        }
+        let generation = cacheGeneration
         let fresh = try await serverService.makeSwiftSonicClient()
-        Logger.library.debug("[CLIENT] ← makeSwiftSonicClient done")
+        try await requireCurrent(Token(identity: identity, generation: generation))
         cachedClient = fresh
-        artistInfoCache = [:]
-        artistInfoCachedCount = [:]
-        artistDetailCache = [:]
-        albumDetailCache = [:]
-        artistInFlight = [:]
-        albumInFlight = [:]
-        albumListCache = [:]
-        albumListCachedAt = [:]
-        albumListInFlight = [:]
-        allAlbumsCached = nil
-        allAlbumsCachedAt = nil
-        allAlbumsInFlight = nil
-        starred2InFlight = nil
-        starred2Cached = nil
-        starred2CachedAt = nil
-        artistNameIndex = nil
-        indexBuildTask = nil
         return fresh
     }
 
-    func invalidateClientCache() async {
+    private func token() throws -> Token {
+        guard let cachedIdentity else { throw CancellationError() }
+        return Token(identity: cachedIdentity, generation: cacheGeneration)
+    }
+
+    private func requireCurrent(_ token: Token) async throws {
+        try Task.checkCancellation()
+        guard await MainActor.run(body: { serverService.state.requestIsCurrent(token.identity) }),
+              token.generation == cacheGeneration, token.identity == cachedIdentity else { throw CancellationError() }
+    }
+
+    private func read<T: Sendable>(_ body: (SwiftSonicClient) async throws -> T) async throws -> T {
+        let client = try await client()
+        let token = try token()
+        let result = try await body(client)
+        try await requireCurrent(token)
+        return result
+    }
+
+    func invalidateClientCache() async { clearClientCache() }
+
+    func trimDetailCaches() {
+        artistInfoCache.removeAll()
+        artistDetailCache.removeAll()
+        albumDetailCache.removeAll()
+    }
+
+    private func clearClientCache() {
+        cacheGeneration &+= 1
+        cachedIdentity = nil
+
         cachedClient = nil
-        artistInfoCache = [:]
-        artistInfoCachedCount = [:]
-        artistDetailCache = [:]
-        albumDetailCache = [:]
-        for task in artistInFlight.values { task.cancel() }
-        for task in albumInFlight.values { task.cancel() }
-        for task in albumListInFlight.values { task.cancel() }
-        starred2InFlight?.cancel()
+        trimDetailCaches()
+        for flight in artistInFlight.values { flight.task.cancel() }
+        for flight in albumInFlight.values { flight.task.cancel() }
+        for flight in albumListInFlight.values { flight.task.cancel() }
+        starred2InFlight?.task.cancel()
         artistInFlight = [:]
         albumInFlight = [:]
         albumListCache = [:]
         albumListCachedAt = [:]
         albumListInFlight = [:]
         allAlbumsCached = nil
+        albumPresentationCatalog = nil
         allAlbumsCachedAt = nil
-        allAlbumsInFlight?.cancel()
+        allAlbumsInFlight?.task.cancel()
         allAlbumsInFlight = nil
-        starred2InFlight = nil
-        starred2Cached = nil
-        starred2CachedAt = nil
+        invalidateStarredCache()
         artistNameIndex = nil
         indexBuildTask?.cancel()
         indexBuildTask = nil
@@ -114,94 +187,77 @@ actor LibraryService: LibraryServiceProtocol {
     }
 
     func artists() async throws -> [ArtistIndex] {
-        try await client().getArtists()
+        try await read { try await $0.getArtists() }
     }
 
     func artist(id: String) async throws -> ArtistID3 {
-        if let cached = artistDetailCache[id] {
-            Logger.library.debug("[ARTIST] cache hit id=\(id, privacy: .public)")
-            return cached
-        }
+        let client = try await client()
+        let token = try token()
+        if let cached = artistDetailCache.value(forKey: id) { return cached }
         if let existing = artistInFlight[id] {
-            Logger.library.debug("[ARTIST] coalesce in-flight id=\(id, privacy: .public)")
-            return try await existing.value
-        }
-
-        Logger.library.debug("[ARTIST] artist(id:) START id=\(id, privacy: .public)")
-        let task = Task<ArtistID3, Error> {
-            let c = try await self.client()
-            Logger.library.debug("[ARTIST] → client().getArtist")
-            let t0 = Date()
-            let result = try await c.getArtist(id: id)
-            let elapsed = String(format: "%.2f", Date().timeIntervalSince(t0))
-            Logger.library.debug("[ARTIST] ← client().getArtist done \(elapsed, privacy: .public)s")
+            let result = try await existing.task.value
+            try await requireCurrent(token)
             return result
         }
-        artistInFlight[id] = task
-        defer { artistInFlight[id] = nil }
-
-        do {
-            let result = try await task.value
-            artistDetailCache[id] = result
-            return result
-        } catch {
-            throw error
-        }
+        let flight = Flight(task: Task { try await client.getArtist(id: id) })
+        artistInFlight[id] = flight
+        defer { if artistInFlight[id]?.id == flight.id { artistInFlight[id] = nil } }
+        let result = try await flight.task.value
+        try await requireCurrent(token)
+        artistDetailCache.insert(result, forKey: id, cost: 1 + (result.album?.count ?? 0))
+        return result
     }
 
     func album(id: String) async throws -> AlbumID3 {
-        if let cached = albumDetailCache[id] {
-            Logger.library.debug("[ALBUM] cache hit id=\(id, privacy: .public)")
-            return cached
-        }
+        let client = try await client()
+        let token = try token()
+        if let cached = albumDetailCache.value(forKey: id) { return cached }
         if let existing = albumInFlight[id] {
-            Logger.library.debug("[ALBUM] coalesce in-flight id=\(id, privacy: .public)")
-            return try await existing.value
+            let result = try await existing.task.value
+            try await requireCurrent(token)
+            return result
         }
-
-        let task = Task<AlbumID3, Error> {
-            try await self.client().getAlbum(id: id)
-        }
-        albumInFlight[id] = task
-        defer { albumInFlight[id] = nil }
-
-        let result = try await task.value
-        albumDetailCache[id] = result
+        let flight = Flight(task: Task { try await client.getAlbum(id: id) })
+        albumInFlight[id] = flight
+        defer { if albumInFlight[id]?.id == flight.id { albumInFlight[id] = nil } }
+        let result = try await flight.task.value
+        try await requireCurrent(token)
+        albumDetailCache.insert(result, forKey: id, cost: 1 + (result.song?.count ?? 0))
         return result
     }
 
     func albumInfo(id: String) async throws -> AlbumInfo {
-        try await client().getAlbumInfo2(id: id)
+        try await read { try await $0.getAlbumInfo2(id: id) }
     }
 
     func playlists() async throws -> [Playlist] {
-        try await client().getPlaylists()
+        try await read { try await $0.getPlaylists() }
     }
 
     func playlist(id: String) async throws -> PlaylistWithSongs {
-        try await client().getPlaylist(id: id)
+        try await read { try await $0.getPlaylist(id: id) }
     }
 
     func search(_ query: String) async throws -> SearchResult3 {
-        try await client().search3(query)
+        try await read { try await $0.search3(query) }
     }
 
     func search(_ query: String, page: SearchPageRequest) async throws -> SearchResult3 {
-        try await client().search3(
+        try await read { try await $0.search3(
             query,
             artistCount: page.artistCount, artistOffset: page.artistOffset,
             albumCount: page.albumCount, albumOffset: page.albumOffset,
             songCount: page.songCount, songOffset: page.songOffset
-        )
+        ) }
     }
 
     func song(id: String) async throws -> Song {
-        try await client().getSong(id: id)
+        try await read { try await $0.getSong(id: id) }
     }
 
     func librarySongs(offset: Int, count: Int) async throws -> [Song] {
-        try await client().search3("", artistCount: 0, albumCount: 0,
-                                   songCount: count, songOffset: offset).song ?? []
+        try await read { try await $0.search3("", artistCount: 0, albumCount: 0,
+                                   songCount: count, songOffset: offset).song ?? [] }
     }
 
     func coverArtURL(id: String, size: Int?) async -> URL? {
@@ -214,95 +270,109 @@ actor LibraryService: LibraryServiceProtocol {
         return c.streamURL(id: songId)
     }
 
+    private func invalidateStarredCache() {
+        starred2Generation &+= 1
+        starred2InFlight = nil
+        starred2Cached = nil
+        starred2CachedAt = nil
+    }
+
     func star(songIds: [String], albumIds: [String], artistIds: [String]) async throws {
-        try await client().star(songIds: songIds, albumIds: albumIds, artistIds: artistIds)
+        let client = try await client()
+        let token = try token()
+        invalidateStarredCache()
+        defer { if token.generation == cacheGeneration { invalidateStarredCache() } }
+        try await client.star(songIds: songIds, albumIds: albumIds, artistIds: artistIds)
+        try await requireCurrent(token)
     }
 
     func unstar(songIds: [String], albumIds: [String], artistIds: [String]) async throws {
-        try await client().unstar(songIds: songIds, albumIds: albumIds, artistIds: artistIds)
+        let client = try await client()
+        let token = try token()
+        invalidateStarredCache()
+        defer { if token.generation == cacheGeneration { invalidateStarredCache() } }
+        try await client.unstar(songIds: songIds, albumIds: albumIds, artistIds: artistIds)
+        try await requireCurrent(token)
     }
 
     func getStarred2() async throws -> Starred2 {
-        if let cached = starred2Cached,
-           let at = starred2CachedAt,
-           Date().timeIntervalSince(at) < Self.starred2TTL {
-            return cached
-        }
+        let client = try await client()
+        if let cached = starred2Cached, let at = starred2CachedAt,
+           Date().timeIntervalSince(at) < Self.starred2TTL { return cached }
+        let token = try token()
+        let generation = starred2Generation
         if let existing = starred2InFlight {
-            return try await existing.value
+            let result = try await existing.task.value
+            try await requireCurrent(token)
+            guard generation == starred2Generation else { throw CancellationError() }
+            return result
         }
-        let task = Task<Starred2, Error> {
-            try await self.client().getStarred2()
-        }
-        starred2InFlight = task
-        defer { starred2InFlight = nil }
+        let id = UUID()
+        let task = Task<Starred2, Error> { try await client.getStarred2() }
+        starred2InFlight = (id, task)
+        defer { if starred2InFlight?.id == id { starred2InFlight = nil } }
         let result = try await task.value
+        try Task.checkCancellation()
+        // A mutation may finish while this older request is still in transit.
+        try await requireCurrent(token)
+        guard generation == starred2Generation else { throw CancellationError() }
         starred2Cached = result
         starred2CachedAt = Date()
         return result
     }
 
     func recentlyAddedAlbums(size: Int) async throws -> [AlbumID3] {
-        try await albumList(typeKey: "newest", size: size) {
+        let result = try await albumList(typeKey: "newest", size: size) {
             try await $0.getAlbumList2(type: .newest, size: $1)
         }
+        return await presentedAlbums(result)
+    }
+
+    func albumsForIndex() async throws -> [AlbumID3] {
+        allAlbumsInFlight?.task.cancel()
+        allAlbumsInFlight = nil
+        allAlbumsCached = nil
+        allAlbumsCachedAt = nil
+        return try await allAlbums()
     }
 
     func allAlbums() async throws -> [AlbumID3] {
-        // Single-flight + short TTL: several launch paths (cover-preload reconcile, Albums list,
-        // library index, Add Music) call this independently. Coalesce them so the whole catalog
-        // is paged from the server exactly once per TTL instead of N times.
-        if let cached = allAlbumsCached,
-           let at = allAlbumsCachedAt,
-           Date().timeIntervalSince(at) < Self.allAlbumsTTL {
-            return cached
-        }
+        let client = try await client()
+        let token = try token()
+        if let cached = allAlbumsCached, let at = allAlbumsCachedAt,
+           Date().timeIntervalSince(at) < Self.allAlbumsTTL { return cached }
         if let existing = allAlbumsInFlight {
-            return try await existing.value
+            let result = try await existing.task.value
+            try await requireCurrent(token)
+            return result
         }
-        let task = Task<[AlbumID3], Error> {
-            try await self.fetchAllAlbums()
-        }
-        allAlbumsInFlight = task
-        defer { allAlbumsInFlight = nil }
-        let result = try await task.value
+        let flight = Flight(task: Task { try await self.fetchAllAlbums(client: client, token: token) })
+        allAlbumsInFlight = flight
+        defer { if allAlbumsInFlight?.id == flight.id { allAlbumsInFlight = nil } }
+        let result = try await flight.task.value
+        try await requireCurrent(token)
         allAlbumsCached = result
+        albumPresentationCatalog = AtmosVariantCatalogue(albums: result)
         allAlbumsCachedAt = Date()
         return result
     }
 
-    private func fetchAllAlbums() async throws -> [AlbumID3] {
-        Logger.library.info("allAlbums() called")
-        do {
-            // Subsonic caps `size` at 500, so a single request silently truncates large
-            // libraries. Page through the alphabetically-ordered list with `offset` until
-            // the server returns a short page (or we hit a sane upper bound).
-            let pageSize = 500
-            var all: [AlbumID3] = []
-            var seen = Set<String>()
-            var offset = 0
-            // Upper bound safety net (200 pages = 100k albums); break earlier on a short page.
-            while offset < pageSize * 200 {
-                let client = try await self.client()
-                let page = try await client.getAlbumList2(
-                    type: .alphabeticalByName,
-                    size: pageSize,
-                    offset: offset
-                )
-                // Dedupe by id so a server-side reorder mid-pagination can't double-count.
-                let fresh = page.filter { seen.insert($0.id).inserted }
-                all.append(contentsOf: fresh)
-                Logger.library.debug("allAlbums() page offset=\(offset, privacy: .public) returned=\(page.count, privacy: .public)")
-                if page.count < pageSize { break }
-                offset += pageSize
-            }
-            Logger.library.info("allAlbums() done — \(all.count, privacy: .public) items")
-            return all
-        } catch {
-            Logger.library.error("allAlbums() getAlbumList2 error: \(String(describing: error), privacy: .public)")
-            Logger.library.error("allAlbums() error type: \(type(of: error), privacy: .public)")
-            throw error
+    private func fetchAllAlbums(client: SwiftSonicClient, token: Token) async throws -> [AlbumID3] {
+        let pageSize = 500
+        var all: [AlbumID3] = []
+        var seen = Set<String>()
+        var offset = 0
+        for _ in 0..<200 {
+            try await requireCurrent(token)
+            let page = try await client.getAlbumList2(type: .alphabeticalByName, size: pageSize, offset: offset)
+            try await requireCurrent(token)
+            let fresh = page.filter { seen.insert($0.id).inserted }
+            guard !fresh.isEmpty else { break }
+            all.append(contentsOf: fresh)
+            // Servers may cap a page below 500. Stop on no progress, not a short page.
+            offset += page.count
         }
+        return all
     }
 
     func savePlayQueue(songIds: [String], currentIndex: Int, positionSeconds: Double) async throws {
@@ -358,6 +428,7 @@ actor LibraryService: LibraryServiceProtocol {
             }
 
             while let (index, songs) = await group.next() {
+                if Task.isCancelled { group.cancelAll(); break }
                 if let songs { collected.append((index, songs)) }
                 if submitted < albums.count {
                     let i = submitted
@@ -374,6 +445,7 @@ actor LibraryService: LibraryServiceProtocol {
             }
         }
 
+        try Task.checkCancellation()
         guard !collected.isEmpty else {
             Logger.library.error("[ARTIST-TRACKS] all fetches failed artistId=\(artistID, privacy: .public)")
             throw CassetteError.artistTracksUnavailable
@@ -414,22 +486,25 @@ actor LibraryService: LibraryServiceProtocol {
     }
 
     func recentlyPlayedAlbums(size: Int) async throws -> [AlbumID3] {
-        try await albumList(typeKey: "recent", size: size) {
+        let result = try await albumList(typeKey: "recent", size: size) {
             try await $0.getAlbumList2(type: .recent, size: $1)
         }
+        return await presentedAlbums(result)
     }
 
     func mostPlayedAlbums(size: Int) async throws -> [AlbumID3] {
-        try await albumList(typeKey: "frequent", size: size) {
+        let result = try await albumList(typeKey: "frequent", size: size) {
             try await $0.getAlbumList2(type: .frequent, size: $1)
         }
+        return await presentedAlbums(result)
     }
 
     func randomAlbums(size: Int) async throws -> [AlbumID3] {
         // Random lists are intentionally not long-lived-cached beyond in-flight coalesce.
-        try await albumList(typeKey: "random", size: size, cacheTTL: 8) {
+        let result = try await albumList(typeKey: "random", size: size, cacheTTL: 8) {
             try await $0.getAlbumList2(type: .random, size: $1)
         }
+        return await presentedAlbums(result)
     }
 
     /// Fetch once at the largest requested size; smaller callers share the same response.
@@ -439,38 +514,33 @@ actor LibraryService: LibraryServiceProtocol {
         cacheTTL: TimeInterval = albumListTTL,
         fetch: @escaping (SwiftSonicClient, Int) async throws -> [AlbumID3]
     ) async throws -> [AlbumID3] {
+        let client = try await client()
+        let token = try token()
         let cacheKey = typeKey
-        if let cached = albumListCache[cacheKey],
-           let at = albumListCachedAt[cacheKey],
-           Date().timeIntervalSince(at) < cacheTTL {
-            return Array(cached.prefix(size))
-        }
+        if let cached = albumListCache[cacheKey], let at = albumListCachedAt[cacheKey],
+           Date().timeIntervalSince(at) < cacheTTL { return Array(cached.prefix(size)) }
         if let existing = albumListInFlight[cacheKey] {
-            let full = try await existing.value
+            let full = try await existing.task.value
+            try await requireCurrent(token)
             return Array(full.prefix(size))
         }
-
-        // Request enough for the largest common shelf (Discover uses 35).
         let requestSize = max(size, 60)
-        let task = Task<[AlbumID3], Error> {
-            let c = try await self.client()
-            return try await fetch(c, requestSize)
-        }
-        albumListInFlight[cacheKey] = task
-        defer { albumListInFlight[cacheKey] = nil }
-
-        let full = try await task.value
+        let flight = Flight(task: Task { try await fetch(client, requestSize) })
+        albumListInFlight[cacheKey] = flight
+        defer { if albumListInFlight[cacheKey]?.id == flight.id { albumListInFlight[cacheKey] = nil } }
+        let full = try await flight.task.value
+        try await requireCurrent(token)
         albumListCache[cacheKey] = full
         albumListCachedAt[cacheKey] = Date()
         return Array(full.prefix(size))
     }
 
     func randomSongs(size: Int) async throws -> [Song] {
-        try await client().getRandomSongs(size: size)
+        try await read { try await $0.getRandomSongs(size: size) }
     }
 
     func songsByGenre(_ genre: String, count: Int) async throws -> [DisplayableSong] {
-        let songs = try await client().getSongsByGenre(genre, count: count)
+        let songs = try await read { try await $0.getSongsByGenre(genre, count: count) }
         return songs.map { DisplayableSong(from: $0) }
     }
 
@@ -486,7 +556,7 @@ actor LibraryService: LibraryServiceProtocol {
     private func onlineSmartShuffle(targetSize: Int) async throws -> [DisplayableSong] {
         // Product rule: rediscover is TRULY random — no recency weighting,
         // no `played` filtering. The server picks uniformly across the library.
-        let songs = try await client().getRandomSongs(size: targetSize)
+        let songs = try await read { try await $0.getRandomSongs(size: targetSize) }
         Logger.library.debug("Smart shuffle online: \(songs.count) random tracks (target \(targetSize))")
         return songs.map { DisplayableSong(from: $0) }
     }
@@ -545,11 +615,12 @@ actor LibraryService: LibraryServiceProtocol {
             let downloads = await offlineSmartShuffle(targetSize: targetSize + excludedIds.count)
             return Self.assembleBackfill(pool: downloads, excludedIds: excludedIds, targetSize: targetSize)
         }
-        guard let serverId = await MainActor.run(body: { serverService.state.activeServer?.id }) else {
-            return []
-        }
+        let client = try await client()
+        let token = try token()
+        let serverId = token.identity.serverID
 
         let recent = await statsService.recentEvents(limit: 20, serverId: serverId.uuidString)
+        try await requireCurrent(token)
         // Never re-serve what the user just heard.
         var excluded = excludedIds
         for event in recent { excluded.insert(event.trackId) }
@@ -558,23 +629,26 @@ actor LibraryService: LibraryServiceProtocol {
 
         // Prefer OpenSubsonic sonicSimilarity (Navidrome 0.62+ / AudioMuse-AI) when available.
         if let seedId = recent.first?.trackId,
-           let sonic = await fetchSonicSimilarTracks(seedId: seedId, count: targetSize + 10) {
+           let sonic = await fetchSonicSimilarTracks(seedId: seedId, count: targetSize + 10, client: client) {
             pool.append(contentsOf: sonic)
         }
+        try await requireCurrent(token)
 
         // No ≥30s listening history yet → degrade to pure random (after sonic attempt).
         let seeds = Self.similaritySeeds(from: recent)
         if !recent.isEmpty {
             // Cheap genre pulls first (one request each) — prefer these over album walks.
             for genre in seeds.genres {
-                if let songs = try? await client().getSongsByGenre(genre, count: Self.backfillGenreFetchCount) {
+                if let songs = try? await client.getSongsByGenre(genre, count: Self.backfillGenreFetchCount) {
                     pool.append(contentsOf: songs.map { DisplayableSong(from: $0) })
                 }
+                try await requireCurrent(token)
             }
             // Artist candidates: sample a few newest albums only — never full discographies
             // mid-playback (that stampeded getAlbum and starved the audio stream).
             for artistId in seeds.artistIds {
-                let tracks = await fetchSampleTracksForBackfill(forArtistID: artistId)
+                let tracks = await fetchSampleTracksForBackfill(forArtistID: artistId, client: client, token: token)
+                try await requireCurrent(token)
                 pool.append(contentsOf: tracks)
             }
         }
@@ -583,7 +657,8 @@ actor LibraryService: LibraryServiceProtocol {
 
         // Thin pool (small library, empty genres) or no history: top up with random.
         if result.count < targetSize {
-            let randomSongs = (try? await client().getRandomSongs(size: targetSize + excluded.count)) ?? []
+            let randomSongs = (try? await client.getRandomSongs(size: targetSize + excluded.count)) ?? []
+            try await requireCurrent(token)
             excluded.formUnion(result.map(\.id))
             let topUp = Self.assembleBackfill(
                 pool: randomSongs.map { DisplayableSong(from: $0) },
@@ -598,11 +673,12 @@ actor LibraryService: LibraryServiceProtocol {
     }
 
     /// Audio-similarity matches when the server advertises `sonicSimilarity`.
-    private func fetchSonicSimilarTracks(seedId: String, count: Int) async -> [DisplayableSong]? {
+    private func fetchSonicSimilarTracks(seedId: String, count: Int, client: SwiftSonicClient) async -> [DisplayableSong]? {
         do {
-            let caps = try await client().loadCapabilities()
+            let caps = try await client.loadCapabilities()
             guard caps.supports(.sonicSimilarity) else { return nil }
-            let matches = try await client().getSonicSimilarTracks(id: seedId, count: count)
+            try Task.checkCancellation()
+            let matches = try await client.getSonicSimilarTracks(id: seedId, count: count)
             let songs = matches
                 .filter { $0.similarity >= 0 }
                 .map { DisplayableSong(from: $0.entry) }
@@ -617,8 +693,15 @@ actor LibraryService: LibraryServiceProtocol {
 
     /// Lightweight artist sample for auto-extend — at most `backfillMaxAlbumsPerArtist`
     /// newest albums, low concurrency, no download-status checks.
-    private func fetchSampleTracksForBackfill(forArtistID artistID: String) async -> [DisplayableSong] {
-        guard let artistDetail = try? await artist(id: artistID) else { return [] }
+    private func fetchSampleTracksForBackfill(forArtistID artistID: String, client: SwiftSonicClient, token: Token) async -> [DisplayableSong] {
+        let artistDetail: ArtistID3
+        if let cached = artistDetailCache.value(forKey: artistID) { artistDetail = cached }
+        else {
+            guard let fetched = try? await client.getArtist(id: artistID),
+                  (try? await requireCurrent(token)) != nil else { return [] }
+            artistDetail = fetched
+            artistDetailCache.insert(fetched, forKey: artistID, cost: 1 + (fetched.album?.count ?? 0))
+        }
         let albums = (artistDetail.album ?? []).sorted { lhs, rhs in
             switch (lhs.year, rhs.year) {
             case let (y1?, y2?): return y1 > y2
@@ -637,7 +720,7 @@ actor LibraryService: LibraryServiceProtocol {
 
             while submitted < min(limit, sample.count) {
                 let albumId = sample[submitted].id
-                group.addTask { await self.fetchAlbumTracksLightweight(albumId: albumId) }
+                group.addTask { await self.fetchAlbumTracksLightweight(albumId: albumId, client: client, token: token) }
                 submitted += 1
             }
 
@@ -645,7 +728,7 @@ actor LibraryService: LibraryServiceProtocol {
                 collected.append(contentsOf: songs)
                 if submitted < sample.count {
                     let albumId = sample[submitted].id
-                    group.addTask { await self.fetchAlbumTracksLightweight(albumId: albumId) }
+                    group.addTask { await self.fetchAlbumTracksLightweight(albumId: albumId, client: client, token: token) }
                     submitted += 1
                 }
             }
@@ -657,9 +740,14 @@ actor LibraryService: LibraryServiceProtocol {
         return collected
     }
 
-    private func fetchAlbumTracksLightweight(albumId: String) async -> [DisplayableSong] {
+    private func fetchAlbumTracksLightweight(albumId: String, client: SwiftSonicClient, token: Token) async -> [DisplayableSong] {
         do {
-            let detail = try await album(id: albumId)
+            try await requireCurrent(token)
+            let detail: AlbumID3
+            if let cached = albumDetailCache.value(forKey: albumId) { detail = cached }
+            else { detail = try await client.getAlbum(id: albumId) }
+            try await requireCurrent(token)
+            albumDetailCache.insert(detail, forKey: albumId, cost: 1 + (detail.song?.count ?? 0))
             return (detail.song ?? []).map { DisplayableSong(from: $0, isDownloaded: false) }
         } catch {
             Logger.library.error("[ARTIST-TRACKS] backfill album \(albumId) failed: \(error, privacy: .public)")
@@ -670,12 +758,15 @@ actor LibraryService: LibraryServiceProtocol {
     // MARK: - Similar artists support
 
     func topSongs(artist: String, count: Int) async throws -> [DisplayableSong] {
-        try await client().getTopSongs(artist: artist, count: count).map { DisplayableSong(from: $0) }
+        try await read { try await $0.getTopSongs(artist: artist, count: count) }.map { DisplayableSong(from: $0) }
     }
 
     func getArtistInfo(forArtistID artistID: String, count: Int) async throws -> ArtistInfo {
-        if let cached = artistInfoCache[artistID] {
-            let satisfied = artistInfoCachedCount[artistID] ?? 0
+        let client = try await client()
+        let token = try token()
+        if let entry = artistInfoCache.value(forKey: artistID) {
+            let cached = entry.info
+            let satisfied = entry.requestedCount
             let similarHave = cached.similarArtist?.count ?? 0
             // count:0 is bio/MBID only — never let it satisfy a later similar-artists request.
             if count <= 0 || satisfied >= count || similarHave >= count {
@@ -686,11 +777,12 @@ actor LibraryService: LibraryServiceProtocol {
         Logger.library.debug("[ARTIST-INFO] cache miss — network call artistId=\(artistID, privacy: .public) count=\(count, privacy: .public)")
         let started = Date()
         do {
-            let info = try await client().getArtistInfo2(id: artistID, count: count)
+            let info = try await client.getArtistInfo2(id: artistID, count: count)
             let elapsed = Date().timeIntervalSince(started)
             Logger.library.debug("[ARTIST-INFO] success artistId=\(artistID, privacy: .public) \(String(format: "%.2f", elapsed), privacy: .public)s similarCount=\(info.similarArtist?.count ?? 0, privacy: .public)")
-            artistInfoCache[artistID] = info
-            artistInfoCachedCount[artistID] = max(count, 0)
+            try await requireCurrent(token)
+            artistInfoCache.insert(CachedArtistInfo(info: info, requestedCount: max(count, 0)),
+                forKey: artistID, cost: 1 + (info.similarArtist?.count ?? 0))
             return info
         } catch {
             let elapsed = Date().timeIntervalSince(started)
@@ -704,6 +796,7 @@ actor LibraryService: LibraryServiceProtocol {
     }
 
     func findArtist(byName name: String) async -> ArtistID3? {
+        guard (try? await client()) != nil, let token = try? token() else { return nil }
         if artistNameIndex == nil {
             if indexBuildTask == nil {
                 Logger.library.debug("[FIND-ARTIST] index not built — starting build name=\(name, privacy: .public)")
@@ -712,6 +805,7 @@ actor LibraryService: LibraryServiceProtocol {
                 Logger.library.debug("[FIND-ARTIST] awaiting in-progress build name=\(name, privacy: .public)")
             }
             _ = await indexBuildTask?.value
+            guard (try? await requireCurrent(token)) != nil else { return nil }
             indexBuildTask = nil
         } else {
             Logger.library.debug("[FIND-ARTIST] index ready entries=\(self.artistNameIndex?.count ?? 0, privacy: .public) name=\(name, privacy: .public)")
@@ -726,7 +820,8 @@ actor LibraryService: LibraryServiceProtocol {
     }
 
     private func buildArtistNameIndex() async {
-        guard let indices = try? await artists() else { return }
+        guard (try? await client()) != nil, let token = try? token(),
+              let indices = try? await artists() else { return }
         let all = indices.flatMap { $0.artist }
         var index: [String: ArtistID3] = [:]
         index.reserveCapacity(all.count)
@@ -735,6 +830,7 @@ actor LibraryService: LibraryServiceProtocol {
             if index[key] == nil { index[key] = a }
             if i % 200 == 0 && i > 0 { await Task.yield() }
         }
+        guard (try? await requireCurrent(token)) != nil else { return }
         artistNameIndex = index
         Logger.library.info("[FIND-ARTIST] index built: \(all.count, privacy: .public) entries")
     }

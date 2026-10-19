@@ -80,7 +80,8 @@ struct AlbumDetailMacOS: View {
                     libraryService: c.libraryService,
                     downloadService: c.downloadService,
                     toastService: c.toastService,
-                    serverState: c.serverState
+                    serverState: c.serverState,
+                    libraryIndex: c.libraryIndexService
                 )
             }
             await vm?.load()
@@ -98,7 +99,7 @@ struct AlbumDetailMacOS: View {
                 primaryLine: vm.artistName,
                 secondaryLine: secondaryLine(vm: vm),
                 onPrimaryLineTap: artistTapAction(vm),
-                quality: AudioQualityClassifier.bestQuality(in: songs),
+                quality: vm.audioQualities.first ?? AudioQualityClassifier.bestQuality(in: songs),
                 audioFormat: songs.compactMap(\.audioFormat).first,
                 primaryAction: {
                     Task { try? await container?.playerService.play(tracks: songs, startIndex: 0) }

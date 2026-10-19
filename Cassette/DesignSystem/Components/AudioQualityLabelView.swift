@@ -271,7 +271,7 @@ private struct AudioQualityDetailOverlay: View {
             }
             .shadow(color: .black.opacity(0.34), radius: 30, y: 14)
             .padding(.horizontal, 30)
-            .offset(y: -48 + dragOffset)
+            .offset(y: dragOffset)
             // Apple alert: start slightly large + faded, spring into place.
             .scaleEffect(appeared ? 1.0 : (reduceMotion ? 1.0 : 1.14))
             .opacity(appeared ? 1 : 0)

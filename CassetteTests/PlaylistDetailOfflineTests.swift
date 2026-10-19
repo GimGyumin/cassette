@@ -16,10 +16,16 @@ import SwiftSonic
 private final class PDLibraryStub: LibraryServiceProtocol {
     /// When set, `playlist(id:)` returns this instead of throwing — used to drive the
     /// empty-but-successful (200, no entries) path that the catch block can't catch.
-    func song(id: String) async throws -> Song { throw URLError(.unknown) }
+    var songLoader: ((String) async throws -> Song)?
+    func song(id: String) async throws -> Song {
+        guard let songLoader else { throw URLError(.unknown) }
+        return try await songLoader(id)
+    }
+    private(set) var playlistRequests = 0
     var playlistResult: PlaylistWithSongs?
     var playlistLoader: (() async throws -> PlaylistWithSongs)?
     func playlist(id: String) async throws -> PlaylistWithSongs {
+        playlistRequests += 1
         if let playlistLoader { return try await playlistLoader() }
         if let playlistResult { return playlistResult }
         throw URLError(.notConnectedToInternet)
@@ -53,8 +59,11 @@ private final class PDLibraryStub: LibraryServiceProtocol {
 
 /// Serves a configurable LocalPlaylistData; everything else is inert.
 @MainActor
-private final class PDDownloadStub: DownloadServiceProtocol {
+final class PDDownloadStub: DownloadServiceProtocol {
     var playlistData: LocalPlaylistData?
+    var downloadedIDs: Set<String> = []
+    var acceptsDownloads = false
+    private(set) var downloadedSnapshots: [PlaylistWithSongs] = []
 
     let progressStream: AsyncStream<[DownloadProgress]> = AsyncStream { $0.finish() }
     func localPlaylistData(playlistId: String, serverId: UUID) async -> LocalPlaylistData? { playlistData }
@@ -62,14 +71,18 @@ private final class PDDownloadStub: DownloadServiceProtocol {
     func localAlbumData(albumId: String, serverId: UUID) async -> LocalAlbumData? { nil }
     func downloadedURL(forSongId songId: String, serverId: UUID) async -> URL? { nil }
     func isDownloaded(songId: String, serverId: UUID) async -> Bool { false }
-    func downloadedSongIds(serverId: UUID) async -> Set<String> { [] }
+    func downloadedSongIds(serverId: UUID) async -> Set<String> { downloadedIDs }
     func localCoverArtURL(forId coverArtId: String) async -> URL? { nil }
     func persistCover(_ data: Data, forId coverArtId: String) async {}
     func removeCover(forId coverArtId: String) async {}
     func garbageCollectOrphanedCovers(referencedIds: Set<String>) async -> Int { 0 }
     func download(song: Song, serverId: UUID) async throws { throw URLError(.unknown) }
     func download(album: AlbumID3, serverId: UUID) async throws { throw URLError(.unknown) }
-    func download(playlist: PlaylistWithSongs, serverId: UUID) async throws { throw URLError(.unknown) }
+    func download(playlist: PlaylistWithSongs, serverId: UUID) async throws {
+        guard acceptsDownloads else { throw URLError(.unknown) }
+        downloadedSnapshots.append(playlist)
+        downloadedIDs.formUnion((playlist.entry ?? []).map(\.id))
+    }
     func isDownloading(songId: String, serverId: UUID) async -> Bool { false }
     func isDownloadingAlbum(_ albumId: String) async -> Bool { false }
     func isDownloadingPlaylist(_ playlistId: String) async -> Bool { false }
@@ -82,6 +95,7 @@ private final class PDDownloadStub: DownloadServiceProtocol {
 /// All playlist mutations throw — unused by the offline-load paths under test.
 @MainActor
 private final class PDPlaylistStub: PlaylistServiceProtocol {
+    private(set) var mutationRequests = 0
     func listPlaylists() async throws -> [Playlist] { throw URLError(.unknown) }
     func getPlaylist(id: String) async throws -> PlaylistWithSongs { throw URLError(.unknown) }
     @discardableResult
@@ -89,8 +103,8 @@ private final class PDPlaylistStub: PlaylistServiceProtocol {
     func renamePlaylist(id: String, newName: String) async throws { throw URLError(.unknown) }
     func updateDescription(id: String, description: String) async throws { throw URLError(.unknown) }
     func addTracks(playlistId: String, songs: [Song]) async throws { throw URLError(.unknown) }
-    func removeTracks(playlistId: String, indices: [Int]) async throws { throw URLError(.unknown) }
-    func reorderTracks(playlistId: String, orderedSongIds: [String]) async throws { throw URLError(.unknown) }
+    func removeTracks(playlistId: String, indices: [Int]) async throws { mutationRequests += 1; throw URLError(.unknown) }
+    func reorderTracks(playlistId: String, orderedSongIds: [String]) async throws { mutationRequests += 1; throw URLError(.unknown) }
     func deletePlaylist(id: String, purgeDownloads: Bool) async throws { throw URLError(.unknown) }
 }
 
@@ -225,5 +239,100 @@ struct PlaylistDetailOfflineTests {
         await vm.load()
         #expect(vm.songs.isEmpty)
         #expect(vm.error == nil)
+    }
+}
+
+@Suite("Generated collections use the playlist pipeline", .serialized)
+@MainActor
+struct GeneratedPlaylistTests {
+    private func state(online: Bool = true) -> ServerState {
+        let state = ServerState()
+        state.isOnline = online
+        state.activeServer = ServerSnapshot(from: ServerConfig(displayName: "Fixture", baseURL: "https://fixture.invalid", username: "listener"))
+        return state
+    }
+
+    private func model(_ state: ServerState, library: PDLibraryStub, download: PDDownloadStub,
+                       mutations: PDPlaylistStub? = nil,
+                       loader: @escaping @MainActor (Bool) async -> GeneratedPlaylistSnapshot?) -> PlaylistDetailViewModel {
+        let source = GeneratedPlaylistSource.personalMix(.getUp)
+        return PlaylistDetailViewModel(playlistId: source.id, libraryService: library, downloadService: download,
+            playlistService: mutations ?? PDPlaylistStub(), toastService: ToastService(), serverState: state,
+            generatedSource: source, generatedLoader: loader)
+    }
+
+    @Test func generatedMixLoadsThroughTheStandardViewModelWithoutRemotePlaylistLookup() async {
+        let library = PDLibraryStub(), downloads = PDDownloadStub()
+        downloads.downloadedIDs = ["b"]
+        let updated = Date(timeIntervalSince1970: 100)
+        let vm = model(state(), library: library, download: downloads) { _ in
+            GeneratedPlaylistSnapshot(name: "Energetic", owner: "listener",
+                tracks: ["a", "b"].map { DisplayableSong(id: $0, title: $0) }, updatedAt: updated)
+        }
+        await vm.load()
+        #expect(vm.name == "Energetic")
+        #expect(vm.owner == "listener")
+        #expect(vm.updatedAt == updated)
+        #expect(vm.songs.map(\.id) == ["a", "b"])
+        #expect(vm.songs.map(\.isDownloaded) == [false, true])
+        #expect(vm.isGenerated && !vm.isOffline && !vm.isLoading)
+        #expect(vm.playlistDetail == nil)
+        #expect(library.playlistRequests == 0)
+        #expect(PlaylistDetailView(playlistId: "cassette.mix.getUp", name: "Saved mood").generatedSource == .personalMix(.getUp))
+        #expect(PlaylistDetailView(playlistId: "server-playlist", name: "Server playlist").generatedSource == nil)
+    }
+
+    @Test func generatedDownloadKeepsALocalPlaylistSnapshotAndCannotMutateTheServer() async throws {
+        let library = PDLibraryStub(), downloads = PDDownloadStub(), mutations = PDPlaylistStub()
+        library.songLoader = { Song(id: $0, title: $0, suffix: "flac", duration: 180) }
+        downloads.acceptsDownloads = true
+        let vm = model(state(), library: library, download: downloads, mutations: mutations) { _ in
+            GeneratedPlaylistSnapshot(name: "Energetic", owner: "listener",
+                tracks: ["a", "b", "a"].map { DisplayableSong(id: $0, title: $0, duration: 180) }, updatedAt: Date())
+        }
+        await vm.load()
+        await vm.downloadPlaylist()
+        let saved = try #require(downloads.downloadedSnapshots.first)
+        #expect(saved.id == GeneratedPlaylistSource.personalMix(.getUp).id)
+        #expect(saved.entry?.map(\.id) == ["a", "b", "a"])
+        #expect(saved.entry?.allSatisfy { $0.suffix == "flac" } == true)
+        #expect(vm.songs.allSatisfy { $0.isDownloaded })
+        await vm.removeTrack(at: 0)
+        await vm.moveTracks(from: IndexSet(integer: 0), to: 2)
+        #expect(vm.songs.map(\.id) == ["a", "b", "a"])
+        #expect(mutations.mutationRequests == 0)
+    }
+
+    @Test func generatedOfflinePlaylistUsesItsDownloadedOrderWithoutRebuilding() async {
+        let library = PDLibraryStub(), downloads = PDDownloadStub()
+        downloads.playlistData = LocalPlaylistData(playlistId: "cassette.mix.getUp", name: "Saved mood",
+            coverArtId: nil, songs: ["b", "a"].map { DisplayableSong(id: $0, title: $0, isDownloaded: true) })
+        var builds = 0
+        let vm = model(state(online: false), library: library, download: downloads) { _ in builds += 1; return nil }
+        await vm.load()
+        #expect(builds == 0 && library.playlistRequests == 0)
+        #expect(vm.songs.map(\.id) == ["b", "a"])
+        #expect(vm.name == "Saved mood" && vm.isOffline)
+    }
+
+    @Test func aLateGeneratedRefreshCannotReplaceTheLatestCollection() async throws {
+        let library = PDLibraryStub(), downloads = PDDownloadStub()
+        var requests: [CheckedContinuation<GeneratedPlaylistSnapshot?, Never>] = []
+        let vm = model(state(), library: library, download: downloads) { _ in
+            await withCheckedContinuation { requests.append($0) }
+        }
+        let first = Task { await vm.load() }
+        while requests.count < 1 { await Task.yield() }
+        let second = Task { await vm.load(forceRefresh: true) }
+        while requests.count < 2 { await Task.yield() }
+        func snapshot(_ name: String) -> GeneratedPlaylistSnapshot {
+            .init(name: name, owner: "listener", tracks: [DisplayableSong(id: name, title: name)], updatedAt: Date())
+        }
+        requests[1].resume(returning: snapshot("Latest"))
+        await second.value
+        requests[0].resume(returning: snapshot("Stale"))
+        await first.value
+        #expect(vm.name == "Latest" && vm.songs.first?.id == "Latest")
+        #expect(!vm.isLoading && library.playlistRequests == 0)
     }
 }

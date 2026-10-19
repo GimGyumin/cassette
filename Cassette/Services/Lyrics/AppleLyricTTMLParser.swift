@@ -81,6 +81,9 @@ nonisolated private final class TTMLTreeParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
         if let text = String(data: CDATABlock, encoding: .utf8) { self.parser(parser, foundCharacters: text) }
     }
+    func parser(_ parser: XMLParser, foundIgnorableWhitespace whitespaceString: String) {
+        self.parser(parser, foundCharacters: whitespaceString)
+    }
 }
 
 nonisolated private final class TTMLDocumentDecoder {
@@ -203,7 +206,16 @@ nonisolated private final class TTMLDocumentDecoder {
         if !localization, ["x-translation", "x-roman"].contains(node.role ?? "") { return [] }
         if ["text", "textContainer", "delimiter"].contains(node.ruby ?? "") { return [] }
         let bounds = range(node, inherited: inherited)
-        if let begin = bounds.begin, let end = bounds.end, end <= begin { return [] }
+        if let begin = bounds.begin, let end = bounds.end, end <= begin {
+            // Some word-timed sources encode delimiters as zero-duration spans.
+            // They have no sung interval, but still separate the surrounding words.
+            let raw = node.text
+            if !raw.isEmpty, raw.allSatisfy(\.isWhitespace),
+               !raw.contains(where: \.isNewline) {
+                return [LyricWord(text: preserve ? raw : " ", begin: begin, end: begin, role: role, agentId: agent)]
+            }
+            return []
+        }
         let role = role.isBackground ? role : (node.role == "x-bg" ? .background : role)
         let agent = node.metadata("agent") ?? agent
         let preserve = node.xml("space").map { $0 == "preserve" } ?? preserve

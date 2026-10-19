@@ -22,11 +22,11 @@ import SwiftUI
 // are invisible to it.
 
 /// Async cover art loader. Resolves via ArtworkImageCache (RAM → disk → network).
-/// Falls back to the URL/AsyncImage path only if ArtworkImageCache fails entirely.
+/// All remote requests pass through the shared cache and its network policy.
 /// Use `CoverArtCard` in views — it wraps this with clip, shadow, and border handling.
 ///
 /// - Parameters:
-///   - size: Requested pixel size, used for the AsyncImage fallback URL only.
+///   - size: Requested artwork size, used to select the shared decode tier.
 ///           Tier is auto-detected: `size >= 480` → `.hero` (1200 px decode);
 ///           `size < 480` → `.thumb` (240 px decode).
 ///   - tier: Optional explicit tier override. Pass `.hero` for detail-view hero images
@@ -79,8 +79,6 @@ private struct CoverArtViewContent: View {
     /// so a cover change re-resolves the freshly-cached cover on EVERY surface (incl. Home Pinned).
     @AppStorage("coverArtUploadVersion") private var coverArtUploadVersion = 0
     @State private var cachedImage: PlatformImage?
-    @State private var url: URL?
-    @State private var urlId: String?
     @State private var originalRevision = 0
     /// The id whose image `cachedImage` currently represents. A new cover id immediately
     /// hides the old image while its replacement is resolved.
@@ -111,28 +109,7 @@ private struct CoverArtViewContent: View {
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
             } else {
-                // AsyncImage safety fallback — reached only when artworkCache.load() fails.
-                AsyncImage(url: urlId == id ? url : nil) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: contentMode)
-                    case .failure:
-                        placeholder
-                    case .empty:
-                        GeometryReader { geo in
-                            SkeletonBlock(
-                                width: geo.size.width,
-                                height: geo.size.height,
-                                cornerRadius: cornerRadius
-                            )
-                        }
-                    @unknown default:
-                        EmptyView()
-                    }
-                }
-                .id(id)
+                placeholder
             }
         }
         .clipped()
@@ -142,10 +119,8 @@ private struct CoverArtViewContent: View {
         .onReceive(NotificationCenter.default.publisher(for: OriginalArtwork.didInstall)) { note in
             if note.object as? String == id { originalRevision &+= 1 }
         }
-        .task(id: "\(loadingEnabled):\(id):\(coverArtUploadVersion):\(originalRevision)") {
+        .task(id: "\(loadingEnabled):\(id):\(coverArtUploadVersion):\(originalRevision):\(container?.serverState.isCellularConnection == true):\(container?.serverState.isOnline == true)") {
             guard loadingEnabled else { return }
-            url = nil
-            urlId = nil
             let t = resolvedTier
             let online = container?.serverState.isOnline ?? true
 
@@ -155,17 +130,18 @@ private struct CoverArtViewContent: View {
             // 1. RAM hit for the requested tier. Sync read in .task (not body) — reads in task
             //    closures are not tracked by @Observable, so this creates no observation on the
             //    global cache dictionary.
+            let ram = artworkCache.cachedImage(for: id, tier: t)
+            if let ram { apply(ram, for: id) }
             if let local = await artworkCache.loadPlainDiskCover(coverArtId: id, tier: t) {
                 guard !Task.isCancelled else { return }
                 apply(local, for: id)
                 return
             }
-            if let ram = artworkCache.cachedImage(for: id, tier: t) { apply(ram, for: id) }
 
             // 2. For hero artwork, paint any already-available thumbnail immediately, then keep
             //    resolving the requested tier. This makes the full player open with the same cover
             //    the mini player has already loaded instead of showing a skeleton while hero loads.
-            if t != .thumb {
+            if t != .thumb, ram == nil {
                 if let ramThumb = artworkCache.cachedImage(for: id, tier: .thumb) {
                     apply(ramThumb, for: id)
                 } else if let diskThumb = await artworkCache.load(coverArtId: id, tier: .thumb, allowNetwork: false) {
@@ -202,15 +178,10 @@ private struct CoverArtViewContent: View {
             }
             guard !Task.isCancelled else { return }
 
-            // 5. Nothing local resolved — discard stale cached state, then try the online URL safety net
-            //    (AsyncImage falls through to the placeholder when offline).
+            // A missing image remains a placeholder. A separate AsyncImage request would
+            // bypass shared coalescing, custom headers and the cellular restriction.
             cachedImage = nil
             displayedId = nil
-            guard online else { url = nil; return }
-            let fallbackURL = await container?.libraryService.coverArtURL(id: id, size: size)
-            guard !Task.isCancelled else { return }
-            url = fallbackURL
-            urlId = id
         }
     }
 
@@ -218,8 +189,6 @@ private struct CoverArtViewContent: View {
     private func apply(_ image: PlatformImage, for resolvedId: String) {
         cachedImage = image
         displayedId = resolvedId
-        url = nil
-        urlId = nil
     }
 
     private var placeholder: some View {

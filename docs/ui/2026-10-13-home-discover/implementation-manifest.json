@@ -1,0 +1,192 @@
+[
+  {
+    "path": "Cassette/App/AppContainer.swift",
+    "kind": "modified",
+    "sha256": "2db3ee85d52727c590979ab869887797972fcabc81c452d293890f0507c3d7e9"
+  },
+  {
+    "path": "Cassette/App/CassetteApp.swift",
+    "kind": "modified",
+    "sha256": "5907986ff2b09e1a417c798a1d6d9978f9d5d5cf8ad8a19f5625029917e799ff"
+  },
+  {
+    "path": "Cassette/DesignSystem/Components/AccountProfileToolbar.swift",
+    "kind": "modified",
+    "sha256": "4e65dfed408a8681f375aba5a33b528726ea6a85c2d87b06672734b1059805d5"
+  },
+  {
+    "path": "Cassette/DesignSystem/Components/AdaptiveAlbumShelf.swift",
+    "kind": "modified",
+    "sha256": "35c1f7bedc31165b77d1ab2d9d9333542052da51e2523888c1c865ddbd8d955d"
+  },
+  {
+    "path": "Cassette/DesignSystem/Components/ExternalCoverView.swift",
+    "kind": "modified",
+    "sha256": "c8927d6bde7555f89880c2acc28b05f9fc8e1ea028c5111a4569e130849faaf7"
+  },
+  {
+    "path": "Cassette/DesignSystem/Components/HomeDiscoveryComponents.swift",
+    "kind": "added",
+    "sha256": "ae8b48acbee76f8ff28107c82385e53f0a4cf93988e2d04fc5295f989c6279b3"
+  },
+  {
+    "path": "Cassette/DesignSystem/Components/PersonalMixCard.swift",
+    "kind": "modified",
+    "sha256": "859023c86207396be50cc1bad2b51baa7e57a58ddc7f532dc82d9f1611bd6cf3"
+  },
+  {
+    "path": "Cassette/Localizable.xcstrings",
+    "kind": "modified",
+    "sha256": "bf0cb0dc42fabf3b4fe16c5473b2a1c25e5d6b68fce3d11be6143b03c1574953"
+  },
+  {
+    "path": "Cassette/Models/Domain/GeneratedPlaylistSource.swift",
+    "kind": "added",
+    "sha256": "25adc5133b24e19004bf44b7649aa2d2eee4c4415fe5db2fbc4b2f70ad0da681"
+  },
+  {
+    "path": "Cassette/Services/Cache/ExternalArtworkCache.swift",
+    "kind": "modified",
+    "sha256": "797a92738e9be3975ba45c1dfa9095cd90ec9bf90d163552c1ecb89a8ae71741"
+  },
+  {
+    "path": "Cassette/Services/Implementations/AlbumCoverPreloadService.swift",
+    "kind": "modified",
+    "sha256": "2742b3597896087cac0f53b76a0eab142886493ca43112dd4a6c93fb225b5c13"
+  },
+  {
+    "path": "Cassette/Services/Implementations/ArtworkImageCache.swift",
+    "kind": "modified",
+    "sha256": "de1137a6fd807d75d1f73b21d4adc70a3bf8b1fbe8d79714bab0837b4cf5ae5a"
+  },
+  {
+    "path": "Cassette/Services/Implementations/ArtworkLoader.swift",
+    "kind": "modified",
+    "sha256": "b140e4d4e8461ff84dd2b1d9f4f2a7e5d3cc775efe656a664e2593a350441dfe"
+  },
+  {
+    "path": "Cassette/Services/Implementations/CassetteBackgroundDownloads.swift",
+    "kind": "modified",
+    "sha256": "649d510084c109cbbd324b1272beb71babc011a9a7d69bd90708f37842e99732"
+  },
+  {
+    "path": "Cassette/Services/Implementations/DownloadService.swift",
+    "kind": "modified",
+    "sha256": "239cef3b611a0c6a3e06a8125d1dee278db8c2785229e59e8de6d35b13ac9b68"
+  },
+  {
+    "path": "Cassette/Services/Playback/CassetteMediaSessionController.swift",
+    "kind": "modified",
+    "sha256": "480358d2eb7bc10f1da41c956c90928af8a1a9509bf9931c45907c7945a35032"
+  },
+  {
+    "path": "Cassette/Services/Recommendations/PersonalMixService.swift",
+    "kind": "modified",
+    "sha256": "aed79d28ce334f9d9201c3cd161cf9c4325e1b653558422a8ccbba233a9755a7"
+  },
+  {
+    "path": "Cassette/Utilities/ArtworkNetworkPolicy.swift",
+    "kind": "added",
+    "sha256": "b00a54f3debc8ca42fa503ada4d7f771752494f3b66754378b3b65e86f7cba5a"
+  },
+  {
+    "path": "Cassette/ViewModels/DiscoverViewModel.swift",
+    "kind": "modified",
+    "sha256": "77e6779cb67c01cc08ecd6fc85d0be83bae1256f3753852b37b2d7ffa3876638"
+  },
+  {
+    "path": "Cassette/ViewModels/FullPlayerViewModel.swift",
+    "kind": "modified",
+    "sha256": "5e23ffe4bae4835c8be1aad9aefc76d8467d55f628bc2f193797ca08e59bcd14"
+  },
+  {
+    "path": "Cassette/ViewModels/HomeDiscoveryFeed.swift",
+    "kind": "added",
+    "sha256": "cc02813529776228d28cdc02bc04027a9450ed6c263d4b595eb19fa4a761b093"
+  },
+  {
+    "path": "Cassette/ViewModels/PlaylistDetailViewModel.swift",
+    "kind": "modified",
+    "sha256": "7049b3028c4d5a5b124ec740efb8c163f8a1afe11fa0ce14d293735de18e7dc3"
+  },
+  {
+    "path": "Cassette/Views/Browse/CoverArtView.swift",
+    "kind": "modified",
+    "sha256": "2947374121c7e9860ee93e0b5556ac51d1422c830c6ebcf910cdef438054748a"
+  },
+  {
+    "path": "Cassette/Views/Browse/PersonalMixDetailView.swift",
+    "kind": "modified",
+    "sha256": "0604744cc1b8293ceb30f6379af17c575cce0da4a48b5ba88f2b01b7f459b3ef"
+  },
+  {
+    "path": "Cassette/Views/Browse/PlaylistDetailView+Actions.swift",
+    "kind": "modified",
+    "sha256": "130e3516819b06da45e4c5a1f1ea69e4032dd6f37c844dfff1b63df19ed633a4"
+  },
+  {
+    "path": "Cassette/Views/Browse/PlaylistDetailView+Header.swift",
+    "kind": "modified",
+    "sha256": "526e130cd3f6841e16f9bd11dc9e4b82eaddfde5917f388958e6038a29bc0304"
+  },
+  {
+    "path": "Cassette/Views/Browse/PlaylistDetailView+Layout.swift",
+    "kind": "modified",
+    "sha256": "3fdf3368fd470d466918738d507bd0d764f1348b68b03f1a1d1389a1978f82d8"
+  },
+  {
+    "path": "Cassette/Views/Browse/PlaylistDetailView.swift",
+    "kind": "modified",
+    "sha256": "ae92daf977e4985c5c335935998258c10cf0a9108ab8d432d0f2cf3d036f90b7"
+  },
+  {
+    "path": "Cassette/Views/Main/DashboardHomeView.swift",
+    "kind": "modified",
+    "sha256": "1d78091d491aa3cef1f1e832dbafad7ffb43f09e6f06bb972b945302b2903625"
+  },
+  {
+    "path": "Cassette/Views/Main/DiscoverView.swift",
+    "kind": "modified",
+    "sha256": "cfd468c62b9cb4159722f0682e06fd97f39fc7ee3ec83e8756a7c708e588972e"
+  },
+  {
+    "path": "Cassette/Views/Main/HomeView.swift",
+    "kind": "modified",
+    "sha256": "03d5d5ae126e9a1bde277986160fe7f90b786abf869fdd8481c753c3445a64a5"
+  },
+  {
+    "path": "Cassette/Views/Main/MainTabView.swift",
+    "kind": "modified",
+    "sha256": "3a03491ae87dc35195df5f474c10e55546d365d9199dccb345fcf3d3f842cde1"
+  },
+  {
+    "path": "Cassette/Views/Platform/macOS/RootViewMacOS.swift",
+    "kind": "modified",
+    "sha256": "86dfdf819b7b3922230a25df7387e1e048a1c3f86823dcd311670d96ae02ec8d"
+  },
+  {
+    "path": "CassetteTests/ArtworkDownloadPolicyTests.swift",
+    "kind": "added",
+    "sha256": "dba6eaff581b48b9bae4029a5cefe84ac3c2bb4f4bdb50e9c669469292c72a17"
+  },
+  {
+    "path": "CassetteTests/HomeDiscoveryFeedTests.swift",
+    "kind": "added",
+    "sha256": "09ac442050a65dd5095de24f731b172673a942dadfb4cb384e581999d6f8a0e6"
+  },
+  {
+    "path": "CassetteTests/HomeDiscoveryPresentationTests.swift",
+    "kind": "added",
+    "sha256": "06eb4aaa4e0b562e0eab71f121badd676c89d46e93cb281f6ffebf614b0ae6a7"
+  },
+  {
+    "path": "CassetteTests/PlaylistDetailOfflineTests.swift",
+    "kind": "modified",
+    "sha256": "bb2530e07e192c5ab293977786d9a051f1d0ba172003c2fcd3c145bd3c9f1565"
+  },
+  {
+    "path": "CassetteTests/SearchViewModelDebounceTests.swift",
+    "kind": "modified",
+    "sha256": "c790a172bd1372c3493743d0c6ce28fa62178d3df91dc67bd503a08b2168c788"
+  }
+]

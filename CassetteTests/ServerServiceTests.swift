@@ -14,6 +14,7 @@ import SwiftData
 final class MockKeychain: KeychainServiceProtocol {
     private var storage: [String: Data] = [:]
     private var failOnStore = false
+    var retrieveOperation: ((String) async -> Void)?
 
     func setShouldFailOnStore(_ value: Bool) { failOnStore = value }
 
@@ -23,6 +24,7 @@ final class MockKeychain: KeychainServiceProtocol {
     }
 
     func retrieve<T: Codable & Sendable>(_ type: T.Type, forKey key: String) async throws -> T? {
+        if let retrieveOperation { await retrieveOperation(key) }
         guard let data = storage[key] else { return nil }
         return try JSONDecoder().decode(T.self, from: data)
     }

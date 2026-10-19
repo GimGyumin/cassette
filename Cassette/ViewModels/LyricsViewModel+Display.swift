@@ -156,42 +156,33 @@ extension LyricsViewModel {
         }
 
 
-        let seconds =
-        TimeInterval(start + structured.offset) / 1000
+        let seconds = max(0, TimeInterval(start + structured.offset) / 1000
+            - (lyricDocument?.lyricOffset ?? 0))
+        let targetMs = Int(seconds * 1000)
+        lyricSeekGeneration &+= 1
+        let generation = lyricSeekGeneration
+        let trackID = playerState.currentTrack?.id
+        lyricSeekTask?.cancel()
+        lyricSeekTargetMs = targetMs
 
-        // Reset scrolling state so auto-scroll resumes immediately after seek.
         resumeTask?.cancel()
         resumeTask = nil
         isUserScrolling = false
         prefersHiddenChrome = false
-        // Store the tapped index so the view can scroll to it unconditionally after seek.
         pendingSeekScrollIndex = lineIndex
-        scrollRestoreToken += 1
         justSeeked = true
+        // Scroll/highlight immediately, independently of local decode or network latency.
+        synchronizeSeekClock(to: seconds)
+        scrollRestoreToken += 1
 
-        Task {
-            // Await seek completion so the audio engine finishes repositioning
-            // before we force-update lyric timing.
+        let playerService = playerService
+        lyricSeekTask = Task { [weak self] in
             await playerService.seek(to: seconds)
-
-            // Force-inject the target time into the interpolation state.
-            // Without this, interpolatedElapsedMs() may briefly drift back to
-            // the pre-seek position while the audio session stabilizes, causing
-            // karaoke progress to freeze or flicker.
-            let targetMs = Int(seconds * 1000)
-            lastPositionSampleMs = targetMs
-            lastPositionSampleAt = CACurrentMediaTime()
-            lastDisplayedPositionMs = targetMs
-            karaokePlaybackMs = targetMs
-
-            // Immediately re-evaluate active lyric lines / words at the new position
-            // so the UI jumps to the tapped line without waiting for the next timer tick.
-            update(elapsedMs: targetMs)
-
-            // Only restart tracking when audio is actually playing.
-            // `isPlaying` is the definitive guard — without it the
-            // interpolation loop advances lyrics while the transport
-            // is paused (Bug: "tap lyric while paused → lyrics play alone").
+            guard !Task.isCancelled, let self,
+                  lyricSeekGeneration == generation, playerState.currentTrack?.id == trackID else { return }
+            lyricSeekTask = nil
+            lyricSeekTargetMs = nil
+            // The shared pending target keeps timing pinned until the engine actually lands.
             reconcileTracking()
         }
     }

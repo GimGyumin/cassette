@@ -15,26 +15,27 @@ import AppKit
 /// Loads and caches artwork images for MPNowPlayingInfoCenter.
 /// Isolated actor so concurrent artwork fetches don't race on the cache dictionary.
 actor ArtworkLoader {
-    /// Failure back-off key: the URL **plus** the credential set it was tried with.
+    /// Request identity includes the URL and credentials for both caching and coalescing.
     /// A fetch that failed without credentials must not suppress a later
     /// authenticated retry for the same URL (Cloudflare-protected hosts answer
     /// 403 until the cover header is attached).
-    private struct FailureKey: Hashable {
+    private struct RequestKey: Hashable {
         let url: URL
         let credentials: Int
     }
 
-    private var cache = CostBoundedCache<URL, MPMediaItemArtwork>(
+    private var cache = CostBoundedCache<RequestKey, MPMediaItemArtwork>(
         countLimit: 8, costLimit: 24 * 1024 * 1024
     )
-    private var inFlight: [URL: Task<(MPMediaItemArtwork, Int)?, Never>] = [:]
-    private var failedLoadUntil: [FailureKey: Date] = [:]
+    private var inFlight: [RequestKey: Task<(MPMediaItemArtwork, Int)?, Never>] = [:]
+    private var failedLoadUntil: [RequestKey: Date] = [:]
     private var cacheGeneration = 0
     private let session: URLSession
     private static let networkFailureCooldown: TimeInterval = 60
 
     init(session: URLSession? = nil) {
         let config = URLSessionConfiguration.default
+        ArtworkNetworkPolicy.configure(config)
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 30
         config.httpMaximumConnectionsPerHost = 2
@@ -44,14 +45,19 @@ actor ArtworkLoader {
     /// Returns cached artwork if available, otherwise fetches from `url` injecting
     /// `headers` into the request (required for Cloudflare-protected hosts).
     func artwork(for url: URL, headers: [String: String]) async -> MPMediaItemArtwork? {
-        let failureKey = FailureKey(url: url, credentials: Self.credentialSignature(headers))
-        if let cached = cache.value(forKey: url) { return cached }
-        if let task = inFlight[url] { return await task.value?.0 }
-        if shouldSkipNetworkFetch(failureKey) { return nil }
+        let key = RequestKey(url: url, credentials: Self.credentialSignature(headers))
+        if let cached = cache.value(forKey: key) { return cached }
+        if let task = inFlight[key] {
+            let generation = cacheGeneration
+            let result = await task.value?.0
+            return generation == cacheGeneration ? result : nil
+        }
+        if shouldSkipNetworkFetch(key) { return nil }
 
         // This loader serves only Now Playing, not library prefetching.
         let generation = cacheGeneration
         var request = URLRequest(url: url)
+        ArtworkNetworkPolicy.apply(to: &request)
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
         }
@@ -77,34 +83,37 @@ actor ArtworkLoader {
                 return nil
             }
         }
-        inFlight[url] = task
+        inFlight[key] = task
         let result = await task.value
-        inFlight[url] = nil
+        guard generation == cacheGeneration else { return nil }
+        inFlight[key] = nil
         guard let (artwork, cost) = result else {
-            if !url.isFileURL { rememberNetworkFailure(failureKey) }
+            if !url.isFileURL { rememberNetworkFailure(key) }
             return nil
         }
         if generation == cacheGeneration {
-            failedLoadUntil[failureKey] = nil
-            cache.insert(artwork, forKey: url, cost: cost)
+            failedLoadUntil[key] = nil
+            cache.insert(artwork, forKey: key, cost: cost)
         }
         return artwork
     }
 
     func clearCache() {
         cacheGeneration &+= 1
+        for task in inFlight.values { task.cancel() }
+        inFlight.removeAll()
         cache.removeAll()
         failedLoadUntil.removeAll()
     }
 
-    private func shouldSkipNetworkFetch(_ key: FailureKey) -> Bool {
+    private func shouldSkipNetworkFetch(_ key: RequestKey) -> Bool {
         guard !key.url.isFileURL, let retryDate = failedLoadUntil[key] else { return false }
         if retryDate > Date() { return true }
         failedLoadUntil[key] = nil
         return false
     }
 
-    private func rememberNetworkFailure(_ key: FailureKey) {
+    private func rememberNetworkFailure(_ key: RequestKey) {
         failedLoadUntil[key] = Date().addingTimeInterval(Self.networkFailureCooldown)
     }
 

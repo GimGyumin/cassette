@@ -106,6 +106,11 @@ struct LyricsSettingsSections: View {
                 }
 
                 if settings.provider == .apple {
+                    SettingsNavigationRow("Apple Intelligence Prompt", value: settings.appleIntelligencePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? String(localized: "Default", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                        : String(localized: "Custom", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+                        AppleTranslationPromptSettingsView()
+                    }
                     SettingsNavigationRow("Translation Strategy", value: settings.strategyPreference.displayName) {
                         SettingsChoiceList(
                             navigationTitle: "Translation Strategy",
@@ -113,6 +118,7 @@ struct LyricsSettingsSections: View {
                             selection: $settings.strategyPreference
                         )
                     }
+                    .disabled(!settings.appleIntelligencePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 SettingsNavigationRow("Translation Language", value: targetLanguageName) {
@@ -192,5 +198,41 @@ struct LyricsSettingsSections: View {
         var choiceTitle: String {
             Locale.current.localizedString(forLanguageCode: code)?.capitalized ?? code
         }
+    }
+}
+
+private struct AppleTranslationPromptSettingsView: View {
+    @ObservedObject private var settings = LyricsTranslationSettings.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft = LyricsTranslationSettings.shared.appleIntelligencePrompt
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Describe your preferred translation style", text: $draft, axis: .vertical)
+                    .lineLimit(6...12)
+                    .font(.cassetteBody)
+                    .accessibilityLabel(Text("Apple Intelligence Prompt"))
+                Text("\(draft.count) / 1,000")
+                    .font(.cassetteCaption)
+                    .foregroundStyle(draft.count > AppleIntelligenceLyricsTranslator.maximumPromptLength ? .red : .secondary)
+            } footer: {
+                SettingsSectionFooter("A saved prompt uses the Apple Intelligence on-device model instead of the translation strategy. Requires iOS 26 or macOS 26 and Apple Intelligence. Leave empty to use Apple Translation.")
+            }
+            Section {
+                SettingsActionRow("Save Prompt") {
+                    settings.appleIntelligencePrompt = AppleIntelligenceLyricsTranslator.normalizedPrompt(draft)
+                    dismiss()
+                }
+                .disabled(draft.count > AppleIntelligenceLyricsTranslator.maximumPromptLength)
+                SettingsActionRow("Use Default Translation") {
+                    settings.appleIntelligencePrompt = ""
+                    dismiss()
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .modifier(SettingsSubpageStyle())
+        .navigationTitle(Text("Apple Intelligence Prompt"))
     }
 }

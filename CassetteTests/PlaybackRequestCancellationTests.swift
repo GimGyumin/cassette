@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import SwiftSonic
 import Testing
 @testable import Cassette
@@ -33,7 +34,7 @@ private final class SuspendedPlaybackResolver: MediaResolverProtocol {
 @Suite("Playback request cancellation", .serialized)
 struct PlaybackRequestCancellationTests {
     private func makePlayer(
-        container: AppContainer, resolver: SuspendedPlaybackResolver, engine: FakePlaybackEngine
+        container: AppContainer, resolver: any MediaResolverProtocol, engine: FakePlaybackEngine
     ) -> PlayerService {
         container.serverState.activeServer = ServerSnapshot(from: ServerConfig(
             displayName: "Playback test", baseURL: "https://example.invalid", username: "test"
@@ -60,6 +61,48 @@ struct PlaybackRequestCancellationTests {
             replayGainAlbumGain: nil, replayGainAlbumPeak: nil,
             replayGainBaseGain: nil, replayGainFallbackGain: nil
         )
+    }
+
+    @Test("Restored playback retries without losing its checkpoint", arguments: [false, true])
+    func restoredSelectionWithoutSourceCanRetryAtSavedPosition(failFirst: Bool) async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("restored-\(UUID()).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1))
+        let pcm = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 240000))
+        pcm.frameLength = 240000
+        pcm.floatChannelData?[0].update(repeating: 0, count: Int(pcm.frameLength))
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try file.write(from: pcm)
+        }
+        let engine = FakePlaybackEngine()
+        let container = try AppContainer(inMemory: true, engine: engine)
+        let resolver = RestoreRetryResolver(url: url)
+        resolver.failNext = failFirst
+        let player = makePlayer(container: container, resolver: resolver, engine: engine)
+        let track = DisplayableSong(id: "restored", title: "Restored", duration: 30)
+        container.playerState.currentTrack = track
+        container.playerState.queue = [track]
+        container.playerState.position = 12
+        container.playerState.duration = 30
+        container.playerState.playbackState = .paused
+        container.playerState.isPlaybackAvailable = false
+        if failFirst {
+            await player.resume()
+            #expect(container.playerState.position == 12)
+            #expect(container.playerState.playbackState == .error(.playbackFailed(PlaybackFailure.classify(CassetteError.timeout))))
+        }
+        await player.resume()
+        #expect(container.playerState.currentTrack?.id == track.id)
+        #expect(container.playerState.isPlaybackAvailable)
+        #expect(resolver.calls == (failFirst ? 2 : 1))
+        let deadline = Date().addingTimeInterval(5)
+        while player.systemEngine.progress < 11.8, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(player.systemEngine.progress >= 11.8)
+        #expect(container.playerState.playbackState != .paused)
+        await player.stop()
     }
 
     @Test func latestSelectionCancelsPreviousResolveAndStopCancelsLatest() async throws {
@@ -99,4 +142,71 @@ struct PlaybackRequestCancellationTests {
         #expect(container.playerState.playbackState == .paused)
         #expect(!engine.calls.contains { if case .play = $0 { return true }; return false })
     }
+
+    @Test("A late cold-resume resolve cannot override pause or stop", arguments: [false, true])
+    func coldResumeRespectsNewerCommand(stop: Bool) async throws {
+        let engine = FakePlaybackEngine()
+        let container = try AppContainer(inMemory: true, engine: engine)
+        let resolver = HeldResumeResolver()
+        let player = makePlayer(container: container, resolver: resolver, engine: engine)
+        let track = song("resume")
+        container.playerState.currentTrack = track
+        container.playerState.queue = [track]
+        container.playerState.position = 45
+        container.playerState.playbackState = .paused
+        await player.primeColdResume()
+        var starts = resolver.starts.makeAsyncIterator()
+        let pending = Task { await player.resume() }
+        _ = await starts.next()
+        #expect(container.playerState.playbackState == .recovering)
+        #expect(container.playerState.position == 45)
+        if stop { await player.stop() } else { await player.pause() }
+        resolver.finish()
+        await pending.value
+        #expect(!player.systemEngine.hasCurrentItem)
+        #expect(container.playerState.playbackState == (stop ? .idle : .paused))
+        #expect(!engine.calls.contains { if case .play = $0 { return true }; return false })
+        await player.stop()
+    }
+}
+
+@MainActor
+private final class HeldResumeResolver: MediaResolverProtocol {
+    nonisolated let starts: AsyncStream<Void>
+    private let events: AsyncStream<Void>.Continuation
+    private var pending: CheckedContinuation<MediaSource, Never>?
+
+    init() { (starts, events) = AsyncStream.makeStream() }
+    func resolve(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource {
+        await withCheckedContinuation { continuation in
+            pending = continuation
+            events.yield(())
+        }
+    }
+    func finish() {
+        pending?.resume(returning: .downloaded(URL(fileURLWithPath: "/tmp/late-resume.wav")))
+        pending = nil
+    }
+    func resolveRadio(_ station: InternetRadioStation) async throws -> MediaSource { throw CassetteError.timeout }
+}
+
+private extension PlayerService {
+    func primeColdResume() {
+        currentSource = .downloaded(URL(fileURLWithPath: "/tmp/cold-resume.wav"))
+        systemPlayback.isActive = true
+    }
+}
+
+@MainActor
+private final class RestoreRetryResolver: MediaResolverProtocol {
+    let url: URL
+    var calls = 0
+    var failNext = false
+    init(url: URL) { self.url = url }
+    func resolve(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource {
+        calls += 1
+        if failNext { failNext = false; throw CassetteError.timeout }
+        return .downloaded(url)
+    }
+    func resolveRadio(_ station: InternetRadioStation) async throws -> MediaSource { throw CassetteError.timeout }
 }

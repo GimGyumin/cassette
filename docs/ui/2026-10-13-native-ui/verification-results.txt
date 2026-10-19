@@ -1,0 +1,38 @@
+Verification: 2026-10-13, Xcode beta, iOS 27.2 / macOS 27.2 SDK
+No simulator execution or simulator destination was used for this task.
+Device build is unsigned (CODE_SIGNING_ALLOWED=NO); no deployment was performed.
+
+iOS Generic Device build
+Command: /Applications/Xcode-beta.app/Contents/Developer/usr/bin/xcodebuild -project Cassette.xcodeproj -scheme Cassette -destination generic/platform=iOS -derivedDataPath .derivedData-native-device -clonedSourcePackagesDirPath .derivedData-test/SourcePackages -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO build
+Log: /tmp/cassette-native-device-complete.log
+Result: BUILD SUCCEEDED
+Compiler error markers: 0; compiler warning markers: 0
+
+macOS regression
+Command: /Applications/Xcode-beta.app/Contents/Developer/usr/bin/xcodebuild test -project Cassette.xcodeproj -scheme CassetteTests -destination platform=macOS,arch=arm64 -derivedDataPath .derivedData-test -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO "-only-testing:CassetteTests/BackgroundArtworkQueueTests" "-only-testing:CassetteTests/ArtworkDownloadPolicyTests" "-only-testing:CassetteTests/BackgroundDownloadRecoveryTests" "-only-testing:CassetteTests/PlaybackBufferPolicyTests" "-only-testing:CassetteTests/PlayerServiceEngineTests" "-only-testing:CassetteTests/GaplessContinuityTests" "-only-testing:CassetteTests/AlbumDetailOfflineTests" "-only-testing:CassetteTests/DownloadedPlayerArtworkTests" "-only-testing:CassetteTests/PlaybackRecoveryPositionTests" "-only-testing:CassetteTests/PlaybackRequestCancellationTests" "-only-testing:CassetteTests/LocalSeekSmoothnessTests" "-only-testing:CassetteTests/TranscodeHTTPSeekTests" "-only-testing:CassetteTests/SearchViewModelDebounceTests" "-only-testing:CassetteTests/SearchPaginationTests" "-only-testing:CassetteTests/LibrarySearchIndexTests" "-only-testing:CassetteTests/HomeDiscoveryPresentationTests" "-only-testing:CassetteTests/HomeDiscoveryFeedTests" "-only-testing:CassetteTests/PlaybackControlAppearanceTests" "-only-testing:CassetteTests/OfflineDownloadRoundTripTests" "-only-testing:CassetteTests/AccountAndPlaybackRegressionTests" "-only-testing:CassetteTests/LyricsAndChromeRegressionTests" "-only-testing:CassetteTests/LyricsViewModelSeekTests" "-only-testing:CassetteTests/LyricsViewModelUpdateTests" "-only-testing:CassetteTests/LyricsAppleTranslationSessionTests" "-only-testing:CassetteTests/PlaylistDetailOfflineTests" "-only-testing:CassetteTests/GeneratedPlaylistTests"
+Log: /tmp/cassette-native-mac-verified.log
+Result: TEST SUCCEEDED
+Compiler error markers: 0; compiler warning markers: 0
+
+macOS final search
+Command: /Applications/Xcode-beta.app/Contents/Developer/usr/bin/xcodebuild test -project Cassette.xcodeproj -scheme CassetteTests -destination platform=macOS,arch=arm64 -derivedDataPath .derivedData-test -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO "-only-testing:CassetteTests/SearchViewModelDebounceTests" "-only-testing:CassetteTests/SearchPaginationTests" "-only-testing:CassetteTests/LibrarySearchIndexTests" "-only-testing:CassetteTests/CrossfadePreloadTests"
+Log: /tmp/cassette-native-mac-search-crossfade.log
+Result: TEST SUCCEEDED
+Compiler error markers: 0; compiler warning markers: 0
+
+macOS Crossfade policies
+Command: /Applications/Xcode-beta.app/Contents/Developer/usr/bin/xcodebuild test-without-building -project Cassette.xcodeproj -scheme CassetteTests -destination platform=macOS,arch=arm64 -derivedDataPath .derivedData-test -disableAutomaticPackageResolution CODE_SIGNING_ALLOWED=NO "-only-testing:CassetteTests/CrossfadeVolumeTests" "-only-testing:CassetteTests/ShouldSchedulePrefetchTests" "-only-testing:CassetteTests/ShouldStartFadeOutTests" "-only-testing:CassetteTests/ShouldProceedWithPrefetchTests" "-only-testing:CassetteTests/AutomaticDownloadCellularPolicyTests" "-only-testing:CassetteTests/IsGaplessPairTests"
+Log: /tmp/cassette-native-mac-crossfade-verified.log
+Result: TEST EXECUTE SUCCEEDED
+Compiler error markers: 0; compiler warning markers: 0
+
+XCResult summaries (test definitions; parameterized invocations shown separately):
+mac-crossfade-results.json: 34/34 passed; 0 failed; 0 skipped; 34 passing invocations including parameterized cases.
+mac-regression-results.json: 178/178 passed; 0 failed; 0 skipped; 193 passing invocations including parameterized cases.
+mac-search-results.json: 25/25 passed; 0 failed; 0 skipped; 25 passing invocations including parameterized cases.
+
+The final search command included an unmatched CrossfadePreloadTests selector (the filename is not a suite name). It ran the 25 selected search tests. Crossfade was then verified using its actual suite names in the separate successful run above.
+The final search run repeats tests already covered by the 178-test regression run. Do not sum those rows as distinct tests.
+git diff --check: passed (no output).
+No existing test was deleted or had expectations weakened for this task.
+Not verified: real iOS background suspension/relaunch, visual navigation/scrolling/gestures, VoiceOver/Dynamic Type interaction, hardware volume/AirPlay routes, actual server long-duration playback.

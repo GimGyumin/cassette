@@ -129,22 +129,26 @@ nonisolated struct AudioFaststartRemuxer: Sendable {
     ) -> [String] {
         var types: [String] = []
         var offset: UInt64 = 0
-        while offset + 8 <= total, types.count < limit {
-            guard let header = read(offset, 8), header.count == 8 else { break }
+        while offset <= total, total - offset >= 8, types.count < limit {
+            guard let header = read(offset, 8), header.count == 8 else { return [] }
             var size = UInt64(header[0]) << 24 | UInt64(header[1]) << 16 | UInt64(header[2]) << 8 | UInt64(header[3])
             let type = String(bytes: header[4..<8], encoding: .ascii) ?? "????"
             var headerLength: UInt64 = 8
             if size == 1 {
-                guard let large = read(offset + 8, 8), large.count == 8 else { break }
+                guard total - offset >= 16,
+                      let large = read(offset + 8, 8), large.count == 8 else { return [] }
                 size = large.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
                 headerLength = 16
             } else if size == 0 {
                 size = total - offset
             }
+            // A corrupt 64-bit box size must never overflow or seek beyond EOF. Discard
+            // the partial classification so malformed MP4 is not treated as faststart.
+            guard size >= headerLength, size <= total - offset else { return [] }
             types.append(type)
-            guard size >= headerLength else { break }
             offset += size
         }
+        if types.count < limit, offset != total { return [] }
         return types
     }
 }

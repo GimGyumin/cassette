@@ -40,6 +40,9 @@ actor NowPlayingService: NowPlayingServiceProtocol {
     var artworkRetryTask: Task<Void, Never>?
     nonisolated static let maximumArtworkRetryAttempts = 3
     let artworkRevision = NowPlayingArtworkRevision()
+    nonisolated let playbackRevision = NowPlayingArtworkRevision()
+    var playbackGeneration = 0
+    var lastPublicationSequence: UInt64 = 0
     /// Failed current-track artwork is retried with a bounded exponential backoff and once
     /// again on foreground entry. This avoids both a blank Watch/lock screen and an endless
     /// 30-second network retry loop for tracks whose server artwork is permanently missing.
@@ -49,6 +52,7 @@ actor NowPlayingService: NowPlayingServiceProtocol {
     /// Remote events can arrive in a burst (for example a lock-screen tap followed by an
     /// AirPods gesture). Keep their order instead of letting detached tasks race each other.
     var remoteCommandTail: Task<Void, Never>?
+    var remoteSeekTask: Task<Void, Never>?
 
     init(
         playerService: any PlayerServiceProtocol,
@@ -63,6 +67,15 @@ actor NowPlayingService: NowPlayingServiceProtocol {
     }
 
     func stop() async {
+        await stop(publication: nil)
+    }
+
+    func stop(publication: PlaybackPublication?) async {
+        guard let revision = beginPublication(publication) else { return }
+        remoteCommandTail?.cancel()
+        remoteCommandTail = nil
+        remoteSeekTask?.cancel()
+        remoteSeekTask = nil
         artworkRetryTask?.cancel()
         artworkRetryTask = nil
         artworkGeneration &+= 1
@@ -75,10 +88,10 @@ actor NowPlayingService: NowPlayingServiceProtocol {
         #if os(iOS)
         if #available(iOS 27.0, *),
            let controller = modernMediaSession as? CassetteMediaSessionController {
-            await controller.stop()
+            await controller.stop(isCurrent: { [playbackRevision] in publication?.isCurrent != false && playbackRevision.accept(revision) })
         }
         #endif
-        await MainActor.run {
+        await commitNowPlaying(publication, revision: revision) {
             guard artworkRevision.accept(generation) else { return }
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
             #if os(macOS)

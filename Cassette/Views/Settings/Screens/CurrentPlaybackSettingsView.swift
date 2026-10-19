@@ -18,6 +18,16 @@ struct CurrentPlaybackSettingsView: View {
 
     var body: some View {
         Form {
+            if let settings = container?.streamingSettings {
+                Section {
+                    SettingsNavigationRow("Server Playback Method", value: settings.jellyfinRoute.choiceTitle) {
+                        ServerPlaybackMethodSelectionView(selection: Binding(
+                            get: { settings.jellyfinRoute },
+                            set: { settings.jellyfinRoute = $0 }
+                        ))
+                    }
+                }
+            }
             if let state = container?.playerState, state.currentTrack != nil || state.currentRadio != nil {
                 Section {
                     if let song = state.currentTrack {
@@ -30,8 +40,19 @@ struct CurrentPlaybackSettingsView: View {
                 if let details {
                     Section {
                         LabeledContent("Playback source", value: localized(details.location.rawValue))
-                        LabeledContent("Playback method", value: localized(details.method.rawValue))
+                        LabeledContent("Playback method", value: details.method.usesOriginalName
+                            ? details.method.rawValue : localized(details.method.rawValue))
                         LabeledContent("Playback engine", value: details.engine)
+                        if let sampleRate = details.audioSessionSampleRate {
+                            LabeledContent("Audio session sample rate", value: "\(Int(sampleRate)) Hz")
+                        }
+                        LabeledContent("ReplayGain", value: localized(details.replayGainStatus.rawValue))
+                        if details.replayGainStatus == .applied {
+                            LabeledContent("Applied gain", value: String(format: "%+.1f dB", details.appliedGainDB))
+                        }
+                        if let codec = details.actualCodec {
+                            LabeledContent("Actual codec", value: codec)
+                        }
                         if let codec = details.requestedCodec {
                             LabeledContent("Requested codec", value: codec)
                         }

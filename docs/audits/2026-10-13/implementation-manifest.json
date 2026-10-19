@@ -1,0 +1,362 @@
+[
+  {
+    "path": "Cassette/App/AppContainer.swift",
+    "kind": "modified",
+    "sha256": "8c7ea1df6ecbaccce97c956591d2f1c50de10f79848ad33070711329f386b47e"
+  },
+  {
+    "path": "Cassette/App/CassetteApp.swift",
+    "kind": "modified",
+    "sha256": "f47c2b965af0f55d3d8c1fffb9dc09b7c03ce55bd9046aac41a93e52e9c6c70c"
+  },
+  {
+    "path": "Cassette/Localizable.xcstrings",
+    "kind": "modified",
+    "sha256": "516afde42d0c234b95e33d8e5dfb91db82850071f67b3a286bf2ac0a72d03640"
+  },
+  {
+    "path": "Cassette/Models/Domain/CassetteError.swift",
+    "kind": "modified",
+    "sha256": "0e9a833713660966601e4fb667470e81d3bb9cfac6fbaa900c7b8538e4e7364a"
+  },
+  {
+    "path": "Cassette/Models/Domain/NowPlayingSnapshot.swift",
+    "kind": "modified",
+    "sha256": "af2f7958119f1701be04c29d77fce859f6d329a8683c696932c4514df2bdff8f"
+  },
+  {
+    "path": "Cassette/Models/Domain/PlaybackDetails.swift",
+    "kind": "modified",
+    "sha256": "df2204e18af390de05f715dcfd445c6acf9fecd9874dedf51b23630fd0c06f8f"
+  },
+  {
+    "path": "Cassette/Services/Cache/CoverDecodeGate.swift",
+    "kind": "added",
+    "sha256": "e86339c55910aea4752131d0bc42fe4a311dbc9e4115f790bc7dafc1d8616d23"
+  },
+  {
+    "path": "Cassette/Services/Cache/ExternalArtworkCache.swift",
+    "kind": "modified",
+    "sha256": "ebe286f5e6d2e7c5d55b5c0d4095a03d6dc43789c2248abb1c25de13df1577fc"
+  },
+  {
+    "path": "Cassette/Services/Implementations/ArtworkImageCache.swift",
+    "kind": "modified",
+    "sha256": "ba805a325e502516f3934e52fb52f6ea140dce432ccba5af5e536a09f8dcd1d2"
+  },
+  {
+    "path": "Cassette/Services/Implementations/DownloadService.swift",
+    "kind": "modified",
+    "sha256": "07e97078c8c5611cc83104b011cde776fef6ccce6bb275f9610f2ea94f4196da"
+  },
+  {
+    "path": "Cassette/Services/Implementations/LibraryIndexService.swift",
+    "kind": "modified",
+    "sha256": "f03dafa75e82d97f94d7de1c8c3020a3e2734b996bda45829c28138baa25fd50"
+  },
+  {
+    "path": "Cassette/Services/Implementations/LibraryService.swift",
+    "kind": "modified",
+    "sha256": "15c310c24881e3c5879397979fbf48ab257b3998b60bb0c435c262efb3e9f653"
+  },
+  {
+    "path": "Cassette/Services/Implementations/NowPlayingBackgroundPreparation.swift",
+    "kind": "modified",
+    "sha256": "1fa4c9fe0239e36ba5b0c62dd990035f6548d9f03364a03c404089591decda01"
+  },
+  {
+    "path": "Cassette/Services/Implementations/NowPlayingService+Artwork.swift",
+    "kind": "modified",
+    "sha256": "8eb8b532768cb9144ef4ed15a03ce4d3a3aeec7ec8a31ba9ba54d1b157348fb9"
+  },
+  {
+    "path": "Cassette/Services/Implementations/NowPlayingService+Update.swift",
+    "kind": "modified",
+    "sha256": "ebdb41d7ffcdeece2c73fa1134cdbaebc27dddf32714f2d88affdab2dad66797"
+  },
+  {
+    "path": "Cassette/Services/Implementations/NowPlayingService.swift",
+    "kind": "modified",
+    "sha256": "1961998ab5aad144a548395bee2c8571fdbbff18b3b9c2867ffcbe5e0ceeda39"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlaybackSessionService.swift",
+    "kind": "modified",
+    "sha256": "bdb0cc2b62431530a02ccd96d1d2aa8f5aa94ac5a4d2089d00b629ccb1284794"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+AudioSession.swift",
+    "kind": "modified",
+    "sha256": "d682beb51bf684f57f1651eb765d4ac3fe3b0891b3162987fd98a851bdf3043b"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Callbacks.swift",
+    "kind": "modified",
+    "sha256": "7c194e02d0ca7ad5fdd6512551925295abad5b8bd9bdb32c968118966401892c"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Commit.swift",
+    "kind": "added",
+    "sha256": "1a0e0af5d62c9e84ba59136fab423dd61fe1d6fa7890c732fe624cfdb415523f"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Controls.swift",
+    "kind": "modified",
+    "sha256": "61464d277c4b29c511d72225669745e00be69dc3e6f0fa3d8886dd174e16c93b"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Crossfade.swift",
+    "kind": "modified",
+    "sha256": "e842fdce33c94a705d15c24fba36dac3d3bba981e0a76e9f4dc33c935b8d2add"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Details.swift",
+    "kind": "modified",
+    "sha256": "21b184368447669c848f559efe585b4858c4a5b8bf48c1887cc0237b17335533"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Engine.swift",
+    "kind": "modified",
+    "sha256": "6bacedbab7131ea9b3969031e185c5c0bc586fcf6bc3715b77c85fe549bac254"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Gapless.swift",
+    "kind": "modified",
+    "sha256": "01d5730a5669312a4fe7bb43bdb6a660afcf11b61d7e682e66ef288506790015"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+NowPlaying.swift",
+    "kind": "modified",
+    "sha256": "fa497f254696a4a6fa592b37a20c0d38ad3d345416373314e152f83015e71cd3"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Queue.swift",
+    "kind": "modified",
+    "sha256": "e499821cfa9c514b2c5d34e91ca903d419be56df1b97d3fd86d91ef867746697"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Radio.swift",
+    "kind": "modified",
+    "sha256": "11adf4bffd7a460f0f06255ef4d4081bb57f2effab6bcf44fe6d778dce27b825"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Reporting.swift",
+    "kind": "modified",
+    "sha256": "e967eb039febe438a3e0732997e7766818289e6b6e3478073df89a63acc2e3f6"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Seeking.swift",
+    "kind": "modified",
+    "sha256": "a0a3198589ca905577fdce19e2485c1faaaa55b25aa4c1f53c376862281a7ce0"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Session.swift",
+    "kind": "modified",
+    "sha256": "0f3a750bf858cdf5a960fe9170c00852bb52007ea91c68afcae77b5cf30bf6bf"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService+Transition.swift",
+    "kind": "modified",
+    "sha256": "776fa971ae8d30f2ef48275b8a8b9c35485446e63dda81ccf1f32e9997caf7c8"
+  },
+  {
+    "path": "Cassette/Services/Implementations/PlayerService.swift",
+    "kind": "modified",
+    "sha256": "4f06cc2b746528c3c62b2ab5bc237746ee37bcb0d8216fd2c92dbda7d22cf0d1"
+  },
+  {
+    "path": "Cassette/Services/Implementations/ReplayGainService.swift",
+    "kind": "modified",
+    "sha256": "8ba2ede96f2c0d8309f45621c40a7ad1ef320d0cad4465ee5eb9da088fd66aee"
+  },
+  {
+    "path": "Cassette/Services/Implementations/StatsService.swift",
+    "kind": "modified",
+    "sha256": "228f3bc96d84cb4b26645144135b2fd472039bf3e6b3859507651aa08188c2cf"
+  },
+  {
+    "path": "Cassette/Services/Implementations/WidgetSyncService.swift",
+    "kind": "modified",
+    "sha256": "0aa652dc63a23714d6e258a2b29baa8f28165917c8a60c1a94af8ef9d1813a50"
+  },
+  {
+    "path": "Cassette/Services/Playback/AVPlayerPlaybackEngine.swift",
+    "kind": "modified",
+    "sha256": "15bd143907defdae118c31817c201237c598554ebf5c52a54045b39d4c146c01"
+  },
+  {
+    "path": "Cassette/Services/Playback/AudioStreamingDelegate.swift",
+    "kind": "modified",
+    "sha256": "ef517057c97e17e542593c05d2783543b7bb42df66bd55eef35f36d15915d457"
+  },
+  {
+    "path": "Cassette/Services/Playback/AudioStreamingPlayerEngine.swift",
+    "kind": "modified",
+    "sha256": "db6d8415f6fd846a75e87c64fae337ce2a3125a62328c187f2525831ae558ab1"
+  },
+  {
+    "path": "Cassette/Services/Playback/CassetteMediaSessionController.swift",
+    "kind": "modified",
+    "sha256": "3991f15c5c01cbc309ef5971bc960ae20a917556e69e20a53a6175f22e4b32ee"
+  },
+  {
+    "path": "Cassette/Services/Playback/EngineCapabilities.swift",
+    "kind": "added",
+    "sha256": "a29f04deecbdb11867445ce79ceaf5f327d90db41d84ca519c5172fb32688df5"
+  },
+  {
+    "path": "Cassette/Services/Playback/MediaTransferCoordinator.swift",
+    "kind": "added",
+    "sha256": "fd3cd8831920a6c6d10e743e46f8941da8d4f797f6a256ba8c100887a47b8064"
+  },
+  {
+    "path": "Cassette/Services/Playback/PlaybackBeatMeter.swift",
+    "kind": "modified",
+    "sha256": "0b363b521e45da0a2ca4422011f581bf2868183725fdd38af195f365abe56178"
+  },
+  {
+    "path": "Cassette/Services/Playback/PlaybackCheckpointIdentity.swift",
+    "kind": "added",
+    "sha256": "daf10e79e73ac8433cf3e91fa25960fc45c4727aea6a6f468b93a2fc6361cefd"
+  },
+  {
+    "path": "Cassette/Services/Playback/PlaybackContext.swift",
+    "kind": "added",
+    "sha256": "871fc03ca3f9b820b0481de73b6e1b50a9062f498c280ada05ca4d12a2c6a4a6"
+  },
+  {
+    "path": "Cassette/Services/Playback/PlaybackEngine.swift",
+    "kind": "modified",
+    "sha256": "ec96d7329f458bfabae568d12f36f79be3ad061acd29b2d56cd9d75e5ef920c0"
+  },
+  {
+    "path": "Cassette/Services/Playback/PlaybackFailure.swift",
+    "kind": "added",
+    "sha256": "9da8aa53b1f58c6e597367d728cfa97e73a4c94b2cb63a2a803efdf5dcb72052"
+  },
+  {
+    "path": "Cassette/Services/Playback/PlaybackMeterMailbox.swift",
+    "kind": "added",
+    "sha256": "ba30265a85d7dee4b9c2b56c48718c12b18bca7f5bf00ab1799da6b97482aeff"
+  },
+  {
+    "path": "Cassette/Services/Playback/PlaybackPublication.swift",
+    "kind": "added",
+    "sha256": "65884f55d8505dd6aa8c16fa35d045ce7ec7f6f9197328a73b5d3505a373957f"
+  },
+  {
+    "path": "Cassette/Services/Protocols/LibraryServiceProtocol.swift",
+    "kind": "modified",
+    "sha256": "ccd0df6827695cff932269b4dc78ac94ecef51de751c37ab6332deeef06b14e9"
+  },
+  {
+    "path": "Cassette/Services/Protocols/NowPlayingServiceProtocol.swift",
+    "kind": "modified",
+    "sha256": "cc3178471d51de529e33af10a3b3f7cfbd4d4a11cfee2ae91423623aaa4c058d"
+  },
+  {
+    "path": "Cassette/Services/Protocols/PlayerServiceProtocol.swift",
+    "kind": "modified",
+    "sha256": "89a8225589823250e9b79df2630ea73ca7adb8425606bac3713203f09aa89405"
+  },
+  {
+    "path": "Cassette/Utilities/ExpiringBoundedCache.swift",
+    "kind": "added",
+    "sha256": "e53172947d1bbdd4783c1a1121e2bd36409b1f19eb0bc538754dcd3e94b6a664"
+  },
+  {
+    "path": "Cassette/Utilities/LyricWordKaraokeLine.swift",
+    "kind": "modified",
+    "sha256": "d42dca1dab04a37deaf54454491542de08d893fec3965ff86fb0a5f73f41f71c"
+  },
+  {
+    "path": "Cassette/Utilities/StagedFileWrite.swift",
+    "kind": "added",
+    "sha256": "1fa62840d5d23af6cc484d1f0184986b161922d476ef6ae7d13f9598f893ce79"
+  },
+  {
+    "path": "Cassette/Views/Platform/macOS/CassetteSettingsScene.swift",
+    "kind": "modified",
+    "sha256": "c4ca004fdc2a48b908f3b2ad6229a157a2e2cb00b7a8dd645b173fde1fd61d4c"
+  },
+  {
+    "path": "Cassette/Views/Settings/Screens/CurrentPlaybackSettingsView.swift",
+    "kind": "modified",
+    "sha256": "7b8f1eb95a45588a78c53e27cd3347ea5578b9874e21bd5403399a5e1f572cef"
+  },
+  {
+    "path": "Cassette/Views/Settings/Screens/PlaybackSettingsView.swift",
+    "kind": "modified",
+    "sha256": "ae4af6d570e2b1ef5142e90b44f7550509298f459e420772e8ddc6c9cca5dbbe"
+  },
+  {
+    "path": "Cassette/Views/Settings/Sections/CrossfadeSettingsSection.swift",
+    "kind": "modified",
+    "sha256": "37d316f59ad655395e4d47d375bb82ffa33b004da228d766143ab2c1c0fd8b06"
+  },
+  {
+    "path": "Cassette/Views/Settings/Sections/LegacyPlaybackSessionSection.swift",
+    "kind": "added",
+    "sha256": "9a4fcdfe05db27b73f4a8f337d407891a287958986a8a4b8cd125a3224344cad"
+  },
+  {
+    "path": "CassetteTests/AlbumDetailOfflineTests.swift",
+    "kind": "modified",
+    "sha256": "316b367e95c277298ea4bee906e0813ca0a5d2656b48f75933ef9f74dbb13a5c"
+  },
+  {
+    "path": "CassetteTests/ArtworkGateAndMetadataBoundsTests.swift",
+    "kind": "added",
+    "sha256": "f011675df05072c4b5974a41c9c1586371ccdcb7870242d5e639b1dcd3ef32d1"
+  },
+  {
+    "path": "CassetteTests/AuditPlaybackHardeningTests.swift",
+    "kind": "added",
+    "sha256": "58cad7d69d5eff286197fa08008b553cfa7bb9864e637046f2cab0c8de9bf9af"
+  },
+  {
+    "path": "CassetteTests/EngineCapabilityConsistencyTests.swift",
+    "kind": "added",
+    "sha256": "18752a520b767edcbbf24a129f2fdca5b3fea4389fb9a12871e4bce170baffa3"
+  },
+  {
+    "path": "CassetteTests/MediaTransferCoordinationTests.swift",
+    "kind": "added",
+    "sha256": "8f3625e851375571bc140368e72dd2bae6e4b650d88784bcfda10b2733d7a13f"
+  },
+  {
+    "path": "CassetteTests/PlaybackEngineTests.swift",
+    "kind": "modified",
+    "sha256": "811d0501a9b3522478650866ab4fd5343b1454c51ca96fd7169d99ffddc6e834"
+  },
+  {
+    "path": "CassetteTests/PlaybackFailureAndPublicationTests.swift",
+    "kind": "added",
+    "sha256": "777ed20b88cfb9005d02b8b02bc19b48429b120136fa4be99784c2eb3a0297a1"
+  },
+  {
+    "path": "CassetteTests/PlaybackPerformancePathTests.swift",
+    "kind": "added",
+    "sha256": "cf72f146ddda7999bd4b9d0a0ea1c5a0055c636f87284cd36d44e66b974304a7"
+  },
+  {
+    "path": "CassetteTests/PlaybackSessionIdentityTests.swift",
+    "kind": "added",
+    "sha256": "7fd1a3819354bb3110d08f7e89b754a2408b1c225db5f174e91c213922677c16"
+  },
+  {
+    "path": "CassetteTests/RCAuditRegressionTests.swift",
+    "kind": "modified",
+    "sha256": "0c99bdd92b6350ce5b1066d64ab678abcde407e71e386bdb95320bda5d5f2648"
+  },
+  {
+    "path": "CassetteTests/SearchViewModelDebounceTests.swift",
+    "kind": "modified",
+    "sha256": "0b50815ad2fc880aac4e2efebde222356910fe4e17a93b7aa2b5be58c66baf29"
+  },
+  {
+    "path": "CassetteTests/TranscodeSeekTests.swift",
+    "kind": "modified",
+    "sha256": "d71c7b398ac8ae9fbe71928fce6726dc4e0a1b03080774b18aee943740d34240"
+  }
+]

@@ -25,19 +25,16 @@ struct CassetteApp: App {
     @AppStorage(AppUILanguage.storageKey) private var appLanguageCode = ""
     @Environment(\.scenePhase) private var scenePhase
 
-    // Statics for BGTask handler access — set once after AppContainer init.
-    // nonisolated(unsafe) is intentional: the BGTask closure runs off-actor;
-    // these are written once on MainActor and read in a non-isolated context.
+    // Background handlers read these dependencies only after hopping to MainActor.
     #if os(iOS)
-    nonisolated(unsafe) private static var _bgTaskService: WrappedPlaylistService?
-    nonisolated(unsafe) private static var _bgTaskServerState: ServerState?
+    @MainActor private static var _bgTaskService: WrappedPlaylistService?
+    @MainActor private static var _bgTaskServerState: ServerState?
     /// Set once the container exists. Runs one library-preparation pass when iOS grants a
     /// background window, which is the only way a long cover pass can continue off-screen.
-    nonisolated(unsafe) private static var _bgLibraryPreparation: (@MainActor () async -> Void)?
+    @MainActor private static var _bgLibraryPreparation: (@MainActor () async -> Void)?
     #endif
 
     init() {
-        CassetteSystemChrome.configure()
         // Start the battery / thermal policy before the first view body runs, so no frame is ever
         // rendered with the placeholder budget.
         PerformanceGovernor.shared.start()
@@ -46,21 +43,20 @@ struct CassetteApp: App {
             forTaskWithIdentifier: "app.cassette.wrapped.monthly-update",
             using: nil
         ) { task in
-            guard let processingTask = task as? BGProcessingTask,
-                  let service = CassetteApp._bgTaskService,
-                  let serverState = CassetteApp._bgTaskServerState else {
+            guard let processingTask = task as? BGProcessingTask else {
                 task.setTaskCompleted(success: false)
                 return
             }
-            let workTask = Task {
-                let serverId = await MainActor.run { serverState.activeServer?.id.uuidString }
-                guard let serverId else {
+            let workTask = Task { @MainActor in
+                defer { processingTask.expirationHandler = nil }
+                guard !Task.isCancelled, let service = CassetteApp._bgTaskService,
+                      let serverId = CassetteApp._bgTaskServerState?.activeServer?.id.uuidString else {
                     processingTask.setTaskCompleted(success: false)
                     return
                 }
                 let result = await service.runYearlyPlaylistSyncIfNeeded(serverId: serverId, calendar: .current)
                 Logger.wrapped.info("BGTask result: \(String(describing: result), privacy: .public)")
-                processingTask.setTaskCompleted(success: true)
+                processingTask.setTaskCompleted(success: !Task.isCancelled)
                 CassetteApp.scheduleWrappedUpdate()
             }
             processingTask.expirationHandler = {
@@ -73,15 +69,20 @@ struct CassetteApp: App {
             forTaskWithIdentifier: "app.cassette.library.preparation",
             using: nil
         ) { task in
-            guard let processingTask = task as? BGProcessingTask,
-                  let prepare = CassetteApp._bgLibraryPreparation else {
+            guard let processingTask = task as? BGProcessingTask else {
                 task.setTaskCompleted(success: false)
                 CassetteApp.scheduleLibraryPreparation()
                 return
             }
             // The pass is resumable (covers check the disk first), so an expiring window still
             // leaves the work in a consistent state; the next window picks up where this stopped.
-            let workTask = Task {
+            let workTask = Task { @MainActor in
+                defer { processingTask.expirationHandler = nil }
+                guard !Task.isCancelled, let prepare = CassetteApp._bgLibraryPreparation else {
+                    processingTask.setTaskCompleted(success: false)
+                    CassetteApp.scheduleLibraryPreparation()
+                    return
+                }
                 await prepare()
                 processingTask.setTaskCompleted(success: !Task.isCancelled)
                 if Task.isCancelled { CassetteApp.scheduleLibraryPreparation() }
@@ -164,6 +165,11 @@ struct CassetteApp: App {
                 #endif
             }
             .task(id: bootAttempt) {
+                #if DEBUG
+                // Hosted unit tests construct isolated containers themselves. Starting the real
+                // app here opens personal stores/network sessions and competes with audio tests.
+                guard NSClassFromString("XCTestCase") == nil else { return }
+                #endif
                 guard container == nil else { return }
                 // Let the boot ProgressView paint for one frame before heavy MainActor init.
                 await Task.yield()
@@ -174,6 +180,13 @@ struct CassetteApp: App {
                 Logger.boot.notice("🟡 AppContainer init start")
                 let newContainer: AppContainer
                 do {
+                    #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("--cassette-ui-testing"),
+                       ProcessInfo.processInfo.arguments.contains("--cassette-reset-onboarding") {
+                        UserDefaults.standard.set(false, forKey: "onboardingComplete")
+                        UserDefaults.standard.set(false, forKey: "cassette.onboarding.pendingWelcome")
+                    }
+                    #endif
                     newContainer = try AppContainer(
                         inMemory: ProcessInfo.processInfo.arguments.contains("--cassette-ui-testing")
                     )
@@ -221,6 +234,16 @@ struct CassetteApp: App {
                 newContainer.serverReachabilityMonitor.start()
                 Logger.boot.notice("🟡 loadPersistedState() start")
                 await newContainer.serverService.loadPersistedState()
+                await newContainer.albumCoverPreloadService.restoreCompletedInventory()
+                if let downloads = newContainer.downloadService as? DownloadService,
+                   !ProcessInfo.processInfo.arguments.contains("--cassette-ui-testing") {
+                    #if os(iOS)
+                    CassetteBackgroundDownloads.shared.setRecoveryHandler { [weak downloads] in
+                        await downloads?.recoverBackgroundDownloads()
+                    }
+                    #endif
+                    Task(priority: .utility) { await downloads.recoverBackgroundDownloads() }
+                }
                 await playerWiring
                 if #available(iOS 27.0, macOS 27.0, *) {
                     SiriBootGate.markReady()
@@ -230,6 +253,7 @@ struct CassetteApp: App {
                 // Warm Keychain + SwiftSonic client before Home's first shelf fetch.
                 if newContainer.serverState.activeServer != nil {
                     await newContainer.serverService.preWarmClient()
+                    await newContainer.nowPlayingBackgroundPreparation.prepare(using: newContainer)
                 }
 
                 // No Home tab yet (onboarding / no server) — don't hold deferred work for the full timeout.
@@ -293,6 +317,7 @@ struct CassetteApp: App {
                 guard let c = container else { return }
                 c.artworkImageCache.clearCache()
                 Task {
+                    await c.libraryService.trimDetailCaches()
                     await c.externalArtworkCache.clearMemoryCache()
                     await c.nowPlayingService.clearArtworkCache()
                 }
@@ -331,6 +356,11 @@ struct CassetteApp: App {
             }
             #endif
         }
+        .onChange(of: container?.artworkImageCache.allowsNetworkDownloads) { _, allowed in
+            guard let c = container else { return }
+            if allowed != true { c.albumCoverPreloadService.pauseAutomaticDownloads() }
+            else { c.albumCoverPreloadService.resumeArtworkAfterNetworkChange() }
+        }
         .onChange(of: scenePhase) { _, newPhase in
             // Foreground/background drives most of the budget (animated chrome, beat visuals,
             // prefetch). Only `.background` counts as "not active": on macOS a momentarily
@@ -344,6 +374,9 @@ struct CassetteApp: App {
             c.serverReachabilityMonitor.isAppActive = newPhase != .background
             switch newPhase {
             case .active:
+                Task(priority: .utility) {
+                    await (c.downloadService as? DownloadService)?.recoverBackgroundDownloads()
+                }
                 if c.serverState.activeServer != nil, !c.albumCoverPreloadService.state.isComplete {
                     c.albumCoverPreloadService.reconcileChangedCovers()
                 }

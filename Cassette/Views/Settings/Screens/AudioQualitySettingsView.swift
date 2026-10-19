@@ -8,10 +8,9 @@ import SwiftUI
 /// Streaming and download quality, grouped the way Apple Music groups it:
 /// one card per network, one card for downloads.
 ///
-/// There is no server playback-method row: `MediaResolver` always asks for the automatic Jellyfin
-/// decision, so Direct Play vs a server-side transcode follows from the quality chosen here, the
-/// current network and the source itself (`PlaybackDecisionPolicy`).
+/// Automatic derives the server route from quality/capabilities; the method picker can override it.
 struct AudioQualitySettingsView: View {
+    @Environment(\.appContainer) private var container
     @Bindable var settings: StreamingSettings
     @AppStorage("cassette.download.automaticAfterStreaming") private var automaticDownloadsEnabled = false
     @AppStorage("cassette.download.automaticOverCellular") private var automaticDownloadsOverCellular = false
@@ -22,11 +21,26 @@ struct AudioQualitySettingsView: View {
     var body: some View {
         Form {
             streamingSection
+            Section {
+                Toggle(isOn: $settings.preferDolbyAtmos) {
+                    SettingsRowTitle("Prefer Dolby Atmos")
+                }
+            } footer: {
+                SettingsSectionFooter("Plays matching files from albums ending in (Dolby Atmos). Uses the original song when no reliable match is available. Changes apply to the next song.")
+            }
+            Section {
+                SettingsNavigationRow("Server Playback Method", value: settings.jellyfinRoute.choiceTitle) {
+                    ServerPlaybackMethodSelectionView(selection: $settings.jellyfinRoute)
+                }
+            }
             downloadsSection
         }
         .formStyle(.grouped)
         .modifier(SettingsSubpageStyle())
         .navigationTitle(Text("Audio Quality"))
+        .onChange(of: settings.preferDolbyAtmos) {
+            Task { await container?.playerService.playbackVariantSettingsDidChange() }
+        }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 @preconcurrency import Translation
 
 final class AppleTranslator {
@@ -15,16 +16,16 @@ final class AppleTranslator {
         using session: TranslationSession
     ) async throws -> [String] {
 
-        print("🎬 [AppleTranslator] translate() 함수 진입 완료. 총 \(lyrics.count)줄 처리 시작.")
+        Logger.lyrics.debug("🎬 [AppleTranslator] translate() 함수 진입 완료. 총 \(lyrics.count)줄 처리 시작.")
 
         guard !lyrics.isEmpty else {
-            print("⚠️ [AppleTranslator] 빈 가사 배열이 들어와 즉시 종료합니다.")
+            Logger.lyrics.debug("⚠️ [AppleTranslator] 빈 가사 배열이 들어와 즉시 종료합니다.")
             return []
         }
 
         let bundles = LyricTranslationBundler.makeBundles(from: lyrics, bundleSize: bundleSize)
         guard !bundles.isEmpty else {
-            print("⚠️ [AppleTranslator] 실제 번역할 텍스트가 없어 원본 가사를 그대로 반환합니다.")
+            Logger.lyrics.debug("⚠️ [AppleTranslator] 실제 번역할 텍스트가 없어 원본 가사를 그대로 반환합니다.")
             return lyrics
         }
 
@@ -43,13 +44,13 @@ final class AppleTranslator {
         var translatedBlocks = Array(repeating: "", count: bundles.count)
         let chunks = requests.chunked(into: chunkSize)
 
-        print("📦 [AppleTranslator] \(lyrics.count)줄을 \(bundles.count)묶음으로 나눠 번역합니다. (묶음당 최대 \(bundleSize)줄, 요청 그룹 \(chunks.count)개)")
+        Logger.lyrics.debug("📦 [AppleTranslator] \(lyrics.count)줄을 \(bundles.count)묶음으로 나눠 번역합니다. (묶음당 최대 \(self.bundleSize)줄, 요청 그룹 \(chunks.count)개)")
 
         for (chunkIndex, chunk) in chunks.enumerated() {
             // Never call `session.translations` after cancel — Apple fatal-errors instead of throwing.
             // Do NOT wrap `translations` in a task-group timeout: cancelling mid-call also fatal-errors.
             try Task.checkCancellation()
-            print("🔄 [AppleTranslator] [그룹 \(chunkIndex + 1)/\(chunks.count)] 번역 요청 시작...")
+            Logger.lyrics.debug("🔄 [AppleTranslator] [그룹 \(chunkIndex + 1)/\(chunks.count)] 번역 요청 시작...")
 
             do {
                 let chunkResponses = try await session.translations(from: chunk)
@@ -61,11 +62,11 @@ final class AppleTranslator {
                     else { continue }
                     translatedBlocks[bundleIndex] = response.targetText
                 }
-                print("✅ [AppleTranslator] [그룹 \(chunkIndex + 1)/\(chunks.count)] 번역 완료! (\(chunkResponses.count)묶음 수신)")
+                Logger.lyrics.debug("✅ [AppleTranslator] [그룹 \(chunkIndex + 1)/\(chunks.count)] 번역 완료! (\(chunkResponses.count)묶음 수신)")
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                print("❌ [AppleTranslator] [그룹 \(chunkIndex + 1)/\(chunks.count)] 번역 중 에러 발생: \(error.localizedDescription)")
+                Logger.lyrics.debug("❌ [AppleTranslator] [그룹 \(chunkIndex + 1)/\(chunks.count)] 번역 중 에러 발생: \(error.localizedDescription)")
                 throw error
             }
         }
@@ -74,7 +75,7 @@ final class AppleTranslator {
         for (bundleIndex, block) in translatedBlocks.enumerated() where block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             try Task.checkCancellation()
             let bundle = bundles[bundleIndex]
-            print("↩️ [AppleTranslator] 묶음 \(bundleIndex) 비어 있음 — 줄 단위로 재시도")
+            Logger.lyrics.debug("↩️ [AppleTranslator] 묶음 \(bundleIndex) 비어 있음 — 줄 단위로 재시도")
             translatedBlocks[bundleIndex] = try await translateLinesIndividually(
                 bundle.originalLines,
                 using: session
@@ -87,7 +88,7 @@ final class AppleTranslator {
             into: lyrics
         )
 
-        print("🎉 [AppleTranslator] 묶음 번역을 각 줄에 재배치 완료.")
+        Logger.lyrics.debug("🎉 [AppleTranslator] 묶음 번역을 각 줄에 재배치 완료.")
         return translated
     }
 

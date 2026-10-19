@@ -10,6 +10,12 @@ import Foundation
 final class StorageManagementViewModel {
     var categories: [StorageCategorySnapshot] = []
     var totalFormatted: String = "—"
+    var reclaimableAudioBytes: Int64 = 0
+    var largestFirst = true
+    var sortedCategories: [StorageCategorySnapshot] {
+        categories.sorted { largestFirst ? $0.byteCount > $1.byteCount : $0.byteCount < $1.byteCount }
+    }
+    var totalBytes: Int64 { categories.reduce(0) { $0 + $1.byteCount } }
     var isLoading = false
     var clearingKind: StorageCategorySnapshot.Kind?
     var isResettingAll = false
@@ -27,6 +33,7 @@ final class StorageManagementViewModel {
         defer { isLoading = false }
         let loaded = await storageService.categories()
         categories = loaded
+        reclaimableAudioBytes = await storageService.reclaimableAudioBytes
         totalFormatted = ByteCountFormatter.string(
             fromByteCount: loaded.reduce(0) { $0 + $1.byteCount },
             countStyle: .file

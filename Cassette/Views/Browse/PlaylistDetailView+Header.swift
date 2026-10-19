@@ -22,6 +22,13 @@ extension PlaylistDetailView {
                 // Stretchy header: on over-scroll at the top, grow the cover UPWARD to fill the bounce
                 // instead of revealing the solid page color behind it.
                 let stretch = max(0, geo.frame(in: .global).minY)
+                Group {
+                if let source = generatedSource {
+                    PersonalMixArtwork(kind: source.mixKind ?? .essentials, showsTitle: false)
+                        .overlay {
+                            LinearGradient(colors: [.clear, bodyColor], startPoint: .top, endPoint: .bottom)
+                        }
+                } else {
                 PlaylistThemedBackground(
                     coverArtId: effectiveCoverArtId,
                     coverImage: initialCoverImage,
@@ -31,6 +38,8 @@ extension PlaylistDetailView {
                     lightMelt: true,
                     meltTargetColor: atmosphere.isThemed ? atmosphere.gradientTop : nil
                 )
+                }
+                }
                 .frame(width: geo.size.width, height: heroHeight + stretch)
                 .offset(y: -stretch)
                 .id(coverRefreshID)
@@ -38,7 +47,7 @@ extension PlaylistDetailView {
             .frame(height: heroHeight)
 
             Text(vm?.name.isEmpty == false ? (vm?.name ?? initialName) : initialName)
-                .font(.system(size: 44, weight: .bold, design: .rounded))
+                .font(.system(size: heroTitleSize, weight: .bold))
                 .foregroundStyle(headerTextColor)
                 .lineLimit(2)
                 .minimumScaleFactor(0.72)
@@ -49,7 +58,7 @@ extension PlaylistDetailView {
                 playlistTitleBlock(vm: vm, alignment: .center, showsMetadata: false)
                     .padding(.horizontal, CassetteSpacing.xxxl)
 
-                playlistActionBar(vm: vm, playMaxWidth: 165, controlSize: 52)
+                playlistActionBar(vm: vm, playMaxWidth: 180, controlSize: 52)
                     .padding(.horizontal, CassetteSpacing.l)
 
                 if let vm, vm.isDownloadingPlaylist {
@@ -78,26 +87,28 @@ extension PlaylistDetailView {
     ) -> some View {
         let textAlign: TextAlignment = alignment == .leading ? .leading : .center
         VStack(alignment: alignment, spacing: 0) {
-            Text(vm?.name ?? initialName)
+            Text(vm?.name.isEmpty == false ? (vm?.name ?? initialName) : initialName)
                 .font(.cassetteDetailTitle)
                 .foregroundStyle(headerTextColor)
                 .multilineTextAlignment(textAlign)
                 .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .center)
                 .padding(.bottom, CassetteSpacing.xs)
-            if vm == nil {
+            if isLoadingSkeleton {
                 SkeletonBlock(width: 140, height: 18, cornerRadius: 4)
                     .padding(.bottom, CassetteSpacing.s)
             } else if let owner = vm?.owner {
-                Text(String(localized: "by \(owner)", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                    .font(.callout.weight(.semibold))
+                Text(owner)
+                    .font(.title3)
                     .foregroundStyle(headerSecondaryColor)
                     .padding(.bottom, CassetteSpacing.s)
             }
-            if showsMetadata, vm == nil {
+            if isLoadingSkeleton {
                 SkeletonBlock(width: 100, height: 14, cornerRadius: 4)
-            } else if showsMetadata, vm != nil {
+            } else if vm != nil {
                 let count = resolvedSongs(vm).count
-                Text(metadataLine(count: count, updated: vm?.playlistDetail?.changed))
+                Text(showsMetadata ? metadataLine(count: count, updated: vm?.updatedAt)
+                     : vm?.updatedAt.map { String(localized: "Updated \($0.formatted(.relative(presentation: .named)))", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) }
+                       ?? CassetteCountLabel.songs(count))
                     .font(.cassetteCaption)
                     .foregroundStyle(headerSecondaryColor.opacity(0.8))
             }

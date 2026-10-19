@@ -85,13 +85,9 @@ extension LyricsViewModel {
         // Line selection, instrumental gaps and word fill share the filtered clock.
         karaokePlaybackMs = adjustedMs
 
-        if newPrimary != currentLineIndex
-            || newActive != activeLineIndices
-            || newKaraoke != karaokeByteEnds {
-            currentLineIndex = newPrimary
-            activeLineIndices = newActive
-            karaokeByteEnds = newKaraoke
-        }
+        if newPrimary != currentLineIndex { currentLineIndex = newPrimary }
+        if newActive != activeLineIndices { activeLineIndices = newActive }
+        if newKaraoke != karaokeByteEnds { karaokeByteEnds = newKaraoke }
     }
 
     func clearLineHighlight() {
@@ -145,8 +141,16 @@ extension LyricsViewModel {
             Int(Double(typicalGap) * Self.instrumentalGapMedianMultiplier)
         )
 
-        let upcoming = timed.first { $0.startMs > adjustedMs }
-        let previous = timed.last { $0.startMs <= adjustedMs }
+        // Upper bound: word highlighting ticks frequently, even in long TTML documents.
+        var low = 0
+        var high = timed.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if timed[middle].startMs <= adjustedMs { low = middle + 1 }
+            else { high = middle }
+        }
+        let upcoming = low < timed.count ? timed[low] : nil
+        let previous = low > 0 ? timed[low - 1] : nil
 
         let gapStart: Int
         let gapEnd: Int
@@ -240,6 +244,7 @@ extension LyricsViewModel {
             guard !blank, !row.isSecondaryAgent else { return nil }
             return (index, start)
         }
+        instrumentalTimedLeads.sort { $0.startMs == $1.startMs ? $0.index < $1.index : $0.startMs < $1.startMs }
         let starts = instrumentalTimedLeads.map(\.1)
         instrumentalTypicalGapMs = Self.medianPositiveGapMs(in: starts)
     }
@@ -263,6 +268,20 @@ extension LyricsViewModel {
 
     // MARK: Timer
 
+    func synchronizeSeekClock(to seconds: TimeInterval) {
+        guard seconds.isFinite else { return }
+        let target = Int(max(0, seconds) * 1000)
+        lastPositionSampleMs = target
+        lastPositionSampleAt = CACurrentMediaTime()
+        lastDisplayedPositionMs = target
+        // Explicit seeks must bypass the <=120 ms jitter filter, including tiny backward ones.
+        if case .loaded(let structured) = state {
+            let offset = lyricDocument.map { LyricTime.milliseconds(fromSeconds: $0.lyricOffset) } ?? 0
+            karaokePlaybackMs = target - structured.offset + offset
+        }
+        update(elapsedMs: target)
+    }
+
     var isPlaying: Bool {
 
         playerState.playbackState == .playing
@@ -283,9 +302,8 @@ extension LyricsViewModel {
         if !visible {
 
             resumeTask?.cancel()
-            translationTask?.cancel()
-            appleTranslationTimeoutTask?.cancel()
-            appleTranslationTimeoutTask = nil
+            resumeTask = nil
+            invalidateTranslationWork()
             resumeTranslationTask?.cancel()
             resumeTranslationTask = nil
             isUserScrolling = false
@@ -331,7 +349,7 @@ extension LyricsViewModel {
     func startTimer() {
         // Always restart so a fresh track / resume after pause can't leave a dead task.
         stopTimer()
-        let observedMs = Int(playerState.position * 1000)
+        let observedMs = lyricSeekTargetMs ?? Int((playerState.pendingSeekPosition ?? playerState.position) * 1000)
         lastPositionSampleMs = observedMs
         lastPositionSampleAt = CACurrentMediaTime()
         // After a seek the engine still reports the pre-seek position for a few ticks.
@@ -344,9 +362,8 @@ extension LyricsViewModel {
         // On a new track / large forward jump, interpolatedElapsedMs() will catch up
         // via the monotonic-advance logic.  We do NOT accept backward jumps here.
         // Stay on the MainActor — Timer→Task hops queued behind SwiftUI and made paren cues feel late.
-        // Karaoke words animate at 60 Hz (≈16.7ms); line-synced lyrics tick at 30 Hz (≈33.3ms).
-        // `CassettePerformance` halves that on a constrained device (Low Power Mode / thermal
-        // pressure) and is re-read every tick, so a policy change lands within one frame.
+        // Word fill ticks at 30 Hz; line-only lyrics use 10 Hz. Re-read the budget each tick
+        // so warm devices back off before thermal throttling starts.
         let karaokePlayback = hasKaraokePlayback
         trackingTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -369,6 +386,14 @@ extension LyricsViewModel {
     /// Accepts forward progress unconditionally; only filters out backward
     /// jumps that are clearly stale pre-seek artifacts.
     func interpolatedElapsedMs() -> Int {
+        if let target = lyricSeekTargetMs ?? playerState.pendingSeekPosition.map({ Int($0 * 1000) }) {
+            // File parsers and AVPlayer can publish a stale clock during repositioning.
+            // Never scroll back to it, or extrapolate vocals while a seek is still pending.
+            lastPositionSampleMs = target
+            lastPositionSampleAt = CACurrentMediaTime()
+            lastDisplayedPositionMs = target
+            return target
+        }
         let nowMs = Int(playerState.position * 1000)
         let now = CACurrentMediaTime()
 

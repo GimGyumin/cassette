@@ -481,8 +481,7 @@ actor LyricsService {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            let ns = error as NSError
-            if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled {
+            if Task.isCancelled || PlaybackFailure.classify(error).kind == .cancelled {
                 throw CancellationError()
             }
             // Only surface "unsupported" when the capability probe was conclusive.

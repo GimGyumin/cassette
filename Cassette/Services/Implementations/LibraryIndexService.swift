@@ -25,26 +25,139 @@ final class LibraryIndexService {
     private var albums: [IndexedAlbum] = []
     private var playlists: [IndexedPlaylist] = []
     private var songs: [DisplayableSong] = []
-    private var genreCoverCache: [String: String] = [:]
-    private var missingGenreCovers: Set<String> = []
-    /// Preserve track-level artwork identity; never collapse this map by album ID.
-    var songArtworkSnapshot: [String: String] {
-        Dictionary(songs.map { ("song:\($0.id)", $0.effectiveCoverArtId) }, uniquingKeysWith: { _, new in new })
+    private var variants = AtmosVariantCatalogue()
+    private var detailVariants: [String: AtmosVariantCatalogue] = [:]
+    private var detailServerID: UUID?
+    @ObservationIgnored private let defaults: UserDefaults
+
+    func presentedAlbums(_ values: [AlbumID3]) -> [AlbumID3] {
+        if loadedServerID == serverID(), lastIndexedAt != nil { return variants.presented(values) }
+        return AtmosAlbumPolicy.presented(values)
     }
 
-    /// Representative library artwork for an Apple Music-style genre card.
-    func browseCoverArtId(for genre: String) -> String? {
-        let needle = genre.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-        if let cached = genreCoverCache[needle] { return cached }
-        if missingGenreCovers.contains(needle) { return nil }
-        let coverID = songs.first { song in
-            let value = (song.genre ?? "")
-                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            return !value.isEmpty && (value.contains(needle) || needle.contains(value))
-        }?.effectiveCoverArtId
-        if let coverID { genreCoverCache[needle] = coverID }
-        else { missingGenreCovers.insert(needle) }
-        return coverID
+    func variantAlbums(for album: AlbumID3) -> [AlbumID3] {
+        guard loadedServerID == serverID() else { return [] }
+        let baseID = variants.albumPairs[album.id] ?? album.id
+        return variants.albums.filter { $0.id == baseID || variants.albumPairs[$0.id] == baseID }
+    }
+
+    func primaryAlbumID(for id: String) -> String {
+        guard loadedServerID == serverID() else { return id }
+        return variants.albumPairs[id] ?? id
+    }
+
+    func playbackCoverID(for song: DisplayableSong) -> String {
+        if let explicit = song.explicitCoverArtId { return explicit }
+        if loadedServerID == serverID(), loadedServerID != nil {
+            if let cover = variants.songsByID[song.id]?.explicitCoverArtId { return cover }
+            if let cover = variants.coverArtID(forAlbumID: song.albumId) { return cover }
+        }
+        if detailServerID == serverID(), detailServerID != nil, let albumID = song.albumId,
+           let catalog = detailVariants[albumID] {
+            if let cover = catalog.songsByID[song.id]?.explicitCoverArtId { return cover }
+            if let cover = catalog.coverArtID(forAlbumID: albumID) { return cover }
+        }
+        return song.effectiveCoverArtId
+    }
+
+    func preferredAtmosSong(for song: DisplayableSong, serverId: UUID) -> DisplayableSong? {
+        guard serverId == serverID() else { return nil }
+        let overrides = defaults.dictionary(forKey: Self.manualKey(serverId)) as? [String: String] ?? [:]
+        if let id = overrides[song.id] {
+            let candidate = (loadedServerID == serverId ? variants.songsByID[id] : nil)
+                ?? (detailServerID == serverId ? detailVariants.values.compactMap { $0.songsByID[id] }.first : nil)
+            guard let candidate, AtmosVariantCatalogue.isAtmos(candidate) else { return nil }
+            return candidate
+        }
+        if detailServerID == serverId, let album = song.albumId,
+           let candidate = detailVariants[album]?.preferred(for: song) { return candidate }
+        return loadedServerID == serverId ? variants.preferred(for: song) : nil
+    }
+
+    func registerAlbumVersions(_ albums: [AlbumID3], serverId: UUID) async {
+        guard serverId == serverID() else { return }
+        let token = generation
+        let revision = accountRevision()
+        let worker = Task.detached(priority: .utility) {
+            AtmosVariantCatalogue(songs: albums.flatMap { ($0.song ?? []).map { DisplayableSong(from: $0) } }, albums: albums)
+        }
+        let catalog = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+        guard token == generation, revision == accountRevision(), serverId == serverID(), !Task.isCancelled else { return }
+        if detailServerID != serverId { detailVariants = [:]; detailServerID = serverId }
+        for album in albums { detailVariants[album.id] = catalog }
+    }
+
+    func atmosCandidates(for song: DisplayableSong, serverId: UUID) async -> [DisplayableSong] {
+        guard serverId == serverID() else { return [] }
+        let token = generation
+        let revision = accountRevision()
+        let snapshots = (loadedServerID == serverId ? [variants] : [])
+            + (detailServerID == serverId ? Array(detailVariants.values) : [])
+        let worker = Task.detached(priority: .userInitiated) {
+            Dictionary(snapshots.flatMap { $0.manualCandidates(for: song) }.map { ($0.id, $0) }, uniquingKeysWith: { _, song in song })
+                .values.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        }
+        let candidates = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+        guard token == generation, revision == accountRevision(), serverId == serverID(), !Task.isCancelled else { return [] }
+        return candidates
+    }
+
+    func manualAtmosSelection(songId: String, serverId: UUID) -> String? {
+        guard serverId == serverID() else { return nil }
+        return (defaults.dictionary(forKey: Self.manualKey(serverId)) as? [String: String])?[songId]
+    }
+
+    /// nil = automatic, empty string = original only, ID = an explicit user selection.
+    func setManualAtmosSelection(_ id: String?, for song: DisplayableSong, serverId: UUID) {
+        guard serverId == serverID() else { return }
+        if let id, !id.isEmpty {
+            let candidate = (loadedServerID == serverId ? variants.songsByID[id] : nil)
+                ?? (detailServerID == serverId ? detailVariants.values.compactMap { $0.songsByID[id] }.first : nil)
+            guard let candidate, AtmosVariantCatalogue.isAtmos(candidate),
+                  candidate.id != song.id,
+                  AtmosAlbumPolicy.normalized(candidate.artist ?? "") == AtmosAlbumPolicy.normalized(song.artist ?? "") else { return }
+        }
+        let key = Self.manualKey(serverId)
+        var overrides = defaults.dictionary(forKey: key) as? [String: String] ?? [:]
+        overrides[song.id] = id
+        defaults.set(overrides, forKey: key)
+    }
+
+    func clearAtmosSelections(serverId: UUID) { defaults.removeObject(forKey: Self.manualKey(serverId)) }
+    private static func manualKey(_ serverId: UUID) -> String { "cassette.atmos.matches.\(serverId.uuidString)" }
+    /// Missing track artwork reuses the album; explicit alternate artwork stays distinct.
+    var songArtworkSnapshot: [String: String] {
+        Dictionary(songs.compactMap { song -> (String, String)? in
+            // The album pass already owns the fallback artwork. Queue a track separately
+            // only when it actually has its own artwork ID (or has no album to fall back to).
+            guard song.explicitCoverArtId != nil || song.albumId == nil else { return nil }
+            return ("song:\(song.id)", playbackCoverID(for: song))
+        }, uniquingKeysWith: { _, new in new })
+    }
+
+    /// Resolve all browse cards in one background pass. View bodies must never scan the catalog.
+    func browseCoverArtIDs(for genres: [String]) async -> [String: String] {
+        let token = generation
+        let locale = Locale.current
+        let worker = Task.detached(priority: .utility) { [songs] in
+            var remaining = genres.map { ($0, $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)) }
+            var covers: [String: String] = [:]
+            for song in songs {
+                guard !Task.isCancelled else { return [:] as [String: String] }
+                let value = (song.genre ?? "").folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale)
+                guard !value.isEmpty else { continue }
+                remaining.removeAll { genre, needle in
+                    guard value.contains(needle) || needle.contains(value) else { return false }
+                    covers[genre] = song.effectiveCoverArtId
+                    return true
+                }
+                if remaining.isEmpty { break }
+            }
+            return covers
+        }
+        let covers = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+        guard token == generation, !Task.isCancelled else { return [:] }
+        return covers
     }
     private var songTokens: [[String]] = []
     private var artistTokens: [[String]] = []
@@ -55,11 +168,14 @@ final class LibraryIndexService {
     private let serverID: @MainActor () -> UUID?
     private let networkAvailable: @MainActor () -> Bool
     private let directory: URL?
+    private let accountRevision: @MainActor () -> UInt64
 
-    init(serverID: @escaping @MainActor () -> UUID? = { nil }, networkAvailable: @escaping @MainActor () -> Bool = { true }, directory: URL? = nil) {
+    init(serverID: @escaping @MainActor () -> UUID? = { nil }, networkAvailable: @escaping @MainActor () -> Bool = { true }, directory: URL? = nil, defaults: UserDefaults = .standard, accountRevision: @escaping @MainActor () -> UInt64 = { 0 }) {
         self.serverID = serverID
         self.networkAvailable = networkAvailable
         self.directory = directory
+        self.defaults = defaults
+        self.accountRevision = accountRevision
     }
 
     static var defaultDirectory: URL {
@@ -73,10 +189,15 @@ final class LibraryIndexService {
         var playlists: [IndexedPlaylist]
         var songs: [DisplayableSong]
         var date: Date
+        var albumCatalog: [AlbumID3]? = nil
+        var atmosMatches: [String: String]? = nil
+        var atmosMatchingVersion: Int? = nil
     }
 
     private var indexTask: Task<Void, Never>?
     private var indexTaskServerID: UUID?
+    private var persistedIndexDate: Date?
+    private var catalogURL: URL? { serverID().flatMap { directory?.appendingPathComponent("\($0).sqlite") } }
 
     nonisolated struct IndexedArtist: Sendable, Codable {
         let id: String
@@ -116,13 +237,17 @@ final class LibraryIndexService {
         lastError = nil
         lastBuildSucceeded = false
         let token = generation
+        let revision = accountRevision()
         indexTaskServerID = serverID()
         indexTask = Task { [weak self] in
-            await self?.runRebuild(using: library, token: token, refreshExisting: refreshExisting)
+            await self?.runRebuild(using: library, token: token, revision: revision, refreshExisting: refreshExisting)
         }
     }
 
     func clear() {
+        variants = AtmosVariantCatalogue()
+        detailVariants = [:]
+        detailServerID = nil
         indexTask?.cancel()
         indexTask = nil
         indexTaskServerID = nil
@@ -133,9 +258,8 @@ final class LibraryIndexService {
             catch { Logger.library.error("Unable to clear stored library indexes: \(error, privacy: .public)") }
         }
         loadedServerID = nil
+        persistedIndexDate = nil
         songs = []
-        genreCoverCache.removeAll()
-        missingGenreCovers.removeAll()
         songTokens = []
         artistTokens = []; albumTokens = []; playlistTokens = []
         artists = []
@@ -176,7 +300,9 @@ final class LibraryIndexService {
     }
 
     func search(query: String, limit: Int = 20) -> LocalHits {
-        Self.match(query: query, limit: limit, artists: artists, albums: albums,
+        if persistedIndexDate == lastIndexedAt, let url = catalogURL,
+           let hits = try? LibraryCatalogStore.search(query, limit: limit, at: url) { return hits }
+        return Self.match(query: query, limit: limit, artists: artists, albums: albums,
                    playlists: playlists, songs: songs, artistTokens: artistTokens,
                    albumTokens: albumTokens, playlistTokens: playlistTokens, songTokens: songTokens)
     }
@@ -185,8 +311,10 @@ final class LibraryIndexService {
     func searchInBackground(query: String, limit: Int = 80) async -> LocalHits {
         let token = generation
         let indexedEntryCount = entryCount
+        let store = persistedIndexDate == lastIndexedAt ? catalogURL : nil
         let worker = Task.detached(priority: .userInitiated) {
             [artists, albums, playlists, songs, artistTokens, albumTokens, playlistTokens, songTokens] in
+            if let store, let hits = try? LibraryCatalogStore.search(query, limit: limit, at: store) { return hits }
             let startedAt = ProcessInfo.processInfo.systemUptime
             let hits = Self.match(query: query, limit: limit, artists: artists, albums: albums,
                                   playlists: playlists, songs: songs, artistTokens: artistTokens,
@@ -253,38 +381,56 @@ final class LibraryIndexService {
         """
     }
 
-    private func install(_ snapshot: Snapshot, token: UInt64, server: UUID?) async -> Bool {
-        // Romanizing a large library is CPU work, so do it once off the UI/audio coordination actor.
-        let tokens = await Task.detached(priority: .utility) {
-            (snapshot.artists.map { HangulRomanization.searchTokens($0.name) },
-             snapshot.albums.map { HangulRomanization.searchTokens([$0.name, $0.artist ?? ""].joined(separator: " ")) },
-             snapshot.playlists.map { HangulRomanization.searchTokens($0.name) },
-             snapshot.songs.map {
-                 HangulRomanization.searchTokens(
-                    [$0.title, $0.artist ?? "", $0.albumName ?? "", $0.genre ?? ""]
-                        .joined(separator: " ")
-                 )
-             })
-        }.value
-        guard token == generation, server == serverID(), !Task.isCancelled else { return false }
+    private func install(_ snapshot: Snapshot, token: UInt64, server: UUID?, revision: UInt64) async -> Bool {
+        // Reopen the persisted search tokens without repeating romanization at launch.
+        let tokenStore = persistedIndexDate == snapshot.date ? catalogURL : nil
+        let worker = Task.detached(priority: .utility) {
+            let catalog = snapshot.albumCatalog ?? snapshot.albums.map {
+                AlbumID3(id: $0.id, name: $0.name, songCount: 0, duration: 0, artist: $0.artist, coverArt: $0.coverArtId)
+            }
+            let storedMatches = snapshot.atmosMatchingVersion == AtmosVariantCatalogue.matchingVersion ? snapshot.atmosMatches : nil
+            let variants = AtmosVariantCatalogue(songs: snapshot.songs, albums: catalog, storedMatches: storedMatches)
+            let presented = AtmosAlbumPolicy.presented(catalog).map {
+                IndexedAlbum(id: $0.id, name: $0.name, artist: $0.artist, coverArtId: $0.coverArt)
+            }
+            let storedTokens = tokenStore.flatMap { try? LibraryCatalogStore.storedTokens(at: $0) } ?? [:]
+            func tokenize<T>(_ values: [T], kind: String, id: (T) -> String, text: (T) -> String) throws -> [[String]] {
+                var result: [[String]] = []
+                result.reserveCapacity(values.count)
+                for value in values {
+                    try Task.checkCancellation()
+                    result.append(storedTokens[kind]?[id(value)] ?? HangulRomanization.searchTokens(text(value)))
+                }
+                return result
+            }
+            return (try tokenize(snapshot.artists, kind: "artist", id: { $0.id }) { $0.name },
+                    try tokenize(presented, kind: "album", id: { $0.id }) { [$0.name, $0.artist ?? ""].joined(separator: " ") },
+                    try tokenize(snapshot.playlists, kind: "playlist", id: { $0.id }) { $0.name },
+                    try tokenize(snapshot.songs, kind: "song", id: { $0.id }) { [$0.title, $0.artist ?? "", $0.albumName ?? "", $0.genre ?? ""].joined(separator: " ") }, variants, presented)
+        }
+        guard let tokens = try? await withTaskCancellationHandler(operation: {
+            try await worker.value
+        }, onCancel: { worker.cancel() }) else { return false }
+        guard token == generation, server == serverID(), revision == accountRevision(), !Task.isCancelled else { return false }
         artists = snapshot.artists
-        albums = snapshot.albums
+        albums = tokens.5
+        variants = tokens.4
+        detailVariants = [:]
+        detailServerID = nil
         playlists = snapshot.playlists
         songs = snapshot.songs
-        genreCoverCache.removeAll()
-        missingGenreCovers.removeAll()
-        (artistTokens, albumTokens, playlistTokens, songTokens) = tokens
+        (artistTokens, albumTokens, playlistTokens, songTokens) = (tokens.0, tokens.1, tokens.2, tokens.3)
         entryCount = artists.count + albums.count + playlists.count + songs.count
         lastIndexedAt = snapshot.date
         return true
     }
 
-    private func runRebuild(using library: any LibraryServiceProtocol, token: UInt64, refreshExisting: Bool) async {
-        guard token == generation, !Task.isCancelled else { return }
+    private func runRebuild(using library: any LibraryServiceProtocol, token: UInt64, revision: UInt64, refreshExisting: Bool) async {
+        guard token == generation, revision == accountRevision(), !Task.isCancelled else { return }
         let id = serverID()
         if loadedServerID != id {
+            variants = AtmosVariantCatalogue()
             artists = []; albums = []; playlists = []; songs = []; songTokens = []
-            genreCoverCache.removeAll(); missingGenreCovers.removeAll()
             artistTokens = []; albumTokens = []; playlistTokens = []
             entryCount = 0; lastIndexedAt = nil
         }
@@ -299,15 +445,32 @@ final class LibraryIndexService {
                 indexTaskServerID = nil
             }
         }
-        let file = id.flatMap { id in directory?.appendingPathComponent("\(id).json") }
+        let file = catalogURL
+        let legacyFile = id.flatMap { directory?.appendingPathComponent("\($0).json") }
         if lastIndexedAt == nil, let file {
-            let stored = await Task.detached(priority: .utility) {
-                guard let data = try? Data(contentsOf: file) else { return nil as Snapshot? }
-                return try? JSONDecoder().decode(Snapshot.self, from: data)
+            let (stored, alreadySQLite) = await Task.detached(priority: .utility) { () -> (Snapshot?, Bool) in
+                if let stored = try? LibraryCatalogStore.load(from: file) { return (stored, true) }
+                guard let legacyFile, let data = try? Data(contentsOf: legacyFile),
+                      let stored = try? JSONDecoder().decode(Snapshot.self, from: data) else { return (nil, false) }
+                return (stored, false)
             }.value
-            guard token == generation, id == serverID(), !Task.isCancelled else { return }
+            guard token == generation, revision == accountRevision(), id == serverID(), !Task.isCancelled else { return }
             if let stored {
-                guard await install(stored, token: token, server: id) else { return }
+                // Migrate a legacy JSON without fetching the server or deleting its backup.
+                if !alreadySQLite {
+                    let staged = try? await Task.detached(priority: .utility) {
+                        let staged = file.deletingLastPathComponent().appendingPathComponent(".catalog-\(UUID()).sqlite")
+                        do { try LibraryCatalogStore.save(stored, to: staged); return staged }
+                        catch { StagedFileWrite.discard(staged); throw error }
+                    }.value
+                    if let staged {
+                        defer { StagedFileWrite.discard(staged) }
+                        guard token == generation, revision == accountRevision(), id == serverID(), !Task.isCancelled else { return }
+                        try? StagedFileWrite.commit(staged, to: file)
+                    }
+                }
+                persistedIndexDate = FileManager.default.fileExists(atPath: file.path) ? stored.date : nil
+                guard await install(stored, token: token, server: id, revision: revision) else { return }
                 progress = 1
             }
         }
@@ -323,7 +486,7 @@ final class LibraryIndexService {
         progress = 0
         do {
             async let artistsTask = library.artists()
-            async let albumsTask = library.allAlbums()
+            async let albumsTask = library.albumsForIndex()
             async let playlistsTask = library.playlists()
             let artistIndexes = try await artistsTask
             let albumList = try await albumsTask
@@ -333,7 +496,7 @@ final class LibraryIndexService {
             var offset = 0
             while true {
                 try Task.checkCancellation()
-                guard token == generation, id == serverID() else { return }
+                guard token == generation, revision == accountRevision(), id == serverID() else { return }
                 let page = try await library.librarySongs(offset: offset, count: 500)
                 let fresh = page.filter { seen.insert($0.id).inserted }
                 guard !fresh.isEmpty else { break }
@@ -342,26 +505,39 @@ final class LibraryIndexService {
                 // Some servers cap counts below the request. Stop on empty/repeated data, not a short page.
             }
             try Task.checkCancellation()
-            guard token == generation, id == serverID() else { return }
-            let snapshot = Snapshot(
+            guard token == generation, revision == accountRevision(), id == serverID() else { return }
+            var snapshot = Snapshot(
                 artists: artistIndexes.flatMap(\.artist).map { IndexedArtist(id: $0.id, name: $0.name, coverArtId: $0.coverArt) },
                 albums: albumList.map { IndexedAlbum(id: $0.id, name: $0.name, artist: $0.artist, coverArtId: $0.coverArt) },
                 playlists: playlistList.map { IndexedPlaylist(id: $0.id, name: $0.name, coverArtId: $0.coverArt) },
-                songs: indexedSongs, date: Date()
+                songs: indexedSongs, date: Date(), albumCatalog: albumList
             )
-            guard await install(snapshot, token: token, server: id) else { return }
+            guard await install(snapshot, token: token, server: id, revision: revision) else { return }
+            snapshot.atmosMatches = variants.matches
+            snapshot.atmosMatchingVersion = AtmosVariantCatalogue.matchingVersion
             progress = 1
             if let file {
-                // Actor-isolated commit fences account switches and superseded passes.
-                let data = try await Task.detached(priority: .utility) { try JSONEncoder().encode(snapshot) }.value
-                guard token == generation, id == serverID(), !Task.isCancelled else { return }
-                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try data.write(to: file, options: .atomic)
+                // Encode and bulk-write on a worker. Only the atomic rename runs with the
+                // MainActor generation check, so logout cannot be followed by an old file commit.
+                let staged = try await Task.detached(priority: .utility) {
+                    let staged = file.deletingLastPathComponent().appendingPathComponent(".catalog-\(UUID()).sqlite")
+                    do {
+                        if (try? LibraryCatalogStore.load(from: file)) != nil { try FileManager.default.copyItem(at: file, to: staged) }
+                        try LibraryCatalogStore.save(snapshot, to: staged)
+                        return staged
+                    } catch { StagedFileWrite.discard(staged); throw error }
+                }.value
+                defer { Task.detached(priority: .utility) { StagedFileWrite.discard(staged) } }
+                guard token == generation, revision == accountRevision(), id == serverID(), !Task.isCancelled else { return }
+                try StagedFileWrite.commit(staged, to: file)
+                persistedIndexDate = snapshot.date
             }
             LibraryIndexSchema.markPrepared()
             lastBuildSucceeded = true
         } catch is CancellationError {
         } catch {
+            guard token == generation, revision == accountRevision(), id == serverID(), !Task.isCancelled,
+                  (error as? URLError)?.code != .cancelled else { return }
             lastError = UserFacingError.from(error)
             Logger.library.debug("Library index rebuild failed: \(error, privacy: .public)")
         }

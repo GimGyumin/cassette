@@ -115,17 +115,12 @@ struct SettingsValueRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: CassetteSpacing.s) {
-            SettingsRowTitle(title, subtitle: subtitle)
-            Spacer(minLength: CassetteSpacing.s)
+        LabeledContent {
             if let value {
                 Text(value)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
             }
+        } label: {
+            SettingsRowTitle(title, subtitle: subtitle)
         }
     }
 }
@@ -159,7 +154,7 @@ struct SettingsActionRow: View {
                     .foregroundStyle(isDestructive ? Color.red : Color.primary)
                 Spacer(minLength: CassetteSpacing.s)
                 if isBusy {
-                    ProgressView().scaleEffect(0.8)
+                    ProgressView().controlSize(.small)
                 }
             }
         }
@@ -179,8 +174,7 @@ extension SettingsChoiceItem {
     var choiceSubtitle: String? { nil }
 }
 
-/// Apple Music-style picker: one grouped card of title/subtitle rows with a
-/// trailing blue checkmark for the current selection.
+/// Native single-selection form, including system checkmarks and accessibility.
 struct SettingsChoiceList<Item: SettingsChoiceItem>: View {
     let navigationTitle: LocalizedStringKey
     var footer: LocalizedStringKey?
@@ -203,21 +197,21 @@ struct SettingsChoiceList<Item: SettingsChoiceItem>: View {
     }
 
     var body: some View {
-        List {
+        Form {
             Section {
-                ForEach(items, id: \.self) { item in
-                    Button {
-                        selection = item
-                    } label: {
-                        SettingsChoiceRow(
-                            title: item.choiceTitle,
-                            subtitle: subtitle?(item) ?? item.choiceSubtitle,
-                            isSelected: item == selection
-                        )
+                Picker(navigationTitle, selection: $selection) {
+                    ForEach(items, id: \.self) { item in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.choiceTitle)
+                            if let detail = subtitle?(item) ?? item.choiceSubtitle {
+                                Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                            }
+                        }
+                        .tag(item)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(item == selection ? [.isSelected] : [])
                 }
+                .pickerStyle(.inline)
+                .labelsHidden()
             } footer: {
                 if let footer {
                     SettingsSectionFooter(footer)
@@ -230,36 +224,6 @@ struct SettingsChoiceList<Item: SettingsChoiceItem>: View {
         .listStyle(.insetGrouped)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-    }
-}
-
-struct SettingsChoiceRow: View {
-    let title: String
-    var subtitle: String?
-    let isSelected: Bool
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: CassetteSpacing.s) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .foregroundStyle(.primary)
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: CassetteSpacing.s)
-            if isSelected {
-                Image(systemName: "checkmark")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .accessibilityHidden(true)
-            }
-        }
-        .padding(.vertical, subtitle == nil ? 0 : 2)
-        .contentShape(Rectangle())
     }
 }
 
@@ -309,23 +273,9 @@ struct SettingsSubpageStyle: ViewModifier {
             .environment(\.defaultMinListRowHeight, 44)
             .tint(.blue)
             .headerProminence(.standard)
-            .labeledContentStyle(SettingsValueStyle())
             #if os(iOS)
             .listSectionSpacing(.compact)
             #endif
-    }
-}
-
-struct SettingsValueStyle: LabeledContentStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            configuration.label
-            Spacer(minLength: 8)
-            configuration.content
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.trailing)
-        }
     }
 }
 

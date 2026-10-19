@@ -37,9 +37,13 @@ struct OnboardingAlbumCoversStepView: View {
                 Section {
                     VStack(alignment: .leading, spacing: 12) {
                         if service.state.isDownloading {
-                            ProgressView(value: service.state.fraction)
-                                .progressViewStyle(.linear)
-                                .tint(.purple)
+                            if service.state.isResolvingInventory {
+                                ProgressView()
+                            } else {
+                                ProgressView(value: service.state.fraction)
+                                    .progressViewStyle(.linear)
+                                    .tint(.purple)
+                            }
                             Text(String(localized: "Downloading covers…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -82,8 +86,8 @@ struct OnboardingAlbumCoversStepView: View {
                                 .foregroundStyle(.red)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        if service.state.total > 0 {
-                            Text("\(service.state.completed) / \(service.state.total)")
+                        if !service.state.isResolvingInventory && service.state.libraryTotal > 0 {
+                            Text("\(service.state.availableCompleted) / \(service.state.libraryTotal)")
                                 .font(.footnote.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }

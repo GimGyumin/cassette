@@ -110,7 +110,7 @@ extension PlayerService {
                 Logger.player.info("[SPATIAL] capabilities changed — enabled=\(enabled, privacy: .public)")
                 Task { await self?.logSpatialRouteStatus() }
             }
-            NotificationCenter.default.addObserver(
+            mediaServicesResetObserver = NotificationCenter.default.addObserver(
                 forName: AVAudioSession.mediaServicesWereResetNotification,
                 object: nil,
                 queue: .main
@@ -143,6 +143,8 @@ extension PlayerService {
     /// Reactivate the shared session and resume the engine without fighting mid-interruption.
     /// Avoids aggressive rebuilds (those left longFormAudio wedged → silent system audio).
     private func resumeAfterSystemInterruption() async {
+        guard transport.permitsAudio else { return }
+        let context = playbackContext
         interruptedWhilePlaying = false
         let shouldHealthCheck = mayNeedPlaybackHealthCheck
         mayNeedPlaybackHealthCheck = false
@@ -157,11 +159,18 @@ extension PlayerService {
             configureAudioSessionIfNeeded(preferMultichannel: systemPlayback.isActive)
         }
 
-        await MainActor.run {
-            if state.playbackState != .playing {
-                state.playbackState = .playing
-            }
+        if currentSource?.isLiveStream != true {
+            // A stopped/failed engine needs the same source refresh and retained seek as a
+            // manual resume. Calling engine.resume() alone can leave it permanently silent.
+            await resume()
+            if shouldHealthCheck { await verifyPlaybackHealthyOrRebuild() }
+            return
         }
+
+        guard await commitPresentation(context, { state in
+            state.playbackState = state.playbackState.resuming(reopensSource: false, position: state.position)
+            return true
+        }) else { return }
 
         if systemPlayback.isActive {
             if systemEngine.state != .playing {
@@ -198,6 +207,8 @@ extension PlayerService {
         // is playing. Resuming/rebuilding it here starts a second audible engine.
         guard !systemPlayback.isActive else { return }
         let checkedEpoch = playbackEpoch
+        let checkedSeek = seekRequestGeneration
+        let checkedCommand = transportCommandID
         // Ignore while a restore seek is still pending — progress is expected to stall briefly.
         if pendingRestoreInfo != nil { return }
 
@@ -229,6 +240,7 @@ extension PlayerService {
         try? await Task.sleep(for: .milliseconds(1000))
         let stillPlaying = await MainActor.run { state.playbackState == .playing }
         guard stillPlaying, !systemPlayback.isActive, checkedEpoch == playbackEpoch,
+              checkedSeek == seekRequestGeneration, checkedCommand == transportCommandID,
               pendingRestoreInfo == nil, seekState == .idle, !Task.isCancelled else { return }
         let sampleB = engineProgress()
         let engineState = engine.state
@@ -281,7 +293,7 @@ extension PlayerService {
             configureAudioSessionIfNeeded(preferMultichannel: false)
         }
         engine.stop()
-        startEnginePlayback(url: source.url, headers: source.customHeaders, useSystemPlayer: false)
+        startEnginePlayback(url: source.url, headers: source.customHeaders, useSystemPlayer: seekTo > 0)
         Task { @MainActor in PlaybackBeatMeter.shared.setEnabled(true) }
     }
 
@@ -294,22 +306,11 @@ extension PlayerService {
         deferredInterruptionPauseTask?.cancel()
         deferredInterruptionPauseTask = nil
         hardPausedForCurrentInterruption = false
-        let wasPlaying = await MainActor.run { state.playbackState.hasPlaybackIntent }
-        // Save the current playback position so we can restore it after
-        // the audio session is reclaimed (prevents the "lost position / silence" glitch).
-        let savedPosition = await MainActor.run { state.position }
-        // Release then reclaim — media-services reset can leave the route silent for every app
-        // until someone cycles activation with notifyOthersOnDeactivation.
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        configureAudioSessionIfNeeded(preferMultichannel: systemPlayback.isActive)
-        if wasPlaying {
-            // Restore playback at the saved position so audio picks up
-            // where it left off instead of starting over or going silent.
-            if savedPosition > 0 {
-                await seek(to: savedPosition)
-            }
-            await resume()
-        }
+        sessionActivationRetryTask?.cancel()
+        sessionActivationRetryTask = nil
+        await resetAudioObjectsAfterMediaServicesReset()
+        // Session/category activation is performed by the next explicit play/resume request.
+
     }
 
     private func noteScreenshotTaken() async {
@@ -332,7 +333,9 @@ extension PlayerService {
     /// Hard pause used for real interruptions (call / Siri / other apps). Screenshots cancel
     /// the deferred task that would call this.
     func applyHardInterruptionPause() async {
+        let context = playbackContext
         hardPausedForCurrentInterruption = true
+        finalizePlaySegment()
         deferredInterruptionPauseTask = nil
         cancelFadeTasks()
         pauseEngine()
@@ -340,13 +343,9 @@ extension PlayerService {
         await saveCurrentPosition()
         // Reflect the external stop in the app UI immediately — the player is no longer
         // playing. Keep `interruptedWhilePlaying` so `.ended` can decide whether to resume.
-        await MainActor.run { state.playbackState = .paused }
+        guard await commitPresentation(context, { $0.playbackState = .paused; return true }) else { return }
         await pushPositionSnapshot(rate: 0.0)
-        if let track = await MainActor.run(body: { state.currentTrack }) {
-            if let ws = widgetSyncService {
-                Task { [weak ws] in await ws?.onPlayStateChanged(isPlaying: false, currentSong: track) }
-            }
-        }
+        await publishWidgetStatus()
         Logger.player.info(
             "[INTERRUPTION] began — engine paused (routeDisconnect=\(self.interruptionWasRouteDisconnect, privacy: .public); UI set to paused)"
         )
@@ -358,6 +357,7 @@ extension PlayerService {
 
         switch type {
         case .began:
+            let context = beginSystemInterruption()
             audioInterruptionActive = true
             // Record route-disconnect interruptions (AirPods in case) before any early
             // return — .ended must never auto-resume those onto the built-in speaker.
@@ -365,7 +365,7 @@ extension PlayerService {
                 .flatMap(AVAudioSession.InterruptionReason.init(rawValue:)) == .routeDisconnected
 
             let wasPlaying = await MainActor.run { state.playbackState.hasPlaybackIntent }
-            guard wasPlaying || interruptedWhilePlaying else { return }
+            guard context == playbackContext, wasPlaying || interruptedWhilePlaying else { return }
 
             interruptedWhilePlaying = true
             hardPausedForCurrentInterruption = false
@@ -396,8 +396,10 @@ extension PlayerService {
             }
 
         case .ended:
+            let context = playbackContext
             guard audioInterruptionActive else { return }
             audioInterruptionActive = false
+            transport.interrupted = false
             deferredInterruptionPauseTask?.cancel()
             deferredInterruptionPauseTask = nil
             let neverHardPaused = !hardPausedForCurrentInterruption
@@ -418,7 +420,7 @@ extension PlayerService {
                 interruptedWhilePlaying = false
                 pendingScreenshotResume = false
                 screenshotNotedAt = nil
-                await MainActor.run { state.playbackState = .paused }
+                guard await commitPresentation(context, { $0.playbackState = .paused; return true }) else { return }
                 await pushPositionSnapshot(rate: 0.0)
                 Logger.player.info("[INTERRUPTION] ended — route disconnect, staying paused")
                 return
@@ -444,7 +446,7 @@ extension PlayerService {
             } else {
                 if neverHardPaused && wasPlayingBefore { await applyHardInterruptionPause() }
                 interruptedWhilePlaying = false
-                await MainActor.run { state.playbackState = .paused }
+                guard await commitPresentation(context, { $0.playbackState = .paused; return true }) else { return }
                 await pushPositionSnapshot(rate: 0.0)
                 Logger.player.info("[INTERRUPTION] ended — staying paused")
             }

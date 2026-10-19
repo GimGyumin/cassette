@@ -43,48 +43,65 @@ struct StatusBarScrim: View {
 }
 
 extension View {
-    /// Overlays a non-interactive status-bar scrim for immersive detail pages.
-    /// Pass `isLightPage: true` when the cover/page is bright so we don't darken under black status icons.
+    /// Older systems need a contrast fallback. Modern scroll views use the system soft edge.
+    @ViewBuilder
     func cassetteStatusBarScrim(isLightPage: Bool = false) -> some View {
-        overlay { StatusBarScrim(isLightPage: isLightPage) }
+        if #available(iOS 26.0, macOS 26.0, *) {
+            self
+        } else {
+            overlay { StatusBarScrim(isLightPage: isLightPage) }
+        }
     }
 
     /// Applies status-bar / nav chrome color scheme for immersive detail pages.
     ///
-    /// Apple only honors `toolbarColorScheme` while the nav-bar background is **visible**.
-    /// Light covers therefore keep a near-clear visible bar so clock / Wi‑Fi / battery
-    /// switch to dark (black) content instead of vanishing on pale art.
+    /// Modern systems own the bar background and soft edge. Older systems retain
+    /// their visible-background contrast fallback for light artwork.
     @ViewBuilder
     func cassetteImmersiveStatusBar(
         colorScheme: ColorScheme?,
         scrolledChromeProgress: CGFloat = 0
     ) -> some View {
         #if os(iOS)
-        let isLight = colorScheme == .light
-        let isDark = colorScheme == .dark
-        let showBar = isLight || scrolledChromeProgress > 0.05
-        let fill: Color = {
-            if isLight {
-                return Color.white.opacity(max(0.01, 0.55 * Double(scrolledChromeProgress)))
-            }
-            if isDark {
-                return Color.black.opacity(0.55 * Double(scrolledChromeProgress))
-            }
-            return Color.clear
-        }()
-
-        self
-            .toolbarBackground(showBar ? .visible : .hidden, for: .navigationBar)
-            .toolbarBackground(fill, for: .navigationBar)
-            .toolbarColorScheme(colorScheme, for: .navigationBar)
-            .background {
-                if let colorScheme {
-                    StatusBarStyleBridge(style: colorScheme == .light ? .darkContent : .lightContent)
-                        .frame(width: 0, height: 0)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+        if #available(iOS 26.0, *) {
+            self
+                .toolbarBackgroundVisibility(.automatic, for: .navigationBar)
+                .toolbarColorScheme(colorScheme, for: .navigationBar)
+                .background {
+                    if let colorScheme {
+                        StatusBarStyleBridge(style: colorScheme == .light ? .darkContent : .lightContent)
+                            .frame(width: 0, height: 0)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                 }
-            }
+        } else {
+            let isLight = colorScheme == .light
+            let isDark = colorScheme == .dark
+            let showBar = isLight || scrolledChromeProgress > 0.05
+            let fill: Color = {
+                if isLight {
+                    return Color.white.opacity(max(0.01, 0.55 * Double(scrolledChromeProgress)))
+                }
+                if isDark {
+                    return Color.black.opacity(0.55 * Double(scrolledChromeProgress))
+                }
+                return Color.clear
+            }()
+
+            self
+                .toolbarBackground(showBar ? .visible : .hidden, for: .navigationBar)
+                .toolbarBackground(fill, for: .navigationBar)
+                .toolbarColorScheme(colorScheme, for: .navigationBar)
+                .background {
+                    if let colorScheme {
+                        StatusBarStyleBridge(style: colorScheme == .light ? .darkContent : .lightContent)
+                            .frame(width: 0, height: 0)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+        }
         #else
         self
         #endif

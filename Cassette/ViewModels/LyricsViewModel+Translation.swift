@@ -31,6 +31,7 @@ extension LyricsViewModel {
     }
 
     func translateCurrentLyrics() async {
+        await refreshTranslationSettingsIfNeeded()
         guard case .loaded(let structured) = state else { return }
         // Already have translations (TTML / server / cached API) — just toggle visibility.
         if selectedServerTranslationLang != nil || translatedLyrics.contains(where: { !$0.translatedText.isEmpty && $0.translatedText != $0.originalText }) {
@@ -46,8 +47,10 @@ extension LyricsViewModel {
             return
         }
 
+        let language = languageGeneration
         // Always keep original lines on screen while a request is in flight.
         await seedOriginalLyrics(from: structured, hideTranslations: false)
+        guard language == languageGeneration, !Task.isCancelled else { return }
 
         translationTask?.cancel()
 
@@ -77,7 +80,8 @@ extension LyricsViewModel {
                 sourceLanguage: resolvedSource,
                 targetLanguage: finalTarget,
                 originalLines: originalLines,
-                strategyPreference: settings.strategyPreference
+                strategyPreference: settings.strategyPreference,
+                customPrompt: effectiveAppleIntelligencePrompt
             )
         } else {
             TranslationCache.shared.get(
@@ -131,10 +135,7 @@ extension LyricsViewModel {
                         targetLanguage: finalTarget
                     )
 
-                    guard !Task.isCancelled else {
-                        self.isTranslating = false
-                        return
-                    }
+                    guard language == self.languageGeneration, !Task.isCancelled else { return }
 
                     let sourceTranslations: [String] = (0..<structured.line.count).map { index in
                         let line = structured.line[index]
@@ -169,22 +170,46 @@ extension LyricsViewModel {
                     self.replaceTranslatedLyrics(results, reveal: true)
                     self.isTranslating = false
                 } catch {
-                    guard !Task.isCancelled else {
-                        self.isTranslating = false
-                        return
-                    }
-                    let detail = (error as? LocalizedError)?.errorDescription
-                        ?? error.localizedDescription
-                    Logger.lyrics.error("OpenAI translation failed: \(detail, privacy: .public)")
-                    self.translationErrorMessage = detail
+                    guard language == self.languageGeneration, !Task.isCancelled else { return }
+                    self.presentTranslationFailure(error)
                     // Keep originals visible; only clear translated rows.
                     await self.seedOriginalLyrics(from: structured, hideTranslations: true)
                     self.isTranslating = false
+                }
+            } else if !AppleIntelligenceLyricsTranslator.normalizedPrompt(effectiveAppleIntelligencePrompt).isEmpty {
+                self.appleTranslationRequestID &+= 1
+                let requestID = self.appleTranslationRequestID
+                let identity = settings.translationIdentity
+                let originals = self.displayRows.map { row in
+                    !row.isSecondaryAgent && LyricsLanguage.shouldTranslateRow(row.text, targetCode: finalTarget)
+                        ? row.text : ""
+                }
+                let chorus = self.displayRows.map { row in
+                    let text = LyricKaraokeText.chorusText(from: row.backgroundWords)
+                    return !row.isSecondaryAgent && LyricsLanguage.shouldTranslateRow(text, targetCode: finalTarget)
+                        ? text : ""
+                }
+                do {
+                    let result = try await AppleIntelligenceLyricsTranslator.shared.translate(
+                        lines: originals + chorus, targetLanguage: finalTarget,
+                        prompt: effectiveAppleIntelligencePrompt
+                    )
+                    guard language == self.languageGeneration, identity == settings.translationIdentity,
+                          requestID == self.appleTranslationRequestID, !Task.isCancelled else { return }
+                    await self.applyAppleTranslation(
+                        Array(result.prefix(originals.count)), chorusTexts: Array(result.dropFirst(originals.count)),
+                        requestID: requestID, trackID: self.songId
+                    )
+                } catch {
+                    guard language == self.languageGeneration, identity == settings.translationIdentity,
+                          requestID == self.appleTranslationRequestID, !Task.isCancelled else { return }
+                    await self.failAppleTranslation(error: error, requestID: requestID)
                 }
             } else {
                 // Apple Translation is completed by LyricsView.translationTask → apply/fail.
                 // Do not wipe originals — seed keeps them while the session runs.
                 await self.seedOriginalLyrics(from: structured, hideTranslations: false)
+                guard language == self.languageGeneration, !Task.isCancelled else { return }
                 self.appleTranslationRequestID += 1
 
                 // Safety: if the view never completes the session, clear the spinner.
@@ -207,6 +232,17 @@ extension LyricsViewModel {
         }
     }
 
+    func refreshTranslationSettingsIfNeeded() async {
+        let identity = LyricsTranslationSettings.shared.translationIdentity
+        guard identity != translationSettingsIdentity else { return }
+        usesStandardTranslationForCurrentTrack = false
+        translationSettingsIdentity = identity
+        invalidateTranslationWork()
+        guard selectedServerTranslationLang == nil, case .loaded(let structured) = state else { return }
+        replaceTranslatedLyrics([], reveal: false)
+        await seedOriginalLyrics(from: structured, hideTranslations: true)
+    }
+
 
 
     /// The startup watchdog must not time out Apple's model-download/consent UI.
@@ -223,11 +259,11 @@ extension LyricsViewModel {
         requestID: Int,
         trackID: String
     ) async {
-        appleTranslationTimeoutTask?.cancel()
-        appleTranslationTimeoutTask = nil
         guard requestID == appleTranslationRequestID,
               trackID == songId,
               !Task.isCancelled else { return }
+        appleTranslationTimeoutTask?.cancel()
+        appleTranslationTimeoutTask = nil
         guard case .loaded(let structured) = state else {
             isTranslating = false
             return
@@ -272,7 +308,8 @@ extension LyricsViewModel {
                 songID: songId,
                 sourceLanguage: sourceLang,
                 targetLanguage: finalTarget,
-                strategyPreference: settings.strategyPreference
+                strategyPreference: settings.strategyPreference,
+                customPrompt: effectiveAppleIntelligencePrompt
             )
             replaceTranslatedLyrics(results, reveal: true)
             translationErrorMessage = nil
@@ -284,16 +321,39 @@ extension LyricsViewModel {
         isTranslating = false
     }
 
-    func failAppleTranslation(message: String? = nil) async {
+    func failAppleTranslation(message: String? = nil, requestID: Int? = nil) async {
+        if let requestID, requestID != appleTranslationRequestID { return }
+        guard !Task.isCancelled else { return }
         appleTranslationTimeoutTask?.cancel()
         appleTranslationTimeoutTask = nil
-        translationErrorMessage = message ?? String(localized: "Couldn't load translation.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
-
-        if case .loaded(let structured) = state {
-            await seedOriginalLyrics(from: structured, hideTranslations: true)
-        }
-
         isTranslating = false
+        // Losing the view/document is cancellation, not a provider failure. Keep the
+        // existing original rows; rebuilding them here can race a language selection.
+        guard case .loaded = state else { return }
+        translationErrorMessage = message ?? String(localized: "Couldn't load translation.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+        translationErrorCanRetry = true
+        translationErrorOffersStandard = false
+    }
+
+    func failAppleTranslation(error: Error, requestID: Int) async {
+        guard requestID == appleTranslationRequestID, !Task.isCancelled else { return }
+        await failAppleTranslation(requestID: requestID)
+        presentTranslationFailure(error)
+    }
+
+    func presentTranslationFailure(_ error: Error) {
+        let failure = LyricTranslationFailure.from(error, customPrompt: !effectiveAppleIntelligencePrompt.isEmpty)
+        translationErrorMessage = failure.message
+        translationErrorCanRetry = failure.canRetry
+        translationErrorOffersStandard = failure.offersStandardTranslation
+        Logger.lyrics.error("Translation failed: \(error, privacy: .private)")
+    }
+
+    func useStandardTranslation() async {
+        await refreshTranslationSettingsIfNeeded()
+        usesStandardTranslationForCurrentTrack = true
+        translationErrorMessage = nil
+        await translateCurrentLyrics()
     }
 
     /// Clears the translating spinner without showing an error (view dismissed / task cancelled).
@@ -329,10 +389,25 @@ extension LyricsViewModel {
         resumeTranslationTask = Task { await translateCurrentLyrics() }
     }
 
+    /// A language/visibility change supersedes both client providers and their watchdog.
+    func invalidateTranslationWork() {
+        languageGeneration &+= 1
+        translationErrorMessage = nil
+        translationTask?.cancel()
+        translationTask = nil
+        appleTranslationTimeoutTask?.cancel()
+        appleTranslationTimeoutTask = nil
+        isTranslating = false
+        appleTranslationRequestID &+= 1
+    }
+
     func selectServerTranslation(lang: String?) async {
+        invalidateTranslationWork()
+        let generation = languageGeneration
         selectedServerTranslationLang = lang
         guard case .loaded(let structured) = state else { return }
         await seedOriginalLyrics(from: structured, hideTranslations: lang == nil)
+        guard generation == languageGeneration, !Task.isCancelled else { return }
         if lang != nil {
             areTranslationsVisible = true
         }
@@ -388,6 +463,9 @@ extension LyricsViewModel {
         let visibilityChanged = reveal && !areTranslationsVisible
         let apply = {
             self.translatedLyrics = results
+            if results.contains(where: { !$0.translatedText.isEmpty && $0.translatedText != $0.originalText }) {
+                self.translationErrorMessage = nil
+            }
             if reveal {
                 self.areTranslationsVisible = true
             }
@@ -442,12 +520,14 @@ extension LyricsViewModel {
 
     /// Hides translated lines without discarding them (allows a smooth fade-out and instant re-show).
     func clearTranslation() {
+        translationErrorMessage = nil
         areTranslationsVisible = false
     }
 
     /// Shows already-fetched translations again.
     func revealTranslation() {
         guard hasStoredTranslation else { return }
+        translationErrorMessage = nil
         areTranslationsVisible = true
     }
 }

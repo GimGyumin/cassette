@@ -103,9 +103,9 @@ nonisolated enum PlaybackSeekState: Sendable, Equatable {
         case finished(target: TimeInterval, landed: Bool)
     }
 
-    nonisolated mutating func reconcile(progress: TimeInterval, now: Date) -> Resolution {
+    nonisolated mutating func reconcile(progress: TimeInterval, now: Date, tolerance: TimeInterval = 2.5) -> Resolution {
         guard case .settling(let target, let deadline) = self else { return .inactive }
-        let landed = progress.isFinite && abs(progress - target) <= 2.5
+        let landed = progress.isFinite && abs(progress - target) <= tolerance
         guard landed || now >= deadline else { return .waiting(target) }
         self = .idle
         return .finished(target: target, landed: landed)

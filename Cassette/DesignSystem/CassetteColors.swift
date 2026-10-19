@@ -145,7 +145,7 @@ extension Color {
  
  NOTE — CassetteAccent (Asset Catalog) is the app AccentColor for in-app chrome
  (tabs, toggles, CTAs). System alerts/action sheets must NOT inherit that red tint —
- see `CassetteSystemChrome.configure()` which restores Apple blue/red for UIAlertController.
+ system alert actions retain their semantic cancellation and destructive roles.
  
  WindowGroup { ... }
  .tint(CassetteColors.accent)

@@ -11,9 +11,12 @@ final class CachedTrack {
     var id: UUID
     var songId: String
     var serverId: UUID
-    var filePath: String        // relative to Caches/app.cassette/audio/
+    var filePath: String        // relative to Documents/app.cassette/audio/
     var fileSize: Int64
     var mimeType: String
+    var transferIdentity: Data?
+    /// The audio inventory includes automatic entries and user-protected pins.
+    var isPinned: Bool?
     var cachedAt: Date
 
     init(

@@ -27,7 +27,7 @@ final class AlbumListViewModel {
         do {
             let result = try await libraryService.allAlbums()
             Logger.boot.notice("🟣 allAlbums() returned \(result.count, privacy: .public) items")
-            albums = result
+            albums = await libraryService.presentedAlbums(result)
         } catch {
             Logger.boot.error("🔴 allAlbums() failed: \(error, privacy: .public)")
             self.error = UserFacingError.from(error)

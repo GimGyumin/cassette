@@ -29,9 +29,17 @@ nonisolated extension JellyfinMediaSource {
 /// 3. the current bitrate ceiling for this connection (`AdaptiveQualityPolicy` / the user's quality).
 ///
 /// It never returns `.automatic` and never overrides a route a caller explicitly asked for: the app
-/// always requests `.automatic` because there is no playback-method setting any more, but a future
-/// caller that pins Direct Play, Universal, HLS, Original File or OpenSubsonic gets that route back.
+/// uses Automatic by default; manual Direct Play, Universal, HLS, Original File or OpenSubsonic
+/// choices take precedence over quality/capability decisions.
 nonisolated enum PlaybackDecisionPolicy {
+    static func preservesLosslessOriginal(song: DisplayableSong?) -> Bool {
+        guard let song else { return false }
+        switch AudioQualityClassifier.classify(song) {
+        case .lossless, .hiResLossless: return true
+        default: return false
+        }
+    }
+
     /// A playable original needs no PlaybackInfo negotiation or server transcode startup.
     static func canStreamOriginalImmediately(format: CacheFormat, song: DisplayableSong?) -> Bool {
         guard format == .flacOriginal, let song else { return false }
@@ -83,6 +91,7 @@ nonisolated enum PlaybackDecisionPolicy {
         var preferLossless: Bool = false
         /// An explicit lossy output format must not be satisfied by a raw Direct Play.
         var requiresLossyEncoding: Bool = false
+        var isCellular: Bool = false
     }
 
     static func decide(_ inputs: Inputs) -> Outcome {
@@ -99,7 +108,11 @@ nonisolated enum PlaybackDecisionPolicy {
             return Outcome(route: .directPlay, reason: .localFile)
         }
 
-        if inputs.requiresLossyEncoding {
+        if inputs.isCellular, !inputs.preferLossless, inputs.supportsHLSTranscoding,
+           inputs.supportsTranscoding == true {
+            return Outcome(route: .hls, reason: .serverRequiresTranscoding)
+        }
+        if inputs.requiresLossyEncoding, !inputs.preferLossless {
             return Outcome(route: inputs.supportsTranscoding == true
                 ? (inputs.supportsHLSTranscoding ? .hls : .universal)
                 : .openSubsonic,
@@ -160,10 +173,8 @@ nonisolated enum PlaybackDecisionPolicy {
 
     /// Which endpoint resolves a song's audio.
     ///
-    /// The playback method is not user-selectable: a server that exposes the Jellyfin feature and a
-    /// song that carries a Jellyfin-mapped ID go through `PlaybackInfo` — where Direct Play vs a
-    /// server-side transcode is decided per resolve — while every other song keeps the OpenSubsonic
-    /// endpoint, which is also the only one that reuses the ephemeral cache.
+    /// Jellyfin routing requires both the service and a mapped item ID. Explicit OpenSubsonic
+    /// bypasses this path in MediaResolver; other manual routes report unavailability if absent.
     static func usesJellyfinTransport(hasJellyfinService: Bool, jellyfinItemID: String?) -> Bool {
         hasJellyfinService && jellyfinItemID != nil
     }

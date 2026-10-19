@@ -1,0 +1,40 @@
+Building for debugging...
+[1 / 7]
+[2 / 7] Cassette
+[3 / 8] Cassette
+[10 / 18] Cassette
+[12 / 18] Cassette
+[14 / 18] Cassette
+[17 / 19] CassetteTests-product
+[19 / 21] CassetteTests-product
+[23 / 25] CassetteTests-product
+Build complete! (2.72초)
+Test Suite 'All tests' started at 2026-10-13 19:47:51.548.
+Test Suite 'All tests' passed at 2026-10-13 19:47:51.551.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.003) seconds
+◇ Test run started.
+↳ Testing Library Version: 2401
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite MailboxStressTests started.
+◇ Suite ArtworkGateAndMetadataBoundsTests started.
+◇ Suite MediaTransferCoordinationTests started.
+◇ Test permanentTransferWaitsUntilCancelledCacheHasDrained() started.
+◇ Test cancellingOneConsumerKeepsSharedPermanentTransferAlive() started.
+◇ Test transferIdentityPreservesFormatRangeAndAccount() started.
+◇ Test completedCacheCanBeCopiedButReplacementCannotBePromoted() started.
+◇ Test metadataRetentionIsBoundedAndExpiresWithoutClockChanges() started.
+◇ Test cancelledWaiterFinishesWithoutWaitingForTheBusySlot() started.
+◇ Test mailboxNeverExposesMixedConcurrentSnapshots() started.
+◇ Test cancelledTaskDoesNotConsumeAnAvailablePermit() started.
+✔ Test transferIdentityPreservesFormatRangeAndAccount() passed after 0.006 seconds.
+✔ Test metadataRetentionIsBoundedAndExpiresWithoutClockChanges() passed after 0.006 seconds.
+✔ Test cancelledTaskDoesNotConsumeAnAvailablePermit() passed after 0.006 seconds.
+✔ Test cancelledWaiterFinishesWithoutWaitingForTheBusySlot() passed after 0.007 seconds.
+✔ Test permanentTransferWaitsUntilCancelledCacheHasDrained() passed after 0.007 seconds.
+✔ Test cancellingOneConsumerKeepsSharedPermanentTransferAlive() passed after 0.007 seconds.
+✔ Suite ArtworkGateAndMetadataBoundsTests passed after 0.007 seconds.
+✔ Test completedCacheCanBeCopiedButReplacementCannotBePromoted() passed after 0.008 seconds.
+✔ Suite MediaTransferCoordinationTests passed after 0.008 seconds.
+✔ Test mailboxNeverExposesMixedConcurrentSnapshots() passed after 0.025 seconds.
+✔ Suite MailboxStressTests passed after 0.026 seconds.
+✔ Test run with 8 tests in 3 suites passed after 0.026 seconds.

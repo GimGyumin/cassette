@@ -110,23 +110,16 @@ struct ArtistListView: View {
                             }
                         }
                         .id(section.id)
+                        .cassetteSectionIndexLabel(section.title)
                     }
                 }
                 .listStyle(.plain)
                 .refreshable { await vm.load() }
                 .miniPlayerBottomMargin()
-                .safeAreaInset(edge: .trailing, spacing: 0) {
-                    if sections.count >= 5 && artistSort == .name {
-                        AlphabetJumpBar(
-                            availableLetters: Set(sections.map(\.title)),
-                            onLetterTap: { letter in
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    proxy.scrollTo(letter, anchor: .top)
-                                }
-                            }
-                        )
-                        .padding(.trailing, 4)
-                    }
+                .cassetteSoftTopScrollEdge()
+                .cassetteListIndex(letters: Set(sections.map(\.title)),
+                    isVisible: sections.count >= 5 && artistSort == .name) { letter in
+                    proxy.scrollTo(letter, anchor: .top)
                 }
             }
         }
@@ -317,6 +310,7 @@ struct OfflineArtistAlbumsView: View {
         }
         .listStyle(.plain)
         .miniPlayerBottomMargin()
+                .cassetteSoftTopScrollEdge()
         .navigationTitle(artist.name)
         .navigationBarTitleDisplayModeInline()
         .cassetteContentWidth()

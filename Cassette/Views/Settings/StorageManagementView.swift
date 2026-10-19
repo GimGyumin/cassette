@@ -25,7 +25,7 @@ struct StorageManagementView: View {
         }
         .navigationTitle(String(localized: "Storage", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         #endif
         .task {
             guard viewModel == nil, let container else { return }
@@ -96,22 +96,78 @@ struct StorageManagementView: View {
     private func content(_ viewModel: StorageManagementViewModel) -> some View {
         List {
             Section {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(String(localized: "Cassette Data", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    if viewModel.isLoading {
-                        ProgressView()
-                    } else {
-                        Text(viewModel.totalFormatted)
-                            .font(.system(size: 34, weight: .bold, design: .rounded))
-                            .monospacedDigit()
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Text("Cassette").font(.title3)
+                        Spacer()
+                        if viewModel.isLoading { ProgressView() }
+                        else { Text(viewModel.totalFormatted).foregroundStyle(.secondary).monospacedDigit() }
                     }
-                    Text(String(localized: "Manage cached data used by Cassette on this device.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    GeometryReader { geometry in
+                        HStack(spacing: 1) {
+                            ForEach(viewModel.categories.filter { $0.byteCount > 0 }) { category in
+                                Rectangle().fill(category.storageColor)
+                                    .frame(width: max(0, (geometry.size.width - CGFloat(max(0, viewModel.categories.filter { $0.byteCount > 0 }.count - 1))) * CGFloat(category.byteCount) / CGFloat(max(1, viewModel.totalBytes))))
+                            }
+                        }
+                    }
+                    .frame(height: 24)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text("Cassette"))
+                    .accessibilityValue(Text(viewModel.totalFormatted))
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), alignment: .leading)], alignment: .leading, spacing: 10) {
+                        ForEach(viewModel.categories.filter { $0.byteCount > 0 }) { category in
+                            Label {
+                                Text(category.title).font(.caption).foregroundStyle(.secondary)
+                            } icon: {
+                                Circle().fill(category.storageColor).frame(width: 9, height: 9)
+                            }
+                        }
+                    }
                 }
-                .padding(.vertical, CassetteSpacing.xs)
+                .padding(.vertical, 12)
+            } footer: {
+                Text(String(localized: "Manage cached data used by Cassette on this device.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            }
+
+            if viewModel.reclaimableAudioBytes > 0 {
+                Section(String(localized: "Recommendations", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+                    Button {
+                        categoryToClear = viewModel.categories.first { $0.kind == .audioCache }
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(String(localized: "Clear automatic music storage", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                                Text(ByteCountFormatter.string(fromByteCount: viewModel.reclaimableAudioBytes, countStyle: .file))
+                                    .foregroundStyle(.secondary).monospacedDigit()
+                                Text(String(localized: "Saved music is kept. Other tracks can be streamed again.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            SettingsIcon(systemImage: "music.note", color: .red)
+                        }
+                    }
+                    .disabled(viewModel.clearingKind != nil)
+                }
+            }
+
+            Section {
+                ForEach(viewModel.sortedCategories) { category in
+                    categoryRow(category, viewModel: viewModel)
+                }
+            } header: {
+                HStack {
+                    Text(String(localized: "Categories", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    Spacer()
+                    Menu {
+                        Button(String(localized: "Largest first", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) { viewModel.largestFirst = true }
+                        Button(String(localized: "Smallest first", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) { viewModel.largestFirst = false }
+                    } label: {
+                        Label(String(localized: "Size", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), systemImage: "arrow.up.arrow.down")
+                    }
+                    .textCase(nil)
+                }
             }
 
             if let preload = container?.albumCoverPreloadService {
@@ -130,8 +186,10 @@ struct StorageManagementView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer(minLength: CassetteSpacing.s)
-                            if preload.state.isDownloading {
-                                if preload.state.total == 0 {
+                            if preload.state.isAnalyzingColors {
+                                ProgressView()
+                            } else if preload.state.isDownloading {
+                                if preload.state.isResolvingInventory || preload.state.libraryTotal == 0 {
                                     ProgressView()
                                 } else {
                                     ProgressView(value: preload.state.fraction)
@@ -150,13 +208,17 @@ struct StorageManagementView: View {
                         }
                         .padding(.vertical, 2)
                     }
+                    if preload.state.isAnalyzingColors {
+                        Text(String(localized: "Analyzing cover colors…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     if let error = preload.state.errorMessage {
                         Text(error)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    if preload.state.total > 0 {
-                        Text("\(preload.state.completed) / \(preload.state.total)")
+                    if !preload.state.isResolvingInventory && preload.state.libraryTotal > 0 {
+                        Text("\(preload.state.availableCompleted) / \(preload.state.libraryTotal)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -169,12 +231,6 @@ struct StorageManagementView: View {
                     Text(String(localized: "Album Covers", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 } footer: {
                     Text(String(localized: "Covers you view load as needed. Downloading the whole library uses additional storage and network data.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                }
-            }
-
-            Section(String(localized: "Categories", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
-                ForEach(viewModel.categories) { category in
-                    categoryRow(category, viewModel: viewModel)
                 }
             }
 
@@ -210,38 +266,43 @@ struct StorageManagementView: View {
         _ category: StorageCategorySnapshot,
         viewModel: StorageManagementViewModel
     ) -> some View {
-        let row = StorageCategoryRow(
-            category: category,
-            isClearing: viewModel.clearingKind == category.kind,
-            onClear: { categoryToClear = category }
-        )
-
-        switch category.kind {
-        case .audioCache:
-            NavigationLink {
-                Form { CacheSectionView() }
-                    .formStyle(.grouped)
-                    .modifier(SettingsSubpageStyle())
-                    .navigationTitle(String(localized: "Cache", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-            } label: {
-                row
+        NavigationLink {
+            Form {
+                Section {
+                    LabeledContent(String(localized: "Size", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), value: category.formattedSize)
+                    if let count = category.itemCount {
+                        LabeledContent(String(localized: "Items", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), value: count.formatted())
+                    }
+                }
+                if category.kind == .audioCache {
+                    Section {
+                        NavigationLink(String(localized: "Saved Music", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+                            DownloadedMusicManagementView()
+                        }
+                    }
+                    CacheSectionView()
+                }
+                if category.kind != .audioCache {
+                    Section {
+                        Button(String(localized: "Clear", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), role: .destructive) {
+                            categoryToClear = category
+                        }
+                        .disabled(viewModel.clearingKind != nil || (category.kind == .audioCache ? viewModel.reclaimableAudioBytes == 0 : category.byteCount == 0))
+                    }
+                }
             }
-        case .downloads:
-            NavigationLink {
-                DownloadedMusicManagementView()
-            } label: {
-                row
-            }
-        default:
-            row
+            .formStyle(.grouped)
+            .modifier(SettingsSubpageStyle())
+            .navigationTitle(category.title)
+        } label: {
+            StorageCategoryRow(category: category)
         }
     }
+
 }
 
 private struct StorageCategoryRow: View {
     let category: StorageCategorySnapshot
-    let isClearing: Bool
-    let onClear: () -> Void
 
     private var icon: (String, Color) {
         switch category.kind {
@@ -282,16 +343,7 @@ private struct StorageCategoryRow: View {
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
 
-            if isClearing {
-                ProgressView()
-                    .scaleEffect(0.8)
-            } else if category.byteCount > 0 {
-                Button(String(localized: "Clear", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
-                    onClear()
-                }
-                .font(.subheadline.weight(.semibold))
-                .buttonStyle(.borderless)
-            }
+
         }
         .padding(.vertical, 2)
     }
@@ -304,6 +356,20 @@ private struct StorageCategoryRow: View {
             return String(localized: "\(count) songs", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         default:
             return ""
+        }
+    }
+}
+
+private extension StorageCategorySnapshot {
+    var storageColor: Color {
+        switch kind {
+        case .audioCache: .red
+        case .artwork: .orange
+        case .lyrics: .yellow
+        case .translations: .green
+        case .descriptions: .cyan
+        case .discover: .purple
+        case .downloads: .red
         }
     }
 }

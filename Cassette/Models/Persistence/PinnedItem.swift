@@ -17,7 +17,7 @@ nonisolated enum PinnedItemType: String, CaseIterable, Sendable {
 /// pinned grid renders immediately at launch without a network round-trip.
 @Model
 final class PinnedItem {
-    @Attribute(.unique) var id: String  // "{type}:{itemId}", e.g. "album:abc123"
+    @Attribute(.unique) var id: String  // "{serverId}:{type}:{itemId}"; legacy IDs remain readable.
     var itemType: String
     var itemId: String
     var pinnedDate: Date
@@ -38,7 +38,7 @@ final class PinnedItem {
     ) {
         self.itemType = itemType.rawValue
         self.itemId = itemId
-        self.id = "\(itemType.rawValue):\(itemId)"
+        self.id = "\(serverId.uuidString):\(itemType.rawValue):\(itemId)"
         self.displayName = displayName
         self.displaySubtitle = displaySubtitle
         self.coverArtId = coverArtId

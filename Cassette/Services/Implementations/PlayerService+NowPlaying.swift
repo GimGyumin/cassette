@@ -19,6 +19,7 @@ extension PlayerService {
     // MARK: - NowPlaying position push
 
     func reassertCurrentNowPlayingSnapshot(rate: Float? = nil) async {
+        let publication = makePlaybackPublication()
         let epoch = nowPlayingEpoch
         let (track, position, playbackState, duration, isLiveStream, queueIndex, queueCount) = await MainActor.run {
             (state.currentTrack, state.position, state.playbackState, state.duration,
@@ -53,7 +54,8 @@ extension PlayerService {
             isrc: cachedISRC(for: track),
             trackId: track.id,
             queueIndex: queueIndex,
-            queueCount: queueCount
+            queueCount: queueCount,
+            publication: publication
         )
         await nowPlayingService?.publishTrackChange(earlySnapshot)
         guard epoch == nowPlayingEpoch else { return }
@@ -82,14 +84,15 @@ extension PlayerService {
             isrc: cachedISRC(for: track),
             trackId: track.id,
             queueIndex: queueIndex,
-            queueCount: queueCount
+            queueCount: queueCount,
+            publication: publication,
+            timestamp: earlySnapshot.timestamp
         ))
-        if let ws = widgetSyncService {
-            Task { [weak ws] in await ws?.onPlayStateChanged(isPlaying: resolvedRate > 0, currentSong: track) }
-        }
+        await publishWidgetStatus()
     }
 
     func pushPositionSnapshot(rate: Float? = nil) async {
+        let publication = makePlaybackPublication()
         let epoch = nowPlayingEpoch
         let (track, position, playbackState, duration, queueIndex, queueCount) = await MainActor.run {
             (state.currentTrack, state.position, state.playbackState, state.duration,
@@ -124,16 +127,18 @@ extension PlayerService {
             isrc: cachedISRC(for: track),
             trackId: track.id,
             queueIndex: queueIndex,
-            queueCount: queueCount
+            queueCount: queueCount,
+            publication: publication
         )
         guard epoch == nowPlayingEpoch else { return }
         await nowPlayingService?.update(with: snapshot)
     }
 
     func periodicNowPlayingPush(elapsed: TimeInterval) async {
-        // Most progress ticks do not publish; avoid a MainActor hop until a push is due.
+        // System progress is extrapolated from the last event's time and rate. This
+        // timer only reports to the music server; it must not rewrite system metadata.
         let now = Date()
-        guard now.timeIntervalSince(lastNowPlayingPushDate) >= 5.0 else { return }
+        guard now.timeIntervalSince(lastPlaybackReportAt) >= 30, periodicPlaybackReportTask == nil else { return }
         let epoch = nowPlayingEpoch
         let (playbackState, duration, isLiveStream, hasTrack) = await MainActor.run {
             (state.playbackState, state.duration, state.isLiveStream, state.currentTrack != nil)
@@ -141,12 +146,8 @@ extension PlayerService {
         guard case .playing = playbackState, !isLiveStream, hasTrack else { return }
         guard elapsed >= 0, duration > 0 else { return }
         guard epoch == nowPlayingEpoch else { return }
-        // Halve MediaRemote XPC churn; iOS interpolates lock-screen progress via playbackRate.
-        guard now.timeIntervalSince(lastNowPlayingPushDate) >= 5.0 else { return }
-        lastNowPlayingPushDate = now
         let clamped = min(elapsed, duration)
         guard epoch == nowPlayingEpoch else { return }
-        await nowPlayingService?.pushPosition(elapsed: clamped, rate: 1.0, duration: duration)
         // OpenSubsonic playbackReport (Navidrome 0.62+) — keep server Now Playing rich without double-scrobbling.
         if now.timeIntervalSince(lastPlaybackReportAt) >= 30, periodicPlaybackReportTask == nil {
             let playbackEpoch = self.playbackEpoch
@@ -237,6 +238,7 @@ extension PlayerService {
         // Always advance the throttle timestamp — even on failure — so a persistently
         // timing-out server can't turn the intended 30s cadence into a 2.5s retry storm.
         lastPlaybackReportAt = Date()
+        let actualID = currentSource?.playbackSong?.id ?? songId
 
         do {
             if playbackReportSupported == nil {
@@ -248,7 +250,7 @@ extension PlayerService {
 
             let client = try await serverService.makeSwiftSonicClient()
             try await client.reportPlayback(
-                mediaId: songId,
+                mediaId: actualID,
                 positionMs: positionMs,
                 state: reportState,
                 ignoreScrobble: true

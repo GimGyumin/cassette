@@ -80,6 +80,10 @@ struct EssentialSupportPreparationView: View {
                         title: String(localized: "Library indexing", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
                         complete: libraryIndex?.hasUsableIndex == true
                     )
+                    preparationRow(
+                        title: String(localized: "Now Playing backgrounds", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                        complete: container?.nowPlayingBackgroundPreparation.isReady == true
+                    )
 
                     if BulkArtworkPreference.isEnabled {
                         ProgressView(value: preload?.state.fraction ?? 0)
@@ -160,12 +164,12 @@ struct EssentialSupportPreparationView: View {
         guard let state = preload?.state else {
             return String(localized: "Connecting…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         }
-        if state.total == 0 {
+        if state.isResolvingInventory || state.libraryTotal == 0 {
             return state.isComplete
                 ? String(localized: "Preparation complete", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
                 : String(localized: "Loading library…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
         }
-        return "\(state.completed) / \(state.total)"
+        return "\(state.availableCompleted) / \(state.libraryTotal)"
     }
 
     private func preparationRow(title: String, complete: Bool) -> some View {
@@ -194,6 +198,7 @@ struct EssentialSupportPreparationView: View {
         }
         guard !hasContinued, !Task.isCancelled, hasActiveServer else { return }
         let indexReady = await container.indexLibraryForOnboarding()
+        await container.nowPlayingBackgroundPreparation.prepare(using: container, refreshArtwork: true)
 
         guard !hasContinued, !Task.isCancelled, hasActiveServer,
               indexReady,

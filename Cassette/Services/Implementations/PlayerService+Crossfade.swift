@@ -37,7 +37,7 @@ extension PlayerService {
     }
 
     func checkPrefetchThreshold() async {
-        guard !prefetchScheduled else { return }
+        guard !prefetchScheduled, gaplessBridge.next == nil else { return }
         #if os(iOS)
         // Prefetch can compete with the current stream on wireless system routes.
         guard !PlayerService.isWirelessSystemRouteActive() else { return }
@@ -66,7 +66,7 @@ extension PlayerService {
     }
 
     private func prefetchNextTrack(nextSong: DisplayableSong, serverId: UUID) async {
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, gaplessBridge.next == nil else { return }
         let epoch = playbackEpoch
         let songId = nextSong.id
 
@@ -90,12 +90,13 @@ extension PlayerService {
         // Use the same server/authentication/quality policy as foreground playback. A raw
         // Subsonic URL bypassed Jellyfin sessions and the listener's quality preference.
         guard let source = try? await mediaResolver.resolve(songId: songId, serverId: serverId, song: nextSong),
-              epoch == playbackEpoch, !Task.isCancelled, !source.isLocal, !source.isLiveStream,
-              source.url.pathExtension.lowercased() != "m3u8" else { return }
+              epoch == playbackEpoch, !Task.isCancelled, gaplessBridge.next == nil, !source.isLocal, !source.isLiveStream,
+              source.url.pathExtension.lowercased() != "m3u8",
+              !AudioQualityClassifier.shouldBypassEphemeralCache(source.playbackSong ?? nextSong) else { return }
 
         do {
             try await downloadAndCache(
-                songId: songId,
+                songId: source.playbackSong?.id ?? songId,
                 serverId: serverId,
                 streamURL: source.url,
                 customHeaders: source.customHeaders,
@@ -110,7 +111,8 @@ extension PlayerService {
     // MARK: - Crossfade fade engine
 
     func cancelFadeTasks() {
-        let wasActive = fadeOutTask != nil || fadeInTask != nil || isFadingOut
+        let wasActive = fadeOutTask != nil || fadeInTask != nil || isFadingOut || pendingFadeInDuration != nil
+        pendingFadeInDuration = nil
         fadeOutTask?.cancel()
         fadeOutTask = nil
         fadeInTask?.cancel()
@@ -156,6 +158,8 @@ extension PlayerService {
     }
 
     func checkFadeOutThreshold() async {
+        let context = playbackContext
+        guard seekState == .idle else { return }
         guard !isFadingOut else { return }
         guard crossfadeConfig.duration > 0 else { return }
         let (duration, position, isPlaying, currentIndex, queueCount, repeatMode, title) = await MainActor.run {
@@ -163,7 +167,7 @@ extension PlayerService {
              state.currentIndex, state.queue.count, state.repeatMode,
              state.currentTrack?.title ?? "?")
         }
-        guard isPlaying, duration > 0 else { return }
+        guard isPlaying, duration > 0, seekState == .idle else { return }
         let remaining = duration - position
         let D = crossfadeConfig.duration
         let hasNext = currentIndex + 1 < queueCount || repeatMode != .off
@@ -203,13 +207,10 @@ extension PlayerService {
             }
         }
 
-        #if os(iOS)
-        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType }
-        guard !PlayerService.isWirelessSystemRoute(portTypes: outputs) else {
+        guard contextIsCurrent(context), transport.permitsAudio, engineCapabilities.supportsSequentialFades else {
             Logger.crossfade.debug("skip — wireless system route")
             return
         }
-        #endif
 
         isFadingOut = true
         let userVol = restoredVolume
@@ -226,15 +227,16 @@ extension PlayerService {
     }
 
     private func performFadeOut(duration: Double) {
+        let context = playbackContext
         let startVolume = engineVolume()
         let fadeDuration = max(duration, 0.05)
         fadeOutTask = Task { [weak self] in
             guard let self else { return }
-            let startTime = Date()
+            let startTime = ProcessInfo.processInfo.systemUptime
             while !Task.isCancelled {
-                let elapsed = Date().timeIntervalSince(startTime)
+                let elapsed = ProcessInfo.processInfo.systemUptime - startTime
                 let progress = min(elapsed / fadeDuration, 1.0)
-                await self.setEngineVolume(PlayerService.crossfadeVolume(base: startVolume, progress: progress, phase: .fadeOut))
+                guard await self.applyFadeVolume(PlayerService.crossfadeVolume(base: startVolume, progress: progress, phase: .fadeOut), context: context) else { return }
                 if progress >= 1.0 { break }
                 try? await Task.sleep(for: .milliseconds(30))
             }
@@ -242,25 +244,32 @@ extension PlayerService {
     }
 
     func performFadeIn(duration: Double) {
+        let context = playbackContext
         let fadeDuration = max(duration, 0.05)
         fadeInTask = Task { [weak self] in
             guard let self else { return }
             Logger.crossfade.info("fade-in START vol=0->target=\(self.restoredVolume, format: .fixed(precision: 2))")
-            let startTime = Date()
+            let startTime = ProcessInfo.processInfo.systemUptime
             while !Task.isCancelled {
-                let elapsed = Date().timeIntervalSince(startTime)
+                let elapsed = ProcessInfo.processInfo.systemUptime - startTime
                 let progress = min(elapsed / fadeDuration, 1.0)
                 let target = self.restoredVolume
-                await self.setEngineVolume(PlayerService.crossfadeVolume(base: target, progress: progress, phase: .fadeIn))
+                guard await self.applyFadeVolume(PlayerService.crossfadeVolume(base: target, progress: progress, phase: .fadeIn), context: context) else { return }
                 if progress >= 1.0 { break }
                 try? await Task.sleep(for: .milliseconds(30))
             }
             if !Task.isCancelled {
                 let final = self.restoredVolume
-                await self.setEngineVolume(final)
+                guard await self.applyFadeVolume(final, context: context) else { return }
                 Logger.crossfade.info("fade-in DONE")
             }
         }
+    }
+
+    func applyFadeVolume(_ volume: Float, context: PlaybackContext) -> Bool {
+        guard contextIsCurrent(context), transport.permitsAudio, engineCapabilities.supportsSequentialFades else { return false }
+        setEngineVolume(volume)
+        return true
     }
 
     #if os(iOS)

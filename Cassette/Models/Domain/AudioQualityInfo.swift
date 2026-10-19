@@ -124,7 +124,7 @@ nonisolated enum AudioQualityClassifier {
 
     /// True when the resolved route asks for a lossy Jellyfin or Subsonic stream.
     static func isLossyTranscodeStream(_ source: MediaSource) -> Bool {
-        guard case .stream(let url, _, _, _) = source else { return false }
+        guard case .stream(let url, _, _, _, _) = source else { return false }
         if source.jellyfinPlaybackContext?.playMethod == .transcode { return true }
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         if query.contains(where: { $0.name.lowercased() == "static" && $0.value?.lowercased() == "true" }) { return false }
@@ -154,11 +154,19 @@ nonisolated enum AudioQualityClassifier {
             || (hasUnspecifiedChannelLayout(song) && ["m4a", "mp4"].contains(normalizedSuffix(song)))
     }
 
-    /// Formats that need AVPlayer (E-AC-3 / Atmos / >2ch) rather than AudioStreaming.
-    /// AudioStreaming decodes to stereo PCM and permanently loses Atmos / surround.
+    /// AudioStreaming's output graph is fixed to stereo 44.1 kHz. Preserve surround
+    /// and avoid its intermediate resampling for non-44.1-kHz lossless sources.
     static func requiresSystemPlayer(_ song: DisplayableSong) -> Bool {
         isDolbyAtmos(song) || hasSurroundCodec(song) || (song.channelCount ?? 0) > 2
-            || hasUnspecifiedChannelLayout(song)
+            || hasUnspecifiedChannelLayout(song) || requiresNativeSampleRate(song)
+    }
+
+    static func requiresNativeSampleRate(_ song: DisplayableSong) -> Bool {
+        guard let sampleRate = song.samplingRate, sampleRate > 0, sampleRate != 44_100 else { return false }
+        switch classify(song) {
+        case .lossless, .hiResLossless: return true
+        default: return false
+        }
     }
 
     /// Atmos / JOC should use mono+stereo+multichannel spatialization; discrete surround beds should not.
@@ -233,7 +241,7 @@ nonisolated enum AudioQualityClassifier {
     }
 
     private static func isDolbyAtmos(_ song: DisplayableSong) -> Bool {
-        metadataSuggestsAtmos(song)
+        song.isOriginalAudio != false && (AtmosAlbumPolicy.isAtmos(song.albumName) || metadataSuggestsAtmos(song))
     }
 
     /// Dolby Digital (AC-3), Dolby Digital Plus (E-AC-3) and Dolby TrueHD (MLP)

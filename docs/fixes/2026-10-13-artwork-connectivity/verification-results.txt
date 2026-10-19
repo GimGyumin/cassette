@@ -1,0 +1,11 @@
+macOS log: /tmp/cassette-artwork-connectivity-full-macos.log
+Log SHA256: 2e8391a4deb49dcd7ead5c0b60f53287ffb3396f60153c4f0b7f9648792a88ce
+✔ Test run with 1148 tests in 197 suites passed after 72.279 seconds.
+** TEST SUCCEEDED **
+Final macOS source compiler warnings/errors: 0
+iOS log: /tmp/cassette-artwork-connectivity-ios.log
+Log SHA256: c411e41234120e43bde5122687621ecb6ba8ee0f34f24d3c775c459f291b1135
+** BUILD SUCCEEDED **
+Final iOS source compiler warnings/errors: 0
+git diff --check: passed.
+Actual iPhone Wi-Fi/cellular switching and screen capture: not performed.

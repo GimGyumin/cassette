@@ -6,6 +6,17 @@
 import Foundation
 import SwiftSonic
 
+nonisolated struct ServerRequestIdentity: Sendable, Equatable {
+    let serverID: UUID
+    let revision: UInt64
+}
+
+nonisolated struct ServerRequestContext: Sendable {
+    let identity: ServerRequestIdentity
+    let client: SwiftSonicClient
+    let credentials: ServerCredentials
+}
+
 protocol ServerServiceProtocol: AnyObject, Sendable {
     /// Observable UI state (MainActor-isolated). Access directly from SwiftUI views.
     var state: ServerState { get }
@@ -71,6 +82,9 @@ protocol ServerServiceProtocol: AnyObject, Sendable {
     /// Used by MediaResolver and DownloadService to inject headers into AVPlayer / URLSession.
     func activeCredentials() async throws -> ServerCredentials
 
+    /// One account owns the URL builder and headers throughout resolution.
+    func requestContext(serverID: UUID) async throws -> ServerRequestContext
+
     /// Restores servers and activeServer from SwiftData + Keychain on app launch.
     /// Sets state.isLoadingPersistedState = false when complete (even on failure).
     func loadPersistedState() async
@@ -81,6 +95,16 @@ protocol ServerServiceProtocol: AnyObject, Sendable {
 
 
 extension ServerServiceProtocol {
+    func requestContext(serverID: UUID) async throws -> ServerRequestContext {
+        let identity = try await MainActor.run { try state.requestIdentity(for: serverID) }
+        async let client = makeSwiftSonicClient()
+        async let credentials = activeCredentials()
+        let context = try await ServerRequestContext(identity: identity, client: client, credentials: credentials)
+        try Task.checkCancellation()
+        guard await MainActor.run(body: { state.requestIsCurrent(identity) }) else { throw CancellationError() }
+        return context
+    }
+
     func makeLyricsGenerationClient() async throws -> SwiftSonicClient {
         try await makeSwiftSonicClient()
     }

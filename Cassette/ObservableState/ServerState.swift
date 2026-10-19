@@ -28,7 +28,10 @@ nonisolated struct ServerSnapshot: Sendable, Equatable {
 @MainActor
 final class ServerState {
     var servers: [ServerSnapshot] = []
-    var activeServer: ServerSnapshot?
+    @ObservationIgnored private(set) var accountRevision: UInt64 = 0
+    var activeServer: ServerSnapshot? {
+        didSet { if oldValue != activeServer { accountRevision &+= 1 } }
+    }
     var isConnected: Bool = false
     /// False when the **active server** cannot be reached: a ping timed out, the host refused the
     /// connection, or the device has no route at all. Driven by `ServerReachabilityMonitor`, which
@@ -44,6 +47,8 @@ final class ServerState {
     /// Updated by NetworkMonitor. True when the connection is metered (cellular, hotspot).
     /// Default false — optimistic until the first NWPath update corrects it on launch (~100ms).
     var isExpensive: Bool = false
+    /// Transport type, separate from cost: a Wi-Fi hotspot may also be expensive.
+    var isCellularConnection: Bool = false
     /// Updated by NetworkMonitor. True when the path is constrained — iOS Low Data Mode, or a
     /// link the user marked as metered even though it is Wi-Fi. Unlike `isExpensive` this also
     /// covers throttled Wi-Fi, which is why background transfers key off it.
@@ -68,9 +73,20 @@ final class ServerState {
     // Prevents OnboardingView flash before persisted state is restored on launch.
     var isLoadingPersistedState: Bool = true
     /// Blocks sign-in while the previous account's local data is being removed.
-    var isSigningOut = false
+    var isSigningOut = false {
+        didSet { if oldValue != isSigningOut { accountRevision &+= 1 } }
+    }
     /// True when an active server exists but its Keychain password is missing.
     var needsCredentialReentry: Bool = false
     /// Quick Connect works, but native Subsonic requires password verification.
     var needsSubsonicVerification: Bool = false
+    func requestIdentity(for serverID: UUID) throws -> ServerRequestIdentity {
+        guard activeServer?.id == serverID, !isSigningOut else { throw CancellationError() }
+        return ServerRequestIdentity(serverID: serverID, revision: accountRevision)
+    }
+
+    func requestIsCurrent(_ identity: ServerRequestIdentity) -> Bool {
+        !isSigningOut && activeServer?.id == identity.serverID && accountRevision == identity.revision
+    }
+
 }

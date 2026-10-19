@@ -24,7 +24,8 @@ extension PlayerService {
     /// this link. Lower the session ceiling so the next resolve transcodes lower, and publish the
     /// link as slow — which is what makes a throttled Wi-Fi link behave like cellular even though
     /// iOS reports it as unmetered. An explicit quality choice is never touched.
-    func handleBufferUnderrun() async {
+    func handleBufferUnderrun(expectedContext: PlaybackContext? = nil) async {
+        guard expectedContext == nil || expectedContext == playbackContext else { return }
         guard !systemPlayback.isActive, !isTrackTransitionPending,
               seekState == .idle, Date() >= systemPlayback.seekSettleDeadline else { return }
         let epoch = playbackEpoch
@@ -33,8 +34,10 @@ extension PlayerService {
         // queued entry. Let that transient settle before cancelling its prepared audio.
         do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
         guard epoch == playbackEpoch, engine.state == .bufferring,
+              !systemPlayback.isActive, expectedContext == nil || expectedContext == playbackContext,
               !isHandlingEndOfTrack, !gaplessBridge.wasSelected,
               abs(engineProgress() - progress) < 0.01 else { return }
+        Logger.player.warning("[NET-AUDIO] sustained underrun — engine=AudioStreaming epoch=\(epoch) position=\(progress, format: .fixed(precision: 2))s")
         // Audible playback owns the bandwidth when a buffer runs dry.
         cancelPendingCacheDownload()
         cancelPendingPrefetch()
@@ -74,11 +77,13 @@ extension PlayerService {
         )
     }
 
-    func handleAudioStateChanged(_ newState: AudioPlayerState) async {
+    func handleAudioStateChanged(_ newState: AudioPlayerState, expectedContext: PlaybackContext? = nil) async {
+        guard expectedContext == nil || expectedContext == playbackContext else { return }
         // AudioStreaming can deliver queued callbacks after a switch to AVPlayer.
         // Those callbacks must never consume the system player's pending restore.
         guard !systemPlayback.isActive, !isTrackTransitionPending, engine.state == newState else { return }
         let epoch = playbackEpoch
+        let context = playbackContext
         switch newState {
         case .bufferring:
             await publishEngineWaiting()
@@ -122,39 +127,45 @@ extension PlayerService {
             }
             restorePauseTask = Task {
                 try? await Task.sleep(for: .milliseconds(150))
-                guard !Task.isCancelled else { return }
+                guard contextIsCurrent(context) else { return }
                 restorePauseTask = nil
                 pauseEngine()
                 setEngineVolume(restoredVolume)
                 isMutedForRestore = false
-                await MainActor.run { state.playbackState = .paused }
+                guard await commitPresentation(context, { state in state.playbackState = .paused; return true }) else { return }
                 stopProgressTimer()
                 isRestoringSession = false
                 Logger.player.info("[RESTORE] seek landed — paused")
             }
         case .error:
-            Logger.player.error("[PLAYER] AudioStreaming entered error state")
-            let isLive = await MainActor.run { state.isLiveStream }
-            if isLive {
-                let name = await MainActor.run { state.currentRadio?.name ?? "" }
-                await handleLiveStreamFailure(stationName: name, error: nil)
-            } else {
-                await MainActor.run { state.playbackState = .error(.timeout) }
+            // The dependency queues a status callback before its typed error callback.
+            // Coalesce them without replacing the real cause with a fabricated timeout.
+            engineFailureTask?.cancel()
+            engineFailureTask = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+                await self?.handleAudioError(.other, expectedContext: context)
             }
         default:
             break
         }
     }
 
-    func handleAudioError(_ error: AudioPlayerError) async {
-        guard !systemPlayback.isActive, !isTrackTransitionPending, engine.state == .error else { return }
-        Logger.player.error("[PLAYER] AudioStreaming unexpected error")
-        let isLive = await MainActor.run { state.isLiveStream }
-        if isLive {
-            let name = await MainActor.run { state.currentRadio?.name ?? "" }
-            await handleLiveStreamFailure(stationName: name, error: nil)
-        } else {
-            await MainActor.run { state.playbackState = .error(.timeout) }
+    func handleAudioError(_ error: AudioPlayerError, expectedContext: PlaybackContext? = nil) async {
+        let context = expectedContext ?? playbackContext
+        guard contextIsCurrent(context), !systemPlayback.isActive,
+              !isTrackTransitionPending, engine.state == .error else { return }
+        // A status-only fallback may itself own engineFailureTask. Commit before cancelling it.
+        let pending = engineFailureTask
+        engineFailureTask = nil
+        let failure = PlaybackFailure.classify(error)
+        guard failure.kind != .cancelled else { pending?.cancel(); return }
+        let liveStation = await MainActor.run { state.isLiveStream ? state.currentRadio?.name : nil }
+        guard context == playbackContext else { pending?.cancel(); return }
+        if let liveStation {
+            await handleLiveStreamFailure(stationName: liveStation, error: failure)
+        } else if !(await recoverFailedCachedPlayback(context: context)) {
+            await finishPlaybackFailure(.playbackFailed(failure), context: context)
         }
+        pending?.cancel()
     }
 }

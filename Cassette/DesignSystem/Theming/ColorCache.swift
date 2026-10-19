@@ -10,14 +10,10 @@ import SwiftUI
 /// `DominantColorExtractor` remains the UI-facing store; this cache avoids re-running
 /// `AlbumColorAnalyzer` when a full `ArtworkPalette` is needed repeatedly.
 nonisolated enum ColorCache {
-    private static let defaultsKey = "cassette.artworkPalette.cache.v7"
-    private static let lock = NSLock()
-    private static var memory: [String: CachedPalette] = [:]
-    /// Hydrate once, including misses. Reading UserDefaults' entire dictionary per
-    /// uncached cover made scrolling cost grow with the size of the music library.
-    private static var stored: [String: Data]?
-    private static let persistenceQueue = DispatchQueue(label: "app.cassette.palette-persistence", qos: .utility)
-    private static var pendingWrite: DispatchWorkItem?
+    private static let cache = ArtworkPaletteCache(
+        load: { UserDefaults.standard.dictionary(forKey: "cassette.artworkPalette.cache.v8") as? [String: Data] ?? [:] },
+        persist: { UserDefaults.standard.set($0, forKey: "cassette.artworkPalette.cache.v8") }
+    )
 
     struct CachedPalette: Codable, Sendable, Equatable {
         let packedBackground: Int
@@ -53,55 +49,17 @@ nonisolated enum ColorCache {
     }
 
     static func palette(for id: String) -> ArtworkPalette? {
-        lock.lock()
-        defer { lock.unlock() }
-        if let cached = memory[id] { return cached.asArtworkPalette() }
-        hydrateLocked()
-        guard let data = stored?[id],
-              let cached = try? JSONDecoder().decode(CachedPalette.self, from: data) else {
-            return nil
-        }
-        memory[id] = cached
-        return cached.asArtworkPalette()
+        cache.palette(for: id)?.asArtworkPalette()
     }
 
     static func store(_ palette: ArtworkPalette, for id: String) {
         guard !id.isEmpty, let cached = CachedPalette.from(palette) else { return }
-        lock.lock()
-        defer { lock.unlock() }
-        guard memory[id] != cached else { return }
-        hydrateLocked()
-        memory[id] = cached
-        if let data = try? JSONEncoder().encode(cached) {
-            guard stored?[id] != data else { return }
-            stored?[id] = data
-            schedulePersistenceLocked()
-        }
+        cache.store(cached, for: id)
     }
 
-    static func clear() {
-        lock.lock()
-        defer { lock.unlock() }
-        memory.removeAll()
-        stored = [:]
-        schedulePersistenceLocked()
-    }
+    static func clear() { cache.clear() }
 
-    private static func hydrateLocked() {
-        if stored == nil {
-            stored = UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: Data] ?? [:]
-        }
-    }
-
-    private static func schedulePersistenceLocked() {
-        pendingWrite?.cancel()
-        let work = DispatchWorkItem {
-            let snapshot = lock.withLock { stored ?? [:] }
-            UserDefaults.standard.set(snapshot, forKey: defaultsKey)
-        }
-        pendingWrite = work
-        persistenceQueue.asyncAfter(deadline: .now() + 0.5, execute: work)
-    }
+    static func persistPreparedPalettes() async { await cache.flush() }
 
     private static func unpack(_ packed: Int) -> Color {
         Color(
@@ -126,6 +84,112 @@ nonisolated enum ColorCache {
         #else
         return nil
         #endif
+    }
+}
+
+/// All external persistence and palette coding runs outside the memory lock. The
+/// serial writer snapshots revisions so an old delayed write cannot undo a clear.
+nonisolated final class ArtworkPaletteCache: @unchecked Sendable {
+    typealias Palette = ColorCache.CachedPalette
+    private let lock = NSLock()
+    private var memory: [String: Palette] = [:]
+    private var stored: [String: Data]?
+    private var revision: UInt64 = 0
+    private var persistedRevision: UInt64 = 0
+    private var pendingWrite: DispatchWorkItem?
+    private let persistenceQueue = DispatchQueue(label: "app.cassette.palette-persistence", qos: .utility)
+    private let load: @Sendable () -> [String: Data]
+    private let persist: @Sendable ([String: Data]) -> Void
+
+    init(load: @escaping @Sendable () -> [String: Data],
+         persist: @escaping @Sendable ([String: Data]) -> Void) {
+        self.load = load
+        self.persist = persist
+    }
+
+    func palette(for id: String) -> Palette? {
+        if let cached = lock.withLock({ memory[id] }) { return cached }
+        hydrate()
+        guard let data = lock.withLock({ stored?[id] }),
+              let cached = try? JSONDecoder().decode(Palette.self, from: data) else { return nil }
+        lock.withLock {
+            if stored?[id] == data { memory[id] = cached }
+        }
+        return cached
+    }
+
+    func store(_ palette: Palette, for id: String) {
+        guard !id.isEmpty, lock.withLock({ memory[id] != palette }) else { return }
+        hydrate()
+        // Legacy JSON dictionaries need not have the same key order as a newly
+        // encoded value. Compare the palette before deciding that disk is dirty.
+        if let previous = lock.withLock({ stored?[id] }),
+           (try? JSONDecoder().decode(Palette.self, from: previous)) == palette {
+            let unchanged = lock.withLock {
+                guard stored?[id] == previous else { return false }
+                memory[id] = palette
+                return true
+            }
+            if unchanged { return }
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let data = try? encoder.encode(palette) else { return }
+        lock.withLock {
+            guard memory[id] != palette else { return }
+            memory[id] = palette
+            guard stored?[id] != data else { return }
+            stored?[id] = data
+            revision &+= 1
+            schedulePersistenceLocked()
+        }
+    }
+
+    func clear() {
+        lock.withLock {
+            memory.removeAll()
+            stored = [:]
+            revision &+= 1
+            schedulePersistenceLocked()
+        }
+    }
+
+    func flush() async {
+        await withCheckedContinuation { continuation in
+            persistenceQueue.async {
+                self.persistSnapshot()
+                continuation.resume()
+            }
+        }
+    }
+
+    private func hydrate() {
+        guard lock.withLock({ stored == nil }) else { return }
+        // UserDefaults may synchronously notify observers. Never hold our lock here,
+        // including on a cold miss. A concurrent clear/store wins over this disk read.
+        let loaded = load()
+        lock.withLock {
+            if stored == nil { stored = loaded }
+        }
+    }
+
+    private func schedulePersistenceLocked() {
+        pendingWrite?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.persistSnapshot() }
+        pendingWrite = work
+        persistenceQueue.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func persistSnapshot() {
+        let snapshot: (data: [String: Data], revision: UInt64)? = lock.withLock {
+            pendingWrite?.cancel()
+            pendingWrite = nil
+            guard revision != persistedRevision else { return nil }
+            return (stored ?? [:], revision)
+        }
+        guard let snapshot else { return }
+        persist(snapshot.data)
+        lock.withLock { persistedRevision = snapshot.revision }
     }
 }
 

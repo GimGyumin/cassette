@@ -5,6 +5,38 @@
 
 import SwiftUI
 
+extension View {
+    @ViewBuilder func cassetteSectionIndexLabel(_ label: String?) -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) { sectionIndexLabel(label) }
+        else { self }
+    }
+
+    /// iOS owns index layout, dragging and accessibility. Keep the existing fallback
+    /// for older systems and macOS, which has no List section-index control.
+    @ViewBuilder func cassetteListIndex(letters: Set<String>, isVisible: Bool,
+                                       onSelect: @escaping (String) -> Void) -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            listSectionIndexVisibility(isVisible ? .visible : .hidden)
+        } else {
+            legacyListIndex(letters: letters, isVisible: isVisible, onSelect: onSelect)
+        }
+        #else
+        legacyListIndex(letters: letters, isVisible: isVisible, onSelect: onSelect)
+        #endif
+    }
+
+    private func legacyListIndex(letters: Set<String>, isVisible: Bool,
+                                 onSelect: @escaping (String) -> Void) -> some View {
+        safeAreaInset(edge: .trailing, spacing: 0) {
+            if isVisible {
+                AlphabetJumpBar(availableLetters: letters, onLetterTap: onSelect)
+                    .padding(.trailing, 4)
+            }
+        }
+    }
+}
+
 struct AlphabetJumpBar: View {
     let availableLetters: Set<String>
     let onLetterTap: (String) -> Void

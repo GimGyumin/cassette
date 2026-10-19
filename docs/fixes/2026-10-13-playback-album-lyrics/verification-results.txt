@@ -1,0 +1,15 @@
+Source baseline: /tmp/cassette-playback-followup-baseline/sources.zip
+Changed source/test files: 25
+macOS log: /tmp/cassette-followup-final-macos.log
+macOS log SHA256: 084ba74b55abe1ff8cb7000985af76301a4121c80489aa347eb89e3af6c2b7c1
+✔ Test run with 1145 tests in 197 suites passed after 66.611 seconds.
+** TEST SUCCEEDED **
+Compiler diagnostics: no source compiler warnings/errors in final macOS log.
+Device checks: CoreDevice could query installed Cassette; no matching running process.
+xctrace: iPhone/iPad listed Offline. simctl: no installed runtimes.
+No device installation or device performance trace was performed.
+iOS log: /tmp/cassette-followup-final-ios.log
+iOS log SHA256: 539de1f90ff92049585daf89a64980c99a025e71af53d70474ab03a0f08d5e60
+** BUILD SUCCEEDED **
+Final iOS compiler diagnostics: 0
+git diff --check: passed.

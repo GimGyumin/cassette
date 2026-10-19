@@ -1,0 +1,95 @@
+{
+  "baseline": "/tmp/cassette-artwork-connectivity-baseline/sources.zip",
+  "files": [
+    {
+      "path": "Cassette/ViewModels/AlbumDetailViewModel.swift",
+      "beforeSHA256": "4d3bdeb508381e203d715e6ce3714a654e6baae2476cc613eeeeee631cdb2a8f",
+      "afterSHA256": "f9fea03346dfcc5532a8471a0a0e8af47af8dca027822ab4aa7262c968afd20a"
+    },
+    {
+      "path": "Cassette/App/CassetteApp.swift",
+      "beforeSHA256": "5907986ff2b09e1a417c798a1d6d9978f9d5d5cf8ad8a19f5625029917e799ff",
+      "afterSHA256": "3114f9b21edeb39304b6772724129e0eb1bff5cba310da7e4e9551aad4a7803f"
+    },
+    {
+      "path": "Cassette/App/AppContainer.swift",
+      "beforeSHA256": "2db3ee85d52727c590979ab869887797972fcabc81c452d293890f0507c3d7e9",
+      "afterSHA256": "c0a25983534c91ea3b6163e4a2a7ad03130c41431eeaa08ee5428813a285cb71"
+    },
+    {
+      "path": "Cassette/ObservableState/ServerState.swift",
+      "beforeSHA256": "1263ea14aacd2c69aca6713dc06d5da4809457266a6d9e24e94e3604ef0edd24",
+      "afterSHA256": "715bd67acdaff102645f3743a26d27458f1d5d6fcc0f711b7b7e38d6bf9ade3e"
+    },
+    {
+      "path": "Cassette/Utilities/ArtworkNetworkPolicy.swift",
+      "beforeSHA256": "b00a54f3debc8ca42fa503ada4d7f771752494f3b66754378b3b65e86f7cba5a",
+      "afterSHA256": "b2718cdaba9778a12033f94cb111a0309d49e7a36e8dc63e55bcb94e521b1947"
+    },
+    {
+      "path": "Cassette/Services/Implementations/LibraryIndexService.swift",
+      "beforeSHA256": "f03dafa75e82d97f94d7de1c8c3020a3e2734b996bda45829c28138baa25fd50",
+      "afterSHA256": "3739fdc115a53fe3eb5f7abb82b0b95d55fc96cd610c94c644cc0efa34bb0e42"
+    },
+    {
+      "path": "Cassette/Services/Implementations/AlbumCoverPreloadService.swift",
+      "beforeSHA256": "547f90ab31df9291c0b9330486309305488551a19c346b6c6846a3961f7133e5",
+      "afterSHA256": "50e1c6ea90fa60b23d0dff4de40756bf6c7f9bf66c1321abe1323aeb43e0d395"
+    },
+    {
+      "path": "Cassette/Services/Implementations/ArtworkImageCache.swift",
+      "beforeSHA256": "de1137a6fd807d75d1f73b21d4adc70a3bf8b1fbe8d79714bab0837b4cf5ae5a",
+      "afterSHA256": "6307a05dea3bd4df8e705e1d4b76ae1642dbe866e114aa7cd7fab55f7e0bdfec"
+    },
+    {
+      "path": "Cassette/Services/Implementations/NetworkMonitor.swift",
+      "beforeSHA256": "c5b1d7b933838da477fd7949d0c67ef2429e64169b8845212c833a7c67072f0d",
+      "afterSHA256": "ad5e83c0dc8e1a6e0ceb5d2209fdab1fd5bedd6ccfd8035baa390e7c68ffb45a"
+    },
+    {
+      "path": "Cassette/Views/Browse/CoverArtView.swift",
+      "beforeSHA256": "2947374121c7e9860ee93e0b5556ac51d1422c830c6ebcf910cdef438054748a",
+      "afterSHA256": "506f63fdcfbac92fae7ca18a55b4985f141f9a13189409e32dbfc6c8ad80201b"
+    },
+    {
+      "path": "Cassette/Views/Main/DashboardHomeView.swift",
+      "beforeSHA256": "1d78091d491aa3cef1f1e832dbafad7ffb43f09e6f06bb972b945302b2903625",
+      "afterSHA256": "db5300802971fc910a1d550ee303d2a93fd740d516d97a5cf9fbf7f70a58b4e7"
+    },
+    {
+      "path": "Cassette/Views/Main/FullPlayerView.swift",
+      "beforeSHA256": "83dcd6f5e094680ec2a9d115a0de5edec9c857a3cdfa51f0e4d4bde52eb5a17f",
+      "afterSHA256": "5434a18facf65bbbc692def075a3f67de5c190f395b22148b48c775ca9f6f09a"
+    },
+    {
+      "path": "Cassette/Models/Domain/AtmosVariantCatalogue.swift",
+      "beforeSHA256": "94df47cb4f64ef4eee4ece9302dc3ab1373b7cb7edd5b9e79d701fe155fe8e17",
+      "afterSHA256": "8add8fada223591da2682accaec6bd516543e0665ffb76712f443fb495a50f73"
+    },
+    {
+      "path": "Cassette/Models/Domain/DisplayableSong.swift",
+      "beforeSHA256": "79b889bcbbc688a68aaf7036797240f047c74092ff077e0e967b0783b8149723",
+      "afterSHA256": "e9de587ee7387f8a4bb4aafb09369db27e1d6aaac8b1bb5a220e3bf9351f7353"
+    },
+    {
+      "path": "Cassette/DesignSystem/Components/ExternalCoverView.swift",
+      "beforeSHA256": "c8927d6bde7555f89880c2acc28b05f9fc8e1ea028c5111a4569e130849faaf7",
+      "afterSHA256": "4aa1b67e0c7f0135aab07d13873ce7b5ec9870bc0723f0e9ab38c607e7ae3992"
+    },
+    {
+      "path": "CassetteTests/CassetteTests.swift",
+      "beforeSHA256": "14a7cc91360e335f4cea67aa7dfc55cae0f96dd962e4e07cf47df9f7d820fc9b",
+      "afterSHA256": "82e63be6a5fd19808dced04018df59077ceb0f0ba518a81fe5d75243124b6ade"
+    },
+    {
+      "path": "CassetteTests/DownloadedPlayerArtworkTests.swift",
+      "beforeSHA256": "5fc5870942e74b63bf29a70d9817b8aba84ffc408a246ce29b40820d70898c49",
+      "afterSHA256": "c58d5ae88137ca8f97fb655d36d9aee1ce3cb87b4cc1ee2b55e2cb0bea168bd7"
+    },
+    {
+      "path": "CassetteTests/ArtworkDownloadPolicyTests.swift",
+      "beforeSHA256": "dba6eaff581b48b9bae4029a5cefe84ac3c2bb4f4bdb50e9c669469292c72a17",
+      "afterSHA256": "6c34858c3be89ea0087e9a017e8d58ca241fe9a669287a6a1fa1952ba8e79c9c"
+    }
+  ]
+}

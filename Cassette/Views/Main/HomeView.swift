@@ -37,10 +37,13 @@ struct HomeView: View {
     @State private var showCreatePlaylist = false
     @State private var showAccountSheet = false
     @State private var isEditingPins = false
+    @State private var isHeaderScrolled = false
     @State private var navigateToAllAlbums = false
     // Local mutable copy for smooth drag-to-reorder; synced from @Query on count changes.
     @State private var localPinnedItems: [PinnedItem] = []
+    @State private var offlineSongIDs = Set<String>()
     @State private var dropTargetId: String?
+    @ScaledMetric(relativeTo: .caption) private var favoriteShelfTextHeight: CGFloat = 58
     private let recentColumns = [
         GridItem(.adaptive(minimum: 140, maximum: 180), spacing: CassetteSpacing.m)
     ]
@@ -51,26 +54,29 @@ struct HomeView: View {
     private var isOnline: Bool { container?.serverState.isOnline == true }
 
     private var recentDownloadedItems: [DownloadedItem] {
-        let albumItems = recentDownloadedAlbums.map {
+        guard let sid = container?.serverState.activeServer?.id else { return [] }
+        let albumItems = recentDownloadedAlbums.filter { $0.serverId == sid && $0.tracksCount > 0 }.map {
             DownloadedItem(
-                id: "album:\($0.albumId)",
+                id: "\(sid.uuidString):album:\($0.albumId)",
                 itemId: $0.albumId,
                 type: .album,
                 name: $0.name,
                 subtitle: $0.artist ?? "",
                 coverArtId: $0.coverArtId,
-                downloadedAt: $0.downloadedAt
+                downloadedAt: $0.downloadedAt,
+                serverId: sid
             )
         }
-        let playlistItems = recentDownloadedPlaylists.map {
+        let playlistItems = recentDownloadedPlaylists.filter { $0.serverId == sid && $0.tracksCount > 0 }.map {
             DownloadedItem(
-                id: "playlist:\($0.playlistId)",
+                id: "\(sid.uuidString):playlist:\($0.playlistId)",
                 itemId: $0.playlistId,
                 type: .playlist,
                 name: $0.name,
                 subtitle: "",
                 coverArtId: $0.coverArtId,
-                downloadedAt: $0.downloadedAt
+                downloadedAt: $0.downloadedAt,
+                serverId: sid
             )
         }
         return (albumItems + playlistItems)
@@ -80,33 +86,33 @@ struct HomeView: View {
     }
 
     private var visiblePinnedItems: [PinnedItem] {
-        guard container?.serverState.isOnline != true else { return localPinnedItems }
-        return localPinnedItems.filter { isAvailableOffline($0) }
+        guard let sid = container?.serverState.activeServer?.id else { return [] }
+        let scoped = localPinnedItems.filter { $0.serverId == sid }
+        guard container?.serverState.isOnline != true else { return scoped }
+        return scoped.filter { isAvailableOffline($0) }
     }
 
     private func isAvailableOffline(_ item: PinnedItem) -> Bool {
         let itemId = item.itemId
+        let sid = item.serverId
         switch PinnedItemType(rawValue: item.itemType) {
         case .album:
             let descriptor = FetchDescriptor<DownloadedAlbum>(
-                predicate: #Predicate { $0.albumId == itemId }
+                predicate: #Predicate { $0.albumId == itemId && $0.serverId == sid && $0.tracksCount > 0 }
             )
             return (try? modelContext.fetch(descriptor).first) != nil
         case .playlist:
             let descriptor = FetchDescriptor<DownloadedPlaylist>(
-                predicate: #Predicate { $0.playlistId == itemId }
+                predicate: #Predicate { $0.playlistId == itemId && $0.serverId == sid && $0.tracksCount > 0 }
             )
             return (try? modelContext.fetch(descriptor).first) != nil
         case .song:
-            let descriptor = FetchDescriptor<DownloadedTrack>(
-                predicate: #Predicate { $0.songId == itemId }
-            )
-            return (try? modelContext.fetch(descriptor).first) != nil
+            return offlineSongIDs.contains(itemId)
         case .artist:
             let descriptor = FetchDescriptor<DownloadedTrack>(
-                predicate: #Predicate { $0.artistId == itemId }
+                predicate: #Predicate { $0.artistId == itemId && $0.serverId == sid }
             )
-            return (try? modelContext.fetch(descriptor).first) != nil
+            return ((try? modelContext.fetch(descriptor)) ?? []).contains { offlineSongIDs.contains($0.songId) }
         case .none:
             return false
         }
@@ -114,7 +120,7 @@ struct HomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: CassetteSpacing.xl) {
+            LazyVStack(alignment: .leading, spacing: CassetteSpacing.xl) {
                 #if os(iOS)
                 if !visiblePinnedItems.isEmpty {
                     pinnedSection
@@ -134,62 +140,65 @@ struct HomeView: View {
         .miniPlayerBottomMargin()
         .navigationTitle(String(localized: "Library", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         .cassetteRootTabTitleAlignment()
+        .cassetteScrollingRootHeader(isScrolled: $isHeaderScrolled)
         .toolbar {
             #if os(iOS)
-            if isEditingPins {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        HapticFeedback.light.trigger()
-                        withAnimation(CassetteAnimation.chrome) { isEditingPins = false }
-                    } label: {
-                        CircleToolbarLabel(systemName: "checkmark", filled: true)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(String(localized: "Done", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                }
-            } else {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        showCreatePlaylist = true
-                    } label: {
-                        Image(systemName: "text.badge.plus")
-                            .font(.body.weight(.semibold))
-                    }
-                    .disabled(!isOnline)
-                    .accessibilityLabel(String(localized: "New Playlist", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-
-                    Menu {
+            if !isHeaderScrolled {
+                if isEditingPins {
+                    ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             HapticFeedback.light.trigger()
-                            withAnimation(CassetteAnimation.chrome) { isEditingPins = true }
+                            withAnimation(CassetteAnimation.chrome) { isEditingPins = false }
                         } label: {
-                            Label(
-                                String(localized: "Edit Pins", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
-                                systemImage: "pin"
-                            )
+                            CircleToolbarLabel(systemName: "checkmark", filled: true)
                         }
-                        .disabled(visiblePinnedItems.isEmpty)
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.body.weight(.semibold))
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(String(localized: "Done", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                     }
-                    .accessibilityLabel(String(localized: "More", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                }
+                } else {
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        Button {
+                            showCreatePlaylist = true
+                        } label: {
+                            Image(systemName: "text.badge.plus")
+                                .font(.body.weight(.semibold))
+                        }
+                        .disabled(!isOnline)
+                        .accessibilityLabel(String(localized: "New Playlist", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
 
-                // Own ToolbarItem so the profile control sits apart from the action capsule.
-                if #available(iOS 26.0, *) {
-                    ToolbarSpacer(.fixed)
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showAccountSheet = true
-                    } label: {
-                        Image(systemName: "person.crop.circle.fill")
-                            .font(.body)
-                            .symbolRenderingMode(.hierarchical)
+                        Menu {
+                            Button {
+                                HapticFeedback.light.trigger()
+                                withAnimation(CassetteAnimation.chrome) { isEditingPins = true }
+                            } label: {
+                                Label(
+                                    String(localized: "Edit Pins", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                                    systemImage: "pin"
+                                )
+                            }
+                            .disabled(visiblePinnedItems.isEmpty)
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.body.weight(.semibold))
+                        }
+                        .accessibilityLabel(String(localized: "More", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                     }
-                    .accessibilityLabel(String(localized: "Account", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+
+                    // Own ToolbarItem so the profile control sits apart from the action capsule.
+                    if #available(iOS 26.0, *) {
+                        ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                    }
+
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showAccountSheet = true
+                        } label: {
+                            Image(systemName: "person.crop.circle.fill")
+                                .font(.title2)
+                                .symbolRenderingMode(.hierarchical)
+                        }
+                        .accessibilityLabel(String(localized: "Account", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    }
                 }
             }
             #endif
@@ -200,7 +209,6 @@ struct HomeView: View {
             AccountSheetView()
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
-                .presentationCornerRadius(28)
         }
         #endif
         #if os(macOS)
@@ -215,6 +223,13 @@ struct HomeView: View {
         ))
         #endif
         .onAppear { localPinnedItems = allPinnedItems }
+        .task(id: "offline-\(container?.serverState.accountRevision ?? 0)-\(isOnline)") {
+            guard let container, let sid = container.serverState.activeServer?.id,
+                  let identity = try? container.serverState.requestIdentity(for: sid) else { offlineSongIDs = []; return }
+            let ids = await container.downloadService.downloadedSongIds(serverId: sid)
+            guard container.serverState.requestIsCurrent(identity), !Task.isCancelled else { return }
+            offlineSongIDs = ids
+        }
         .onChange(of: allPinnedItems.count) { _, _ in localPinnedItems = allPinnedItems }
         .onChange(of: visiblePinnedItems.isEmpty) { _, isEmpty in
             if isEmpty, isEditingPins {
@@ -329,7 +344,9 @@ struct HomeView: View {
                 LazyHStack(alignment: .top, spacing: CassetteSpacing.m) {
                     content()
                 }
+                .frame(height: 110 + favoriteShelfTextHeight, alignment: .top)
             }
+            .frame(height: 110 + favoriteShelfTextHeight)
         }
     }
     #endif
@@ -489,6 +506,7 @@ struct HomeView: View {
 
     /// Removes a pinned item from Home and mirrors it locally for instant feedback.
     private func unpin(_ item: PinnedItem) {
+        guard item.serverId == container?.serverState.activeServer?.id else { return }
         guard let type = PinnedItemType(rawValue: item.itemType) else { return }
         HapticFeedback.light.trigger()
         container?.pinService.unpin(itemType: type, itemId: item.itemId)
@@ -761,57 +779,44 @@ private struct HomePinnedCard: View {
     }
 
     private func isAvailableOfflineSong(_ songId: String) -> Bool {
-        let descriptor = FetchDescriptor<DownloadedTrack>(
-            predicate: #Predicate { $0.songId == songId }
-        )
+        let sid = item.serverId
+        let descriptor = FetchDescriptor<DownloadedTrack>(predicate: #Predicate { $0.songId == songId && $0.serverId == sid })
         return (try? modelContext.fetch(descriptor).first) != nil
     }
 
     private func loadPinnedSongs() async throws -> [DisplayableSong] {
-        let itemId = item.itemId
         guard let container else { return [] }
+        let sid = item.serverId
+        let identity = try container.serverState.requestIdentity(for: sid)
+        let songs = try await resolvePinnedSongs(container, serverId: sid)
+        guard container.serverState.requestIsCurrent(identity), !Task.isCancelled else { throw CancellationError() }
+        return songs
+    }
+
+    private func resolvePinnedSongs(_ container: AppContainer, serverId sid: UUID) async throws -> [DisplayableSong] {
+        let itemId = item.itemId
         switch pinnedType {
         case .album:
-            if container.serverState.isOnline,
-               let detail = try? await container.libraryService.album(id: itemId) {
-                return detail.song?.map { DisplayableSong(from: $0) } ?? []
+            if container.serverState.isOnline, let detail = try? await container.libraryService.album(id: itemId) {
+                return (detail.song ?? []).map { DisplayableSong(from: $0) }
             }
-            let tracks = (try? modelContext.fetch(
-                FetchDescriptor<DownloadedTrack>(predicate: #Predicate { $0.albumId == itemId })
-            )) ?? []
-            return tracks
-                .sorted { ($0.trackNumber ?? Int.max) < ($1.trackNumber ?? Int.max) }
-                .map { DisplayableSong(from: $0) }
+            return await container.downloadService.localAlbumData(albumId: itemId, serverId: sid)?.songs ?? []
         case .playlist:
-            if container.serverState.isOnline,
-               let detail = try? await container.libraryService.playlist(id: itemId) {
+            if container.serverState.isOnline, let detail = try? await container.libraryService.playlist(id: itemId) {
                 return (detail.entry ?? []).map { DisplayableSong(from: $0) }
             }
-            let playlists = (try? modelContext.fetch(
-                FetchDescriptor<DownloadedPlaylist>(predicate: #Predicate { $0.playlistId == itemId })
-            )) ?? []
-            let songIds = playlists.first?.songIds ?? []
-            let allTracks = (try? modelContext.fetch(FetchDescriptor<DownloadedTrack>())) ?? []
-            let trackBySongId = Dictionary(
-                allTracks.map { ($0.songId, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            return songIds.compactMap { trackBySongId[$0] }.map { DisplayableSong(from: $0) }
+            return await container.downloadService.localPlaylistData(playlistId: itemId, serverId: sid)?.songs ?? []
         case .song:
-            return [
-                DisplayableSong(
-                    id: item.itemId,
-                    title: item.displayName,
-                    artist: item.displaySubtitle.isEmpty ? nil : item.displaySubtitle,
-                    isDownloaded: isAvailableOfflineSong(item.itemId),
-                    coverArtId: item.coverArtId
-                )
-            ]
+            let downloaded = await container.downloadService.isDownloaded(songId: itemId, serverId: sid)
+            return [DisplayableSong(id: itemId, title: item.displayName,
+                artist: item.displaySubtitle.isEmpty ? nil : item.displaySubtitle,
+                isDownloaded: downloaded, coverArtId: item.coverArtId)]
         case .artist:
-            if container.serverState.isOnline,
-               let artist = try? await container.libraryService.artist(id: itemId) {
+            if container.serverState.isOnline, let artist = try? await container.libraryService.artist(id: itemId) {
                 var songs: [DisplayableSong] = []
                 for album in (artist.album ?? []).prefix(5) {
+                    try Task.checkCancellation()
+                    guard container.serverState.activeServer?.id == sid else { throw CancellationError() }
                     if let detail = try? await container.libraryService.album(id: album.id) {
                         songs.append(contentsOf: (detail.song ?? []).map { DisplayableSong(from: $0) })
                     }
@@ -819,12 +824,14 @@ private struct HomePinnedCard: View {
                 }
                 return songs
             }
-            let tracks = (try? modelContext.fetch(
-                FetchDescriptor<DownloadedTrack>(predicate: #Predicate { $0.artistId == itemId })
-            )) ?? []
-            return tracks.map { DisplayableSong(from: $0) }
+            let usable = await container.downloadService.downloadedSongIds(serverId: sid)
+            let tracks = (try? modelContext.fetch(FetchDescriptor<DownloadedTrack>(predicate: #Predicate {
+                $0.artistId == itemId && $0.serverId == sid
+            }))) ?? []
+            return tracks.filter { usable.contains($0.songId) }.map { DisplayableSong(from: $0) }
         }
     }
+
 }
 
 // MARK: - HomeLibraryRowLabel
@@ -864,6 +871,7 @@ private struct HomeLibraryRowLabel: View {
 private struct HomeDownloadedItemCard: View {
     let item: DownloadedItem
     let destination: HomeDestination
+    @Environment(\.appContainer) private var container
     @Environment(\.modelContext) private var modelContext
     @Environment(ArtworkImageCache.self) private var artworkImageCache
     @State private var coverImage: PlatformImage?
@@ -873,7 +881,7 @@ private struct HomeDownloadedItemCard: View {
             VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
                 GeometryReader { geo in
                     if item.type == .playlist {
-                        PlaylistCoverThumbnail(playlistId: item.itemId, serverId: nil, coverArtId: item.coverArtId ?? item.itemId, title: item.name, size: geo.size.width)
+                        PlaylistCoverThumbnail(playlistId: item.itemId, serverId: item.serverId, coverArtId: item.coverArtId ?? item.itemId, title: item.name, size: geo.size.width)
                     } else {
                         CoverArtView(id: item.coverArtId ?? item.itemId, size: Int(geo.size.width * 2))
                             .frame(width: geo.size.width, height: geo.size.width)
@@ -908,31 +916,12 @@ private struct HomeDownloadedItemCard: View {
             coverImage: coverImage,
             favoriteType: item.type == .album ? .album : nil
         ) {
+            guard let container, item.serverId == container.serverState.activeServer?.id else { return [] }
             switch item.type {
             case .album:
-                let aid = item.itemId
-                let tracks = (try? modelContext.fetch(
-                    FetchDescriptor<DownloadedTrack>(
-                        predicate: #Predicate { $0.albumId == aid }
-                    )
-                )) ?? []
-                return tracks
-                    .sorted { ($0.trackNumber ?? Int.max) < ($1.trackNumber ?? Int.max) }
-                    .map { DisplayableSong(from: $0) }
+                return await container.downloadService.localAlbumData(albumId: item.itemId, serverId: item.serverId)?.songs ?? []
             case .playlist:
-                let pid = item.itemId
-                let playlists = (try? modelContext.fetch(
-                    FetchDescriptor<DownloadedPlaylist>(
-                        predicate: #Predicate { $0.playlistId == pid }
-                    )
-                )) ?? []
-                let songIds = playlists.first?.songIds ?? []
-                let allTracks = (try? modelContext.fetch(FetchDescriptor<DownloadedTrack>())) ?? []
-                let trackBySongId = Dictionary(
-                    allTracks.map { ($0.songId, $0) },
-                    uniquingKeysWith: { first, _ in first }
-                )
-                return songIds.compactMap { trackBySongId[$0] }.map { DisplayableSong(from: $0) }
+                return await container.downloadService.localPlaylistData(playlistId: item.itemId, serverId: item.serverId)?.songs ?? []
             }
         }
     }
@@ -952,6 +941,7 @@ private nonisolated struct DownloadedItem: Identifiable, Sendable {
     let subtitle: String
     let coverArtId: String?
     let downloadedAt: Date
+    let serverId: UUID
 }
 
 // MARK: - HomeAlbumCell
@@ -1017,6 +1007,8 @@ private struct HomeDestinationRegistrar: ViewModifier {
         if enabled {
             content.navigationDestination(for: HomeDestination.self) { destination in
                 switch destination {
+                case .albumCollection(let collection):
+                    AlbumShelfCollectionView(collection: collection)
                 case .libraryAlbums:
                     AlbumsListView()
                 case .libraryArtists:
@@ -1087,7 +1079,7 @@ private struct HomeDestinationRegistrar: ViewModifier {
                         coverArtId: album.coverArtId
                     )
                 case .personalMix(let kind):
-                    PersonalMixDetailView(kind: kind)
+                    PlaylistDetailView(generatedSource: .personalMix(kind))
                 }
             }
         } else {

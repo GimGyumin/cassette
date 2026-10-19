@@ -83,8 +83,8 @@ final class ArtistDetailViewModel {
         do {
             let fetched = try await libraryService.artist(id: artistId)
             try Task.checkCancellation()
+            let albums = await libraryService.presentedAlbums(fetched.album ?? [])
             let presentation = await Task.detached(priority: .userInitiated) {
-                let albums = fetched.album ?? []
                 return (ArtistAlbumCategorizer.sections(from: albums),
                         ArtistAlbumCategorizer.sortedByNewest(albums).first)
             }.value

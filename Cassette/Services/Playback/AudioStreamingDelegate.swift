@@ -19,9 +19,10 @@ final class AudioStreamingDelegate: AudioPlayerDelegate, @unchecked Sendable {
     func audioPlayerDidStartPlaying(player: AudioPlayer, with entryId: AudioEntryId) {
         // The engine tells us which entry it selected: the end-of-track watchdog needs
         // this to distinguish a completed gapless transition from a stalled one.
-        guard let service else { return }
+        guard let service, (service.engine as? any AudioStreamingPlaybackEngine)?.ownsCallbacks(from: player) != false else { return }
         let identifier = entryId.id
-        Task { await service.handleEngineStartedEntry(entryIdentifier: identifier) }
+        let context = service.authority.snapshot
+        Task { await service.handleEngineStartedEntry(entryIdentifier: identifier, expectedContext: context) }
     }
 
     func audioPlayerDidFinishBuffering(player: AudioPlayer, with entryId: AudioEntryId) {}
@@ -31,16 +32,15 @@ final class AudioStreamingDelegate: AudioPlayerDelegate, @unchecked Sendable {
         with newState: AudioPlayerState,
         previous: AudioPlayerState
     ) {
+        guard let service, (service.engine as? any AudioStreamingPlaybackEngine)?.ownsCallbacks(from: player) != false else { return }
         // [DIAG] Correlate with [NET-COVER] logs: underrun while cover fetches are in flight
         // confirms bandwidth starvation; underrun with no concurrent covers points elsewhere.
         if newState == .bufferring && previous == .playing {
-            Logger.player.warning("[NET-AUDIO] buffer underrun — state: playing → bufferring")
-            if let service {
-                Task { await service.handleBufferUnderrun() }
-            }
+            let context = service.authority.snapshot
+            Task { await service.handleBufferUnderrun(expectedContext: context) }
         }
-        guard let service else { return }
-        Task { await service.handleAudioStateChanged(newState) }
+        let context = service.authority.snapshot
+        Task { await service.handleAudioStateChanged(newState, expectedContext: context) }
     }
 
     func audioPlayerDidFinishPlaying(
@@ -52,19 +52,25 @@ final class AudioStreamingDelegate: AudioPlayerDelegate, @unchecked Sendable {
     ) {
         // Only natural completions (eof) trigger end-of-track handling.
         // User-initiated play() or stop() arrive with .userAction / .none.
-        guard let service, stopReason == .eof else { return }
+        guard let service, stopReason == .eof,
+              (service.engine as? any AudioStreamingPlaybackEngine)?.ownsCallbacks(from: player) != false else { return }
         let finishedEntryIdentifier = entryId.id
+        let context = service.authority.snapshot
         Task {
             await service.handleEndOfTrack(
                 engineConfirmed: true,
-                finishedEntryIdentifier: finishedEntryIdentifier
+                finishedEntryIdentifier: finishedEntryIdentifier,
+                expectedContext: context, finishedProgress: progress
             )
         }
     }
 
     func audioPlayerUnexpectedError(player: AudioPlayer, error: AudioPlayerError) {
-        guard let service else { return }
-        Task { await service.handleAudioError(error) }
+        guard let service, (service.engine as? any AudioStreamingPlaybackEngine)?.ownsCallbacks(from: player) != false else { return }
+        // AudioStreaming does not provide an entry ID for state/errors. Fence the actor
+        // delivery with the receiving command; EOF/start retain the dependency's entry ID.
+        let context = service.authority.snapshot
+        Task { await service.handleAudioError(error, expectedContext: context) }
     }
 
     func audioPlayerDidCancel(player: AudioPlayer, queuedItems: [AudioEntryId]) {}

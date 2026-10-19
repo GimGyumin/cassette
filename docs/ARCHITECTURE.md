@@ -4,6 +4,11 @@ Playback request ownership, buffering, and recovery were revised on 2026-09-28.
 See [Playback redesign](PLAYBACK_REDESIGN.md) for the current policy and validation
 status; it supersedes older warmup/probe and handover descriptions below.
 
+The [2026-10-08 RC audit](RELEASE_CANDIDATE_AUDIT.md) records the latest fixes and
+validation limits. Cache file/metadata mutations are synchronous actor operations;
+`PlayerService` holds a weak return link to the container-owned `NowPlayingService`.
+Queue edits validate and mutate shared UI state in a single MainActor turn.
+
 Cassette is a native SwiftUI client for Subsonic / OpenSubsonic servers, shipping an
 iOS app, a macOS app, a widget extension and App Intents from one project. This
 document is the map: which layer owns what, how a tap becomes audio, and where the
@@ -529,7 +534,8 @@ Every adaptive decision funnels through one value:
   (`CassetteTests/PerformanceBudgetTests.swift`).
 - **Readers**: views read `governor.budget` inside `body` (Observation re-renders them on change);
   services, view models and the **audio render thread** read the statics on `CassettePerformance`
-  (no lock, no actor hop, no `ProcessInfo` call per frame or per buffer).
+  (one atomic byte holds all six policy inputs; no lock, actor hop, or `ProcessInfo`
+  call per frame or per buffer).
 
 | Signal | Chrome | Beat visuals | Artwork analysis | Bulk prefetch | Lyrics tick |
 |---|---|---|---|---|---|

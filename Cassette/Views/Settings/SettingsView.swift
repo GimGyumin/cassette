@@ -111,6 +111,10 @@ struct SettingsView: View {
                 AdvancedSettingsView()
             }
 
+            SettingsNavigationRow("Developer") {
+                DeveloperSettingsView()
+            }
+
             SettingsNavigationRow("About") {
                 AboutSettingsView()
             }

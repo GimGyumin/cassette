@@ -29,6 +29,9 @@ struct LyricsView: View {
     /// When chrome is hidden, the first tap only reveals it. It must not also seek
     /// to a partially obscured line under the returning transport controls.
     var consumesLineTapToRevealChrome = false
+    /// Compact player keeps its lazy lyric tree mounted across cover morphs. Other hosts
+    /// retain the normal appearance lifecycle by leaving this nil.
+    var presentationIsVisible: Bool? = nil
     @ObservedObject private var settings = LyricsTranslationSettings.shared
     @AppStorage("cassette.lyrics.largerText") private var largerLyricsText = "lyrics"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -39,6 +42,7 @@ struct LyricsView: View {
     @State private var translationSourceLanguageCode: String?
     /// Bumped whenever the Apple session must die; in-flight work checks this before touching `session`.
     @State private var translationEpoch: Int = 0
+    @State private var explicitlyScrolledSeekIndex: Int?
 
     private var lineFrameAlignment: Alignment {
         lineAlignment == .center ? .center : .leading
@@ -138,7 +142,7 @@ struct LyricsView: View {
                         .frame(width: 0, height: 0)
                         .frame(maxWidth: .infinity)
                     if viewModel.instrumentalGapAfterIndex == nil,
-                       viewModel.instrumentalGapProgress != nil {
+                       viewModel.hasInstrumentalGap {
                         LyricsInstrumentalGapLeaf(viewModel: viewModel)
                             .id("instrumental-gap")
                             .frame(maxWidth: .infinity, alignment: gapFrameAlignment)
@@ -175,7 +179,7 @@ struct LyricsView: View {
                         }
 
                         if viewModel.instrumentalGapAfterIndex == index,
-                           viewModel.instrumentalGapProgress != nil {
+                           viewModel.hasInstrumentalGap {
                             LyricsInstrumentalGapLeaf(viewModel: viewModel)
                                 .id("instrumental-gap")
                                 .frame(maxWidth: .infinity, alignment: gapFrameAlignment)
@@ -233,32 +237,49 @@ struct LyricsView: View {
             .onChange(
                 of: viewModel.currentLineIndex
             ) { _, newIndex in
+                if let explicit = explicitlyScrolledSeekIndex {
+                    if newIndex == explicit { return }
+                    explicitlyScrolledSeekIndex = nil
+                }
+                // A tapped line has one explicit scroll token. Do not launch a second
+                // competing animation from its synchronous highlight update.
+                guard viewModel.pendingSeekScrollIndex == nil else { return }
                 scrollToCurrentLine(proxy: proxy, index: newIndex)
             }
             .onChange(of: bottomChromeInset) { _, _ in
-                if viewModel.instrumentalGapProgress != nil {
+                guard viewModel.pendingSeekScrollIndex == nil,
+                      explicitlyScrolledSeekIndex == nil || explicitlyScrolledSeekIndex != viewModel.currentLineIndex else { return }
+                if viewModel.hasInstrumentalGap {
                     scrollToInstrumentalGap(proxy: proxy)
                 } else {
                     scrollToCurrentLine(proxy: proxy, index: viewModel.currentLineIndex)
                 }
             }
-            .onChange(of: viewModel.instrumentalGapProgress != nil) { _, showingGap in
+            .onChange(of: viewModel.hasInstrumentalGap) { _, showingGap in
                 if showingGap {
                     scrollToInstrumentalGap(proxy: proxy)
                 }
             }
             .onChange(of: viewModel.scrollRestoreToken) { _, _ in
-                if viewModel.instrumentalGapProgress != nil {
-                    withAnimation(CassetteAnimation.lyricScroll) {
+                if viewModel.hasInstrumentalGap {
+                    withAnimation(reduceMotion ? nil : CassetteAnimation.lyricScroll) {
                         proxy.scrollTo("instrumental-gap", anchor: currentLineScrollAnchor)
                     }
                 } else if let tappedIndex = viewModel.pendingSeekScrollIndex {
+                    explicitlyScrolledSeekIndex = tappedIndex
                     viewModel.pendingSeekScrollIndex = nil
-                    withAnimation(CassetteAnimation.lyricScroll) {
+                    withAnimation(reduceMotion ? nil : CassetteAnimation.lyricScroll) {
                         proxy.scrollTo(tappedIndex, anchor: currentLineScrollAnchor)
                     }
                 } else {
                     forceScrollToCurrentLine(proxy: proxy, index: viewModel.currentLineIndex)
+                }
+            }
+            .onChange(of: viewModel.playerState.pendingSeekPosition) { _, target in
+                if let target {
+                    viewModel.synchronizeSeekClock(to: target)
+                } else if !viewModel.isPlaying {
+                    viewModel.synchronizeSeekClock(to: viewModel.playerState.position)
                 }
             }
         }
@@ -307,30 +328,68 @@ struct LyricsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Button {
-                        Task { await viewModel.translateCurrentLyrics() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .frame(width: 44, height: 44)
+                    if viewModel.translationErrorOffersStandard {
+                        Button(String(localized: "Use Standard Translation", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) {
+                            Task { await viewModel.useStandardTranslation() }
+                        }
+                        .font(.caption)
+                        .disabled(viewModel.isTranslating)
+                    } else if viewModel.translationErrorCanRetry {
+                        Button {
+                            Task { await viewModel.translateCurrentLyrics() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(viewModel.isTranslating)
+                        .accessibilityLabel(String(localized: "Retry", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    }
+                    Button { viewModel.translationErrorMessage = nil } label: {
+                        Image(systemName: "xmark").frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(String(localized: "Retry", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                    .accessibilityLabel(String(localized: "Dismiss", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 }
                 .padding(.horizontal, 16)
                 .background(.regularMaterial)
             }
         }
         .onAppear {
-            viewModel.setVisible(true)
+            viewModel.setVisible(presentationIsVisible == nil)
             if settings.provider == .apple,
+               AppleIntelligenceLyricsTranslator.normalizedPrompt(viewModel.effectiveAppleIntelligencePrompt).isEmpty,
                viewModel.isTranslating,
                translationConfiguration == nil {
-                Task { await triggerAppleTranslation() }
+                let requestID = viewModel.appleTranslationRequestID
+                Task { await triggerAppleTranslation(requestID: requestID) }
             }
         }
         .onDisappear {
             tearDownAppleTranslationSession()
             viewModel.setVisible(false)
+        }
+        .task(id: settings.translationIdentity) {
+            await viewModel.refreshTranslationSettingsIfNeeded()
+        }
+        .onChange(of: settings.translationIdentity) { _, _ in
+            tearDownAppleTranslationSession()
+        }
+        .onChange(of: presentationIsVisible) { _, visible in
+            if visible == false {
+                tearDownAppleTranslationSession()
+                viewModel.setVisible(false)
+            }
+        }
+        .task(id: presentationIsVisible) {
+            guard presentationIsVisible == true else { return }
+            viewModel.synchronizeSeekClock(to: viewModel.playerState.pendingSeekPosition ?? viewModel.playerState.position)
+            // Do not compete with the cover/chrome morph at 60 lyric updates per second.
+            if !reduceMotion {
+                do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            viewModel.setVisible(true)
         }
         .onChange(of: viewModel.isPlaying) { _, _ in
             viewModel.reconcileTracking()
@@ -341,9 +400,10 @@ struct LyricsView: View {
         .onChange(of: scenePhase) { _, phase in
             viewModel.setScenePhase(phase)
         }
-        .onChange(of: viewModel.appleTranslationRequestID) { _, _ in
-            guard settings.provider == .apple else { return }
-            Task { await triggerAppleTranslation() }
+        .onChange(of: viewModel.appleTranslationRequestID) { _, requestID in
+            guard settings.provider == .apple, viewModel.isTranslating,
+                  AppleIntelligenceLyricsTranslator.normalizedPrompt(viewModel.effectiveAppleIntelligencePrompt).isEmpty else { return }
+            Task { await triggerAppleTranslation(requestID: requestID) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .cassetteRoutePickerWillPresent)) { _ in
             tearDownAppleTranslationSession()
@@ -359,8 +419,9 @@ struct LyricsView: View {
             guard viewModel.beginAppleTranslationSession(requestID: requestID) else { return }
 
             guard settings.provider == .apple,
+                  AppleIntelligenceLyricsTranslator.normalizedPrompt(viewModel.effectiveAppleIntelligencePrompt).isEmpty,
                   case .loaded = viewModel.state else {
-                await viewModel.failAppleTranslation()
+                viewModel.abandonAppleTranslation()
                 return
             }
 
@@ -381,7 +442,7 @@ struct LyricsView: View {
             }
             guard nonEmptyCount > 0 else {
                 await viewModel.failAppleTranslation(
-                    message: String(localized: "No lyrics need translation.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                    message: String(localized: "No lyrics need translation.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), requestID: requestID
                 )
                 return
             }
@@ -451,7 +512,7 @@ struct LyricsView: View {
                 }
 
                 Logger.lyrics.error("Apple Translation failed: \(error.localizedDescription, privacy: .public)")
-                await viewModel.failAppleTranslation(message: error.localizedDescription)
+                await viewModel.failAppleTranslation(error: error, requestID: requestID)
             }
         }
     }
@@ -466,7 +527,7 @@ struct LyricsView: View {
     private func scrollToCurrentLine(proxy: ScrollViewProxy, index: Int?) {
         guard
             viewModel.followsPlayback,
-            viewModel.instrumentalGapProgress == nil,
+            !viewModel.hasInstrumentalGap,
             let index,
             viewModel.autoScrollEnabled
         else {
@@ -489,7 +550,7 @@ struct LyricsView: View {
     private func forceScrollToCurrentLine(proxy: ScrollViewProxy, index: Int?) {
         guard
             viewModel.followsPlayback,
-            viewModel.instrumentalGapProgress == nil,
+            !viewModel.hasInstrumentalGap,
             let index,
             viewModel.autoScrollEnabled
         else {
@@ -526,10 +587,13 @@ struct LyricsView: View {
     }
 
     @MainActor
-    private func triggerAppleTranslation() async {
+    private func triggerAppleTranslation(requestID: Int) async {
+        guard requestID == viewModel.appleTranslationRequestID,
+              viewModel.isTranslating, !Task.isCancelled,
+              AppleIntelligenceLyricsTranslator.normalizedPrompt(viewModel.effectiveAppleIntelligencePrompt).isEmpty else { return }
         let target = targetLanguageCode
         guard case .loaded(let structured) = viewModel.state else {
-            await viewModel.failAppleTranslation()
+            viewModel.abandonAppleTranslation()
             return
         }
         let displayedLines = viewModel.displayRows.map(\.text)
@@ -563,6 +627,8 @@ struct LyricsView: View {
             strategy = .standard
         }
 
+        guard requestID == viewModel.appleTranslationRequestID,
+              viewModel.isTranslating, !Task.isCancelled else { return }
         translationSourceLanguageCode = sourceLanguageCode
         translationStrategy = strategy
         installAppleTranslationConfiguration(target: target, strategy: strategy)

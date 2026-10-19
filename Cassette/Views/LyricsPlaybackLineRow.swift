@@ -109,9 +109,9 @@ struct LyricsPlaybackLineRow: View {
                     if pronunciationIsPrimary {
                         let pronunciationWords = viewModel.pronunciationWords(at: index)
                         if followsPlayback, !pronunciationWords.isEmpty {
-                            LyricWordKaraokeLine(
+                            LyricsWordClockLine(
                                 words: pronunciationWords,
-                                adjustedMs: isCurrent ? karaokeMs : (pronunciationWords.first?.startMs ?? 0) - 1,
+                                viewModel: viewModel, followsClock: isCurrent, idleMs: (pronunciationWords.first?.startMs ?? 0) - 1,
                                 fontSize: resolvedFontSize,
                                 textAlignment: textAlignment,
                                 reduceMotion: reduceMotion
@@ -122,9 +122,9 @@ struct LyricsPlaybackLineRow: View {
                                 .foregroundColor(.white)
                         }
                     } else if followsPlayback, isTTMLWordTiming {
-                        LyricWordKaraokeLine(
+                        LyricsWordClockLine(
                             words: viewModel.displayWords(at: index), cueLine: cueLine,
-                            adjustedMs: isCurrent ? karaokeMs : (viewModel.displayWords(at: index).first?.startMs ?? cueLine?.cue.first?.start ?? 0) - 1,
+                            viewModel: viewModel, followsClock: isCurrent, idleMs: (viewModel.displayWords(at: index).first?.startMs ?? cueLine?.cue.first?.start ?? 0) - 1,
                             nextLineStartMs: nextLyricStartMs, fontSize: resolvedFontSize,
                             isSecondary: isSecondary, textAlignment: textAlignment, reduceMotion: reduceMotion
                         )
@@ -146,8 +146,8 @@ struct LyricsPlaybackLineRow: View {
                 } else if !pronunciationText.isEmpty, pronunciationText != line.originalText, !isSecondary {
                     let pronunciationWords = viewModel.pronunciationWords(at: index)
                     if followsPlayback, !pronunciationWords.isEmpty {
-                        LyricWordKaraokeLine(words: pronunciationWords,
-                            adjustedMs: isCurrent ? karaokeMs : (pronunciationWords.first?.startMs ?? 0) - 1,
+                        LyricsWordClockLine(words: pronunciationWords,
+                            viewModel: viewModel, followsClock: isCurrent, idleMs: (pronunciationWords.first?.startMs ?? 0) - 1,
                             fontSize: max(16, primaryFontSize * 0.46), textAlignment: textAlignment, reduceMotion: reduceMotion)
                     } else {
                         Text(pronunciationText)
@@ -163,8 +163,8 @@ struct LyricsPlaybackLineRow: View {
                         let text = viewModel.translatedLyrics.indices.contains(bi) ? viewModel.translatedLyrics[bi].originalText : ""
                         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             if let cue = viewModel.cueLine(at: bi), !cue.cue.isEmpty {
-                                LyricWordKaraokeLine(words: viewModel.displayWords(at: bi), cueLine: cue,
-                                    adjustedMs: karaokeMs, fontSize: primaryFontSize * 0.62, isSecondary: true,
+                                LyricsWordClockLine(words: viewModel.displayWords(at: bi), cueLine: cue,
+                                    viewModel: viewModel, followsClock: true, idleMs: 0, fontSize: primaryFontSize * 0.62, isSecondary: true,
                                     textAlignment: textAlignment, reduceMotion: reduceMotion)
                                 .opacity(0.72).padding(.top, 2).transition(backingOverlayTransition)
                             } else {
@@ -194,10 +194,10 @@ struct LyricsPlaybackLineRow: View {
                        karaokeMs < (bgWords.map(\.endMs).max() ?? 0) {
                         let transText = line.backgroundTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
                         VStack(alignment: alignment, spacing: 3) {
-                            LyricWordKaraokeLine(
+                            LyricsWordClockLine(
                                 words: bgWords,
                                 cueLine: nil,
-                                adjustedMs: karaokeMs,
+                                viewModel: viewModel, followsClock: true, idleMs: 0,
                                 nextLineStartMs: nil,
                                 fontSize: translationFontSize * 0.92,
                                 isSecondary: true,
@@ -206,7 +206,7 @@ struct LyricsPlaybackLineRow: View {
                             )
                             let pronunciation = viewModel.pronunciationWords(at: index, background: true)
                             if !pronunciation.isEmpty {
-                                LyricWordKaraokeLine(words: pronunciation, adjustedMs: karaokeMs,
+                                LyricsWordClockLine(words: pronunciation, viewModel: viewModel, followsClock: true, idleMs: 0,
                                     fontSize: translationFontSize * 0.80, isSecondary: true,
                                     textAlignment: textAlignment, reduceMotion: reduceMotion)
                             }
@@ -238,5 +238,26 @@ struct LyricsPlaybackLineRow: View {
             .accessibilityValue(isCurrent && followsPlayback ? Text("Now Playing") : Text(""))
             .accessibilityHint(followsPlayback ? String(localized: "Seek to this line", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : "")
         }
+    }
+}
+
+/// Only timed glyphs observe the high-frequency clock. The lyric row's translations,
+/// accessibility, layout and emphasis do not need rebuilding for every word-fill sample.
+private struct LyricsWordClockLine: View {
+    var words: [LyricDisplayWord] = []
+    var cueLine: CueLine? = nil
+    let viewModel: LyricsViewModel
+    let followsClock: Bool
+    let idleMs: Int
+    var nextLineStartMs: Int? = nil
+    let fontSize: CGFloat
+    var isSecondary = false
+    var textAlignment: TextAlignment = .leading
+    var reduceMotion = false
+    var body: some View {
+        LyricWordKaraokeLine(words: words, cueLine: cueLine,
+            adjustedMs: followsClock ? viewModel.karaokePlaybackMs : idleMs,
+            nextLineStartMs: nextLineStartMs, fontSize: fontSize,
+            isSecondary: isSecondary, textAlignment: textAlignment, reduceMotion: reduceMotion)
     }
 }

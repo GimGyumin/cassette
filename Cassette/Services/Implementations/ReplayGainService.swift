@@ -8,13 +8,19 @@ import AudioStreaming
 import OSLog
 
 actor ReplayGainService {
-    private let eqNode = AVAudioUnitEQ()
+    private var eqNode = AVAudioUnitEQ()
     private var isAttached = false
 
     func attach(to graph: (any AudioGraphHosting)?) {
         guard !isAttached, let graph else { return }
         graph.attach(node: eqNode)
         isAttached = true
+    }
+
+    func resetAfterMediaServicesReset(graph: (any AudioGraphHosting)?) {
+        eqNode = AVAudioUnitEQ()
+        isAttached = false
+        attach(to: graph)
     }
 
     /// Applies gain for the given track using a pre-captured settings snapshot.
@@ -45,6 +51,22 @@ actor ReplayGainService {
     /// Resets the EQ gain to 0 dB (no effect). Called when playback stops.
     func resetGain() {
         eqNode.globalGain = 0
+    }
+
+    func apply(gainDB: Float, authority: PlaybackAuthority, context: PlaybackContext) {
+        authority.commit(ifCurrent: context) { eqNode.globalGain = gainDB }
+    }
+
+    nonisolated static func gainState(track: DisplayableSong?, config: ReplayGainConfig) -> PlaybackGainState {
+        guard let track else { return PlaybackGainState(enabled: config.enabled) }
+        let selected = config.mode == .track ? track.replayGainTrackGain : track.replayGainAlbumGain
+        return PlaybackGainState(enabled: config.enabled,
+            hasMetadata: selected != nil || track.replayGainFallbackGain != nil,
+            requestedDB: computeGain(enabled: config.enabled, mode: config.mode,
+                preAmp: config.preAmp, preventClipping: config.preventClipping,
+                trackGain: track.replayGainTrackGain, trackPeak: track.replayGainTrackPeak,
+                albumGain: track.replayGainAlbumGain, albumPeak: track.replayGainAlbumPeak,
+                baseGain: track.replayGainBaseGain, fallbackGain: track.replayGainFallbackGain))
     }
 
     // MARK: - Gain computation (pure, static, testable)

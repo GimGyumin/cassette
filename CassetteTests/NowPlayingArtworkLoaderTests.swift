@@ -48,4 +48,14 @@ struct NowPlayingArtworkLoaderTests {
         #expect(await loader.artwork(for: URL(string: "https://artwork.test/cover")!, headers: [:]) == nil)
         #expect(await loader.artwork(for: URL(string: "https://artwork.test/cover")!, headers: ["X-Cover-Auth": "test"]) != nil)
     }
+    @Test func successfulArtworkDoesNotCrossCredentialBoundaries() async throws {
+        let session = session()
+        defer { session.invalidateAndCancel() }
+        let loader = ArtworkLoader(session: session)
+        let url = try #require(URL(string: "https://artwork.test/credential-change"))
+        #expect(await loader.artwork(for: url, headers: ["X-Cover-Auth": "test"]) != nil)
+        #expect(await loader.artwork(for: url, headers: [:]) == nil)
+        #expect(await loader.artwork(for: url, headers: ["X-Cover-Auth": "test"]) != nil)
+    }
+
 }

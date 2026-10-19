@@ -70,21 +70,14 @@ extension View {
     }
 }
 
-/// Drop-in replacement for `.borderedProminent` brand CTAs — Cassette Red tinted chrome.
-struct CassetteAccentGlassButtonStyle: ButtonStyle {
-    var isDisabled: Bool = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(.white)
-            .cassetteAccentGlassCapsule(disabled: isDisabled || configuration.isPressed)
-            .opacity(configuration.isPressed ? 0.92 : 1)
-    }
-}
-
 extension View {
+    @ViewBuilder
     func cassetteAccentGlassButton(disabled: Bool = false) -> some View {
-        buttonStyle(CassetteAccentGlassButtonStyle(isDisabled: disabled))
+        if #available(iOS 26.0, macOS 26.0, *) {
+            self.buttonStyle(.glassProminent).tint(.cassetteAccent).disabled(disabled)
+        } else {
+            self.buttonStyle(.borderedProminent).tint(.cassetteAccent).disabled(disabled)
+        }
     }
 
     /// Soft panel for cards / accessory chrome. Cheap path uses material, not Liquid Glass.

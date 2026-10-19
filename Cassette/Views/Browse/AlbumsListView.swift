@@ -158,6 +158,7 @@ struct AlbumsListView: View {
             }
             .refreshable { await vm.load() }
             .miniPlayerBottomMargin()
+            .cassetteSoftTopScrollEdge()
         }
     }
 
@@ -177,37 +178,53 @@ struct AlbumsListView: View {
                         .listRowSeparator(.hidden)
                 }
 
-                ForEach(albums) { album in
-                    NavigationLink(value: HomeDestination.album(album)) {
-                        AlbumRow(
-                            albumId: album.id,
-                            name: album.name,
-                            artist: album.artist,
-                            year: album.year,
-                            coverArtId: album.coverArt
-                        )
+                if albumSort == .name {
+                    ForEach(indexedAlbums(albums)) { section in
+                        Section { albumRows(section.albums) }
+                            .cassetteSectionIndexLabel(section.letter)
                     }
-                    .id(album.id)
+                } else {
+                    albumRows(albums)
                 }
             }
             .listStyle(.plain)
             .refreshable { await vm.load() }
             .miniPlayerBottomMargin()
-            .safeAreaInset(edge: .trailing, spacing: 0) {
-                if albums.count >= 20 && albumSort == .name {
-                    AlphabetJumpBar(
-                        availableLetters: albums.availableAlphabetLetters(keyPath: \.name),
-                        onLetterTap: { letter in
-                            if let id = firstAlphabetItemID(forLetter: letter, in: albums, keyPath: \.name) {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    proxy.scrollTo(id, anchor: .top)
-                                }
-                            }
-                        }
-                    )
-                    .padding(.trailing, 4)
+            .cassetteSoftTopScrollEdge()
+            .cassetteListIndex(letters: albums.availableAlphabetLetters(keyPath: \.name),
+                isVisible: albums.count >= 20 && albumSort == .name) { letter in
+                if let id = firstAlphabetItemID(forLetter: letter, in: albums, keyPath: \.name) {
+                    proxy.scrollTo(id, anchor: .top)
                 }
             }
+        }
+    }
+
+    private struct AlbumIndexSection: Identifiable {
+        let id: String
+        let letter: String
+        var albums: [AlbumID3]
+    }
+
+    private func indexedAlbums(_ albums: [AlbumID3]) -> [AlbumIndexSection] {
+        // Preserve the selected locale's existing sort order, including non-Latin names.
+        albums.reduce(into: []) { sections, album in
+            let letter = alphabetFirstLetter(of: album.name)
+            if sections.last?.letter == letter {
+                sections[sections.count - 1].albums.append(album)
+            } else {
+                sections.append(AlbumIndexSection(id: album.id, letter: letter, albums: [album]))
+            }
+        }
+    }
+
+    private func albumRows(_ albums: [AlbumID3]) -> some View {
+        ForEach(albums) { album in
+            NavigationLink(value: HomeDestination.album(album)) {
+                AlbumRow(albumId: album.id, name: album.name, artist: album.artist,
+                    year: album.year, coverArtId: album.coverArt)
+            }
+            .id(album.id)
         }
     }
 

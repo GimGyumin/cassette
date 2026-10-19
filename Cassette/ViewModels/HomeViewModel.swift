@@ -51,7 +51,7 @@ final class HomeViewModel {
             do {
                 let starred = try await libraryService.getStarred2()
                 return (
-                    Array((starred.album ?? []).prefix(16)),
+                    Array((await libraryService.presentedAlbums(starred.album ?? [])).prefix(16)),
                     Array((starred.artist ?? []).prefix(16)),
                     Array((starred.song ?? []).prefix(16)),
                     true
@@ -112,7 +112,7 @@ final class HomeViewModel {
         if didLoadStarred, !force { return }
         do {
             let starred = try await libraryService.getStarred2()
-            starredAlbums = Array((starred.album ?? []).prefix(16))
+            starredAlbums = Array((await libraryService.presentedAlbums(starred.album ?? [])).prefix(16))
             starredArtists = Array((starred.artist ?? []).prefix(16))
             starredSongs = Array((starred.song ?? []).prefix(16))
             didLoadStarred = true

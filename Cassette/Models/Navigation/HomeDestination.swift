@@ -18,6 +18,9 @@ nonisolated enum HomeDestination: Hashable {
     case libraryFavorites
     case libraryDownloads
 
+    /// Shelf grids must live in the same value path as their album pages.
+    case albumCollection(AlbumShelfCollection)
+
     // MARK: - Content destinations (iOS + macOS)
     /// Full AlbumID3 object — used from Recently Added, Recently Played carousels
     case album(AlbumID3)
@@ -63,4 +66,15 @@ nonisolated enum HomeDestination: Hashable {
     // MARK: - Personal mixes (Home “Made for You”)
     /// Client-built updating mix — not a server playlist id.
     case personalMix(PersonalMixKind)
+}
+
+/// Immutable shelf snapshot: refreshing Home cannot replace an already-pushed grid.
+nonisolated struct AlbumShelfCollection: Hashable {
+    struct Item: Hashable, Identifiable {
+        let album: AlbumID3
+        let destination: HomeDestination
+        var id: String { album.id }
+    }
+    let title: String
+    let items: [Item]
 }

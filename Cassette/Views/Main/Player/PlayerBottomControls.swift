@@ -17,6 +17,7 @@ import AVFoundation
 // MARK: - Bottom toolbar
 
 struct BottomToolbar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var surface: PlayerSurface
     let isLiveStream: Bool
     var lyricsEnabled: Bool = true
@@ -59,7 +60,7 @@ struct BottomToolbar: View {
         if !isLiveStream {
             Button {
                 guard lyricsEnabled else { return }
-                withAnimation(CassetteAnimation.surface) {
+                withAnimation(reduceMotion ? nil : CassetteAnimation.surface) {
                     surface = (surface == .lyrics) ? .player : .lyrics
                 }
             } label: {
@@ -92,7 +93,7 @@ struct BottomToolbar: View {
     private var queueButton: some View {
         if !isLiveStream {
             Button {
-                withAnimation(CassetteAnimation.surface) {
+                withAnimation(reduceMotion ? nil : CassetteAnimation.surface) {
                     surface = (surface == .queue) ? .player : .queue
                 }
             } label: {
@@ -112,7 +113,7 @@ struct BottomToolbar: View {
                             .transition(.scale.combined(with: .opacity))
                     }
                 }
-                .animation(CassetteAnimation.interactive, value: playerState.queueModeBadge)
+                .animation(reduceMotion ? nil : CassetteAnimation.interactive, value: playerState.queueModeBadge)
             }
             .buttonStyle(.borderless)
             .accessibilityLabel(String(localized: "Queue", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
@@ -134,14 +135,13 @@ struct BottomToolbar: View {
             }
             .frame(width: 54, height: 54)
             .contentShape(Circle())
-            .animation(CassetteAnimation.interactive, value: isActive)
+            .animation(reduceMotion ? nil : CassetteAnimation.interactive, value: isActive)
     }
 }
 
 #if canImport(UIKit)
 private struct AudioOutputRouteButton: View {
     var tintColor: Color = Color.white.opacity(0.7)
-    @State private var symbolName = "airplayaudio"
     @State private var routeName = ""
 
     private var visibleRouteName: String {
@@ -155,16 +155,7 @@ private struct AudioOutputRouteButton: View {
     }
 
     var body: some View {
-        ZStack {
-            Image(systemName: symbolName)
-                .font(.title3)
-                .foregroundStyle(tintColor)
-                .frame(width: 44, height: 44)
-                .allowsHitTesting(false)
-
-            InvisibleRoutePicker()
-                .frame(width: 44, height: 44)
-        }
+        NativeRoutePicker(tintColor: tintColor)
         .frame(width: 44, height: 44)
         .overlay(alignment: .bottom) {
             if !routeName.isEmpty {
@@ -194,24 +185,25 @@ private struct AudioOutputRouteButton: View {
 
     private func refreshRoutePresentation() {
         let route = AVAudioSession.sharedInstance().currentRoute
-        symbolName = RouteSymbol.symbolName(for: route)
         routeName = RouteSymbol.displayName(for: route)
     }
 }
 
-private struct InvisibleRoutePicker: UIViewRepresentable {
+private struct NativeRoutePicker: UIViewRepresentable {
+    let tintColor: Color
     func makeUIView(context: Context) -> AVRoutePickerView {
         let view = AVRoutePickerView()
         view.backgroundColor = .clear
-        view.tintColor = .clear
-        view.activeTintColor = .clear
+        view.tintColor = UIColor(tintColor)
+        view.activeTintColor = UIColor(tintColor)
         view.prioritizesVideoDevices = false
         view.delegate = context.coordinator
-        hideSystemGlyph(in: view)
         return view
     }
 
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
+        uiView.tintColor = UIColor(tintColor)
+        uiView.activeTintColor = UIColor(tintColor)
         if uiView.delegate !== context.coordinator {
             uiView.delegate = context.coordinator
         }
@@ -219,20 +211,6 @@ private struct InvisibleRoutePicker: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
-    }
-
-    private func hideSystemGlyph(in view: AVRoutePickerView) {
-        view.subviews.forEach { subview in
-            subview.alpha = 0.01
-            subview.isUserInteractionEnabled = true
-            if let button = subview as? UIButton {
-                button.setImage(nil, for: .normal)
-                button.setImage(nil, for: .highlighted)
-                button.setImage(nil, for: .selected)
-                button.tintColor = .clear
-                button.backgroundColor = .clear
-            }
-        }
     }
 
     final class Coordinator: NSObject, AVRoutePickerViewDelegate {
@@ -247,39 +225,6 @@ private struct InvisibleRoutePicker: UIViewRepresentable {
 }
 
 private enum RouteSymbol {
-    static func symbolName(for route: AVAudioSessionRouteDescription) -> String {
-        guard let output = preferredOutput(for: route) else { return "airplayaudio" }
-        let name = output.portName.lowercased()
-        if name.contains("homepod mini") { return "homepodmini.fill" }
-        if name.contains("homepod") { return "homepod.fill" }
-
-        switch output.portType {
-        case .headphones, .headsetMic:
-            return "headphones"
-        case .bluetoothA2DP, .bluetoothLE, .bluetoothHFP:
-            if name.contains("airpods max") { return "airpods.max" }
-            if name.contains("airpods pro") { return "airpods.pro" }
-            if name.contains("airpods 4") || name.contains("airpods 3") { return "airpods.gen3" }
-            if name.contains("airpods") { return "airpods" }
-            if name.contains("beats") { return "beats.headphones" }
-            return "headphones"
-        case .builtInSpeaker:
-            return UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
-        case .builtInReceiver:
-            return "iphone"
-        case .airPlay:
-            if name.contains("tv") { return "appletv.fill" }
-            return "airplayaudio"
-        case .carAudio:
-            return "car.fill"
-        case .HDMI:
-            return "tv"
-        default:
-            if name.contains("homepod") { return "hifispeaker.fill" }
-            return "airplayaudio"
-        }
-    }
-
     static func displayName(for route: AVAudioSessionRouteDescription) -> String {
         guard let output = preferredOutput(for: route) else {
             return String(localized: "Audio output", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)

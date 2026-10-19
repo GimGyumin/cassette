@@ -35,6 +35,8 @@ nonisolated struct NowPlayingSnapshot: Sendable {
     /// Zero-based position and total count exposed to the system Now Playing queue.
     let queueIndex: Int?
     let queueCount: Int?
+    let publication: PlaybackPublication?
+    let timestamp: Date
 
     /// Some OpenSubsonic recommendation endpoints omit `coverArt` even though the song ID
     /// is accepted by the cover-art endpoint. Keep that fallback consistent with the player UI.
@@ -61,7 +63,9 @@ nonisolated struct NowPlayingSnapshot: Sendable {
         isrc: String?,
         trackId: String? = nil,
         queueIndex: Int? = nil,
-        queueCount: Int? = nil
+        queueCount: Int? = nil,
+        publication: PlaybackPublication? = nil,
+        timestamp: Date = Date()
     ) {
         self.title = title
         self.artist = artist
@@ -79,5 +83,34 @@ nonisolated struct NowPlayingSnapshot: Sendable {
         self.trackId = trackId
         self.queueIndex = queueIndex
         self.queueCount = queueCount
+        self.publication = publication
+        self.timestamp = timestamp
+    }
+}
+
+extension NowPlayingSnapshot {
+    nonisolated func updatingPlayback(position: Double, rate: Float, duration: Double,
+                          publication: PlaybackPublication? = nil, timestamp: Date = Date()) -> Self {
+        Self(title: title, artist: artist, album: album, duration: duration, position: position,
+             playbackRate: rate, artworkURL: artworkURL, artworkHeaders: artworkHeaders,
+             coverArtId: coverArtId, albumId: albumId, isLiveStream: isLiveStream,
+             radioStationName: radioStationName, isrc: isrc, trackId: trackId,
+             queueIndex: queueIndex, queueCount: queueCount, publication: publication ?? self.publication,
+             timestamp: timestamp)
+    }
+
+    nonisolated func preservingArtwork(from previous: Self?) -> Self {
+        Self(title: title, artist: artist, album: album, duration: duration, position: position,
+             playbackRate: playbackRate, artworkURL: artworkURL ?? previous?.artworkURL,
+             artworkHeaders: artworkURL == nil ? (previous?.artworkHeaders ?? artworkHeaders) : artworkHeaders,
+             coverArtId: coverArtId, albumId: albumId, isLiveStream: isLiveStream,
+             radioStationName: radioStationName, isrc: isrc, trackId: trackId,
+             queueIndex: queueIndex, queueCount: queueCount, publication: publication, timestamp: timestamp)
+    }
+
+    nonisolated func projectingPlayback(to date: Date = Date()) -> Self {
+        let elapsed = position + max(0, date.timeIntervalSince(timestamp)) * Double(max(0, playbackRate))
+        return updatingPlayback(position: min(max(0, elapsed), max(0, duration)), rate: playbackRate,
+                                duration: duration, timestamp: date)
     }
 }

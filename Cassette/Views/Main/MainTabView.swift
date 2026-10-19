@@ -46,11 +46,6 @@ struct MainTabView: View {
     @State private var tabsInstanceID = UUID()
 
     #if os(iOS)
-    /// iPad regular: Apple Music–style floating capsule (not the compact tab accessory).
-    private var usesPadFloatingMiniPlayer: Bool {
-        horizontalSizeClass == .regular
-    }
-
     private var showsSidebarLibrarySections: Bool {
         horizontalSizeClass == .regular
     }
@@ -104,22 +99,13 @@ struct MainTabView: View {
                     #if os(macOS)
                     SearchView(searchQuery: $searchText, path: $searchPath)
                         .environment(\.registersHomeDestinations, true)
-                        .miniPlayerBottomMargin()
                     #else
                     SearchView(path: $searchPath)
                         .environment(\.registersHomeDestinations, true)
-                        .miniPlayerBottomMargin()
                     #endif
                 }
                 .environment(\.detailNavigationPath, $searchPath)
                 .onChange(of: searchPath.count) { old, new in logPathChange(.search, from: old, to: new) }
-                #if os(macOS)
-                .searchable(
-                    text: $searchText,
-                    placement: .sidebar,
-                    prompt: String(localized: "Artists, Songs, Lyrics, and More", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
-                )
-                #endif
             }
 
             Tab("Home", systemImage: "house.fill", value: AppTab.home) {
@@ -134,7 +120,7 @@ struct MainTabView: View {
                 .onChange(of: homePath.count) { old, new in logPathChange(.home, from: old, to: new) }
             }
 
-            Tab("Discover", systemImage: "safari.fill", value: AppTab.discover) {
+            Tab("Discover", systemImage: "square.grid.2x2.fill", value: AppTab.discover) {
                 NavigationStack(path: $discoverPath) {
                     reachabilityGated { DiscoverView() }
                         // Destination registration must survive cellular/reachability changes.
@@ -305,6 +291,8 @@ struct MainTabView: View {
     @ViewBuilder
     private func libraryDestinationView(_ destination: HomeDestination) -> some View {
         switch destination {
+        case .albumCollection(let collection):
+            AlbumShelfCollectionView(collection: collection)
         case .libraryAlbums:
             AlbumsListView()
         case .libraryArtists:
@@ -353,7 +341,7 @@ struct MainTabView: View {
                 coverArtId: album.coverArtId
             )
         case .personalMix(let kind):
-            PersonalMixDetailView(kind: kind)
+            PlaylistDetailView(generatedSource: .personalMix(kind))
         }
     }
 
@@ -364,65 +352,28 @@ struct MainTabView: View {
     var body: some View {
 #if os(iOS)
         Group {
-            if usesPadFloatingMiniPlayer {
-                // Floating inset capsule — matches Apple Music iPad bottom player.
+            if #available(iOS 26.1, *) {
                 tabs
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        MiniPlayerAccessoryView(
-                            showingFullPlayer: $showingFullPlayer,
-                            onOpenLyrics: { presentFullPlayer(lyrics: true, queue: false) },
-                            onOpenQueue: { presentFullPlayer(lyrics: false, queue: true) }
-                        )
-                            .environment(\.colorScheme, resolvedColorScheme)
-                            .padding(.horizontal, 28)
-                            .padding(.bottom, 12)
-                            .cassetteMatchedTransitionSource(id: fullPlayerZoomID, in: playerZoom)
-                    }
-                    .fullScreenCover(isPresented: $showingFullPlayer, onDismiss: fullPlayerDidDismiss) {
-                        FullPlayerView(
-                            openWithLyrics: openPlayerWithLyrics,
-                            openWithQueue: openPlayerWithQueue
-                        )
-                            .presentationBackground(.clear)
-                            .cassetteZoomTransition(sourceID: fullPlayerZoomID, in: playerZoom)
+                    .tabBarMinimizeBehavior(selectedTab == .search ? .never : .onScrollDown)
+                    .tabViewBottomAccessory(isEnabled: hasPlayerContent) {
+                        miniPlayerAccessory(usesSystemAccessory: true)
                     }
             } else if #available(iOS 26.0, *) {
                 tabs
-                    .tabBarMinimizeBehavior(.onScrollDown)
+                    .tabBarMinimizeBehavior(selectedTab == .search ? .never : .onScrollDown)
                     .tabViewBottomAccessory {
-                        MiniPlayerAccessoryView(
-                            showingFullPlayer: $showingFullPlayer
-                        )
-                        .environment(\.colorScheme, resolvedColorScheme)
-                        // Zoom source for open + interactive swipe-to-dismiss (same as original).
-                        .cassetteMatchedTransitionSource(id: fullPlayerZoomID, in: playerZoom)
-                    }
-                    .fullScreenCover(isPresented: $showingFullPlayer, onDismiss: fullPlayerDidDismiss) {
-                        FullPlayerView(
-                            openWithLyrics: openPlayerWithLyrics,
-                            openWithQueue: openPlayerWithQueue
-                        )
-                            .presentationBackground(.clear)
-                            .cassetteZoomTransition(sourceID: fullPlayerZoomID, in: playerZoom)
+                        if hasPlayerContent { miniPlayerAccessory(usesSystemAccessory: true) }
                     }
             } else {
-                tabs
-                    .safeAreaInset(edge: .bottom) {
-                        MiniPlayerAccessoryView(
-                            showingFullPlayer: $showingFullPlayer
-                        )
-                        .environment(\.colorScheme, resolvedColorScheme)
-                        .cassetteMatchedTransitionSource(id: fullPlayerZoomID, in: playerZoom)
-                    }
-                    .fullScreenCover(isPresented: $showingFullPlayer, onDismiss: fullPlayerDidDismiss) {
-                        FullPlayerView(
-                            openWithLyrics: openPlayerWithLyrics,
-                            openWithQueue: openPlayerWithQueue
-                        )
-                            .presentationBackground(.clear)
-                            .cassetteZoomTransition(sourceID: fullPlayerZoomID, in: playerZoom)
-                    }
+                tabs.safeAreaInset(edge: .bottom, spacing: 0) {
+                    if hasPlayerContent { miniPlayerAccessory(usesSystemAccessory: false) }
+                }
             }
+        }
+        .fullScreenCover(isPresented: $showingFullPlayer, onDismiss: fullPlayerDidDismiss) {
+            FullPlayerView(openWithLyrics: openPlayerWithLyrics, openWithQueue: openPlayerWithQueue)
+                .presentationBackground(.clear)
+                .cassetteZoomTransition(sourceID: fullPlayerZoomID, in: playerZoom)
         }
         .toolbarColorScheme(resolvedColorScheme, for: .tabBar)
         .onChange(of: selectedTab) { _, tab in mountedTabs.insert(tab) }
@@ -430,7 +381,6 @@ struct MainTabView: View {
             AccountSheetView()
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
-                .presentationCornerRadius(28)
         }
         .sheet(isPresented: $showCreatePlaylist) {
             CreatePlaylistSheet { _ in }
@@ -478,6 +428,18 @@ struct MainTabView: View {
     }
 
 #if os(iOS)
+    private var hasPlayerContent: Bool {
+        container?.playerState.currentTrack != nil || container?.playerState.isLiveStream == true
+    }
+
+    private func miniPlayerAccessory(usesSystemAccessory: Bool) -> some View {
+        MiniPlayerAccessoryView(showingFullPlayer: $showingFullPlayer,
+            onOpenLyrics: { presentFullPlayer(lyrics: true, queue: false) },
+            onOpenQueue: { presentFullPlayer(lyrics: false, queue: true) },
+            usesSystemAccessory: usesSystemAccessory)
+            .cassetteMatchedTransitionSource(id: fullPlayerZoomID, in: playerZoom)
+    }
+
     private func presentFullPlayer(lyrics: Bool, queue: Bool) {
         openPlayerWithLyrics = lyrics
         openPlayerWithQueue = queue

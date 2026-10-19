@@ -65,6 +65,7 @@ final class LyricsTranslationService {
         guard #available(iOS 26.4, macOS 26.4, *) else {
             return .standard
         }
+        guard CassettePerformance.budget.allowsAutomaticTranslation else { return .lowLatency }
 
         let target = Locale.Language(identifier: targetLanguageCode)
         let availability = LanguageAvailability(preferredStrategy: .highFidelity)
@@ -196,10 +197,11 @@ final class LyricsTranslationService {
         sourceLanguage: String,
         targetLanguage: String,
         originalLines: [String],
-        strategyPreference: TranslationStrategyPreference
+        strategyPreference: TranslationStrategyPreference,
+        customPrompt: String = ""
     ) -> [TranslatedLyric]? {
         cache.get(
-            songID: cacheSongID(songID, strategyPreference: strategyPreference),
+            songID: cacheSongID(songID, strategyPreference: strategyPreference, customPrompt: customPrompt),
             sourceLang: sourceLanguage,
             targetLang: targetLanguage,
             provider: .apple,
@@ -212,11 +214,12 @@ final class LyricsTranslationService {
         songID: String,
         sourceLanguage: String,
         targetLanguage: String,
-        strategyPreference: TranslationStrategyPreference
+        strategyPreference: TranslationStrategyPreference,
+        customPrompt: String = ""
     ) {
         cache.set(
             lyrics,
-            songID: cacheSongID(songID, strategyPreference: strategyPreference),
+            songID: cacheSongID(songID, strategyPreference: strategyPreference, customPrompt: customPrompt),
             sourceLang: sourceLanguage,
             targetLang: targetLanguage,
             provider: .apple
@@ -229,9 +232,13 @@ final class LyricsTranslationService {
 
     private func cacheSongID(
         _ songID: String,
-        strategyPreference: TranslationStrategyPreference
+        strategyPreference: TranslationStrategyPreference,
+        customPrompt: String
     ) -> String {
-        "\(songID)|apple-strategy:\(strategyPreference.rawValue)"
+        let base = "\(songID)|apple-strategy:\(strategyPreference.rawValue)"
+        let prompt = AppleIntelligenceLyricsTranslator.normalizedPrompt(customPrompt)
+        guard !prompt.isEmpty else { return base }
+        return "\(base)|foundation-models-v1:\(TranslationCache.fingerprint(originalLines: [prompt]))"
     }
 
     func debugStart(

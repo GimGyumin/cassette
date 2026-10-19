@@ -41,7 +41,6 @@ jobs:
               | grep -v "/SourcePackages/" \
               | grep -v "appintentsmetadataprocessor" \
               | grep -v "AppIcon.appiconset" \
-              | grep -v "ConformanceIsolation" \
               | grep .; then
             echo "::error::iOS build emitted warnings or errors. See CONTRIBUTING › Quality gates."
             exit 1
@@ -74,7 +73,6 @@ jobs:
               | grep -v "/SourcePackages/" \
               | grep -v "appintentsmetadataprocessor" \
               | grep -v "AppIcon.appiconset" \
-              | grep -v "ConformanceIsolation" \
               | grep .; then
             echo "::error::macOS build emitted warnings or errors. See CONTRIBUTING › Quality gates."
             exit 1
@@ -99,4 +97,49 @@ jobs:
             -project Cassette.xcodeproj \
             -scheme CassetteTests \
             -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO
+
+  ios-tests:
+    name: iOS regression and listening journey
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Select iPhone simulator
+        id: simulator
+        run: |
+          xcrun simctl list devices available -j > /tmp/devices.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          devices = json.load(open('/tmp/devices.json'))['devices']
+          phones = [device for runtime, items in devices.items() if '.iOS-' in runtime
+                    for device in items if device['name'].startswith('iPhone') and device['isAvailable']]
+          if not phones:
+              raise SystemExit('No available iPhone simulator')
+          print('destination=platform=iOS Simulator,id=' + phones[0]['udid'])
+          PY
+      - name: Run iOS regression tests
+        run: |
+          xcodebuild test -project Cassette.xcodeproj -scheme CassetteTests \
+            -destination '${{ steps.simulator.outputs.destination }}' \
+            -parallel-testing-enabled NO -resultBundlePath ios-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Run authenticated listening journey
+        run: |
+          python3 -B ci_scripts/test_ui_fixture_server.py
+          python3 ci_scripts/ui_fixture_server.py --port 18765 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid"' EXIT
+          xcodebuild test -project Cassette.xcodeproj -scheme CassetteUITests \
+            -destination '${{ steps.simulator.outputs.destination }}' \
+            -parallel-testing-enabled NO -resultBundlePath ios-ui-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-test-results
+          path: '*.xcresult'

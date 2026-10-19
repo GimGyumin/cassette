@@ -1,13 +1,8 @@
 import Foundation
 import Observation
 
-/// How a Jellyfin-compatible server is asked for audio.
-///
-/// Routing vocabulary, not a setting: Settings → Audio Quality has no playback-method row any more.
-/// `MediaResolver` always asks for `.automatic`, and `PlaybackDecisionPolicy` derives Direct Play vs
-/// a server-side transcode from the configured quality, the current network and the source itself.
-/// `.hls` and `.originalFile` stay implemented for a future manual override; nothing sets them.
-nonisolated enum JellyfinPlaybackRoute: String, Sendable {
+/// Server delivery method. Automatic chooses per source; explicit choices are preserved.
+nonisolated enum JellyfinPlaybackRoute: String, CaseIterable, Sendable {
     case automatic
     case directPlay
     case universal
@@ -19,9 +14,22 @@ nonisolated enum JellyfinPlaybackRoute: String, Sendable {
 @Observable
 @MainActor
 final class StreamingSettings {
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private var _jellyfinRoute: JellyfinPlaybackRoute
     @ObservationIgnored private var _wifiFormat: CacheFormat
     @ObservationIgnored private var _cellularFormat: CacheFormat
     @ObservationIgnored private var _downloadFormat: CacheFormat
+    @ObservationIgnored private var _preferDolbyAtmos: Bool
+
+    /// Opt-in alternative file selection; takes effect for the next resolved song.
+    var preferDolbyAtmos: Bool {
+        get { access(keyPath: \.preferDolbyAtmos); return _preferDolbyAtmos }
+        set {
+            withMutation(keyPath: \.preferDolbyAtmos) { _preferDolbyAtmos = newValue }
+            defaults.set(newValue, forKey: Self.atmosKey)
+        }
+    }
+    private static let atmosKey = "cassette.streaming.preferDolbyAtmos"
 
     /// Session-only, never persisted: the quality ceiling the app fell back to after the engine
     /// re-buffered on a link that could not sustain the Automatic pick. Cleared when a fresh
@@ -54,7 +62,7 @@ final class StreamingSettings {
         set {
             withMutation(keyPath: \.wifiFormat) { _wifiFormat = newValue }
             adaptiveCeiling = nil
-            UserDefaults.standard.set(newValue.rawValue, forKey: Self.wifiKey)
+            defaults.set(newValue.rawValue, forKey: Self.wifiKey)
         }
     }
 
@@ -66,7 +74,7 @@ final class StreamingSettings {
         set {
             withMutation(keyPath: \.cellularFormat) { _cellularFormat = newValue }
             adaptiveCeiling = nil
-            UserDefaults.standard.set(newValue.rawValue, forKey: Self.cellularKey)
+            defaults.set(newValue.rawValue, forKey: Self.cellularKey)
         }
     }
 
@@ -77,7 +85,7 @@ final class StreamingSettings {
         }
         set {
             withMutation(keyPath: \.downloadFormat) { _downloadFormat = newValue }
-            UserDefaults.standard.set(newValue.rawValue, forKey: Self.downloadKey)
+            defaults.set(newValue.rawValue, forKey: Self.downloadKey)
         }
     }
 
@@ -85,21 +93,30 @@ final class StreamingSettings {
     private static let cellularKey = "cassette.streaming.cellular"
     private static let downloadKey = "cassette.streaming.download"
 
-    /// The playback-method menu was removed, so a route stored by an older build is dead weight:
-    /// `PlaybackDecisionPolicy` decides now. Drop the key instead of letting it linger in
-    /// `UserDefaults` (and survive "Reset cache and settings").
-    private static func removeRetiredPlaybackRoute() {
-        UserDefaults.standard.removeObject(forKey: "cassette.streaming.jellyfinRoute")
+    private static let routeKey = "cassette.streaming.jellyfinRoute"
+
+    var jellyfinRoute: JellyfinPlaybackRoute {
+        get {
+            access(keyPath: \.jellyfinRoute)
+            return _jellyfinRoute
+        }
+        set {
+            withMutation(keyPath: \.jellyfinRoute) { _jellyfinRoute = newValue }
+            adaptiveCeiling = nil
+            defaults.set(newValue.rawValue, forKey: Self.routeKey)
+        }
     }
 
-    init() {
-        CacheFormat.migrateLegacyStoredValues()
-        Self.removeRetiredPlaybackRoute()
-        let wifiRaw = UserDefaults.standard.string(forKey: Self.wifiKey)
-        let cellRaw = UserDefaults.standard.string(forKey: Self.cellularKey)
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        _preferDolbyAtmos = defaults.bool(forKey: Self.atmosKey)
+        CacheFormat.migrateLegacyStoredValues(in: defaults)
+        _jellyfinRoute = JellyfinPlaybackRoute(rawValue: defaults.string(forKey: Self.routeKey) ?? "") ?? .automatic
+        let wifiRaw = defaults.string(forKey: Self.wifiKey)
+        let cellRaw = defaults.string(forKey: Self.cellularKey)
         _wifiFormat = CacheFormat(rawValue: wifiRaw ?? "") ?? .matchStream
         _cellularFormat = CacheFormat(rawValue: cellRaw ?? "") ?? .matchStream
-        let downloadRaw = UserDefaults.standard.string(forKey: Self.downloadKey)
+        let downloadRaw = defaults.string(forKey: Self.downloadKey)
         _downloadFormat = CacheFormat(rawValue: downloadRaw ?? "") ?? .matchStream
     }
 
@@ -112,12 +129,14 @@ final class StreamingSettings {
     }
 
     func reloadFromDefaults() {
-        CacheFormat.migrateLegacyStoredValues()
-        let wifiRaw = UserDefaults.standard.string(forKey: Self.wifiKey)
-        let cellRaw = UserDefaults.standard.string(forKey: Self.cellularKey)
-        _wifiFormat = CacheFormat(rawValue: wifiRaw ?? "") ?? .matchStream
-        _cellularFormat = CacheFormat(rawValue: cellRaw ?? "") ?? .matchStream
-        let downloadRaw = UserDefaults.standard.string(forKey: Self.downloadKey)
-        _downloadFormat = CacheFormat(rawValue: downloadRaw ?? "") ?? .matchStream
+        preferDolbyAtmos = defaults.bool(forKey: Self.atmosKey)
+        CacheFormat.migrateLegacyStoredValues(in: defaults)
+        jellyfinRoute = JellyfinPlaybackRoute(rawValue: defaults.string(forKey: Self.routeKey) ?? "") ?? .automatic
+        let wifiRaw = defaults.string(forKey: Self.wifiKey)
+        let cellRaw = defaults.string(forKey: Self.cellularKey)
+        wifiFormat = CacheFormat(rawValue: wifiRaw ?? "") ?? .matchStream
+        cellularFormat = CacheFormat(rawValue: cellRaw ?? "") ?? .matchStream
+        let downloadRaw = defaults.string(forKey: Self.downloadKey)
+        downloadFormat = CacheFormat(rawValue: downloadRaw ?? "") ?? .matchStream
     }
 }

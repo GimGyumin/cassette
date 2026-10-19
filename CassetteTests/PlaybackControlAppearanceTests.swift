@@ -146,6 +146,10 @@ struct ResumePlaybackStateTests {
         )
         container.playerState.playbackState = .loading
         await service.setTestCurrentSource(.cached(URL(fileURLWithPath: "/dev/null")))
+        // This test observes the command before an engine confirmation. Do not let the
+        // native decoder's asynchronous rejection of the synthetic source race that assertion.
+        // Real decoded playback and failures are covered by the recovery/engine suites.
+        service.systemEngine.eventHandler = nil
 
         await service.resume()
         let published = container.playerState.playbackState
@@ -155,8 +159,13 @@ struct ResumePlaybackStateTests {
         await service.stopPositionSaveTimer()
 
         // The engine still has to confirm audio; the UI keeps the play request visibly active.
+        #if os(macOS)
+        #expect(service.systemEngine.hasCurrentItem)
+        #else
         #expect(engine.calls.contains { if case .play = $0 { return true }; return false })
+        #endif
         #expect(published == .loading)
+        await service.stop()
     }
 
     @Test func resumeOfAnEngineHoldingTheTrackPublishesPlaying() async throws {

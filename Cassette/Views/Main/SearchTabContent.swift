@@ -6,16 +6,21 @@ struct SearchTabContent: View {
     @Binding var path: NavigationPath
     var externalSearchQuery: Binding<String>?
     @Environment(\.appContainer) private var container
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var localSearchQuery = ""
     @State private var viewModel: SearchViewModel?
     @State private var isSearchActive = false
-    @State private var searchFocusToken = 0
+    @FocusState private var searchFocused: Bool
     @State private var category: SearchCategory = .all
     @State private var downloadsOnly = false
-    @State private var showAccountSheet = false
 
     private var searchQuery: Binding<String> { externalSearchQuery ?? $localSearchQuery }
+    private var searchPlacement: SearchFieldPlacement {
+        #if os(iOS)
+        .navigationBarDrawer(displayMode: .always)
+        #else
+        .automatic
+        #endif
+    }
     private var trimmedQuery: String { searchQuery.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var serverId: String { container?.serverState.activeServer?.id.uuidString ?? "" }
     private var isOnline: Bool { container?.serverState.isOnline != false }
@@ -25,45 +30,8 @@ struct SearchTabContent: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            #if os(iOS)
-            if !isSearchActive {
-                HStack(alignment: .center) {
-                    Text("Search")
-                        .font(.system(size: 34, weight: .bold))
-                        .foregroundStyle(.primary)
-                    Spacer(minLength: 0)
-                    Button {
-                        showAccountSheet = true
-                    } label: {
-                        Image(systemName: "person.crop.circle.fill")
-                            .font(.system(size: 28))
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(.primary)
-                            .cassetteGlassButton(size: 48)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(String(localized: "Account", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 6)
-                .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-            #endif
-
-            AppleMusicSearchBar(
-                text: searchQuery, isActive: $isSearchActive,
-                prompt: String(localized: "Artists, Songs, Lyrics, and More", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
-                onCancel: { category = .all }, focusToken: searchFocusToken
-            )
-            .padding(.horizontal, 20)
-            .padding(.vertical, 6)
-
-            if isSearchActive {
-                searchScope
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-            if !isSearchActive, !trimmedQuery.isEmpty { categoryPicker }
+            if isSearchActive { searchScope }
+            if !searchFocused, !trimmedQuery.isEmpty { categoryPicker }
 
             Group {
                 if trimmedQuery.isEmpty {
@@ -73,11 +41,11 @@ struct SearchTabContent: View {
                         viewModel: vm,
                         category: downloadsOnly ? .songs : category,
                         query: trimmedQuery,
-                        showsSuggestions: isSearchActive,
+                        showsSuggestions: searchFocused,
                         downloadsOnly: downloadsOnly,
                         onSuggestion: { suggestion in
                             searchQuery.wrappedValue = suggestion
-                            isSearchActive = false
+                            searchFocused = false
                         },
                         onRetry: {
                             await vm.retryLocalIndexIfNeeded()
@@ -93,13 +61,13 @@ struct SearchTabContent: View {
             // into that same transaction also animates every row while the keyboard lays out.
             .transaction { $0.animation = nil }
         }
-        .animation(reduceMotion ? nil : CassetteAnimation.chrome, value: isSearchActive)
-        #if os(iOS)
-        // Keep this chrome stable during focus changes to preserve first responder.
-        .toolbar(.hidden, for: .navigationBar)
-        #else
         .navigationTitle(String(localized: "Search", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-        #endif
+        .cassetteAccountProfileToolbar(isVisible: !isSearchActive)
+        .searchable(text: searchQuery, isPresented: $isSearchActive,
+            placement: searchPlacement,
+            prompt: Text("Artists, Songs, Lyrics, and More"))
+        .searchFocused($searchFocused)
+        .onSubmit(of: .search) { searchFocused = false }
         .onAppear {
             if viewModel == nil, let container {
                 let store = SearchDownloadStore(modelContainer: container.modelContainer)
@@ -118,14 +86,14 @@ struct SearchTabContent: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .cassetteFocusSearch)) { _ in
-            searchFocusToken += 1
-            isSearchActive = true
+            if !isSearchActive { isSearchActive = true }
+            if !searchFocused { searchFocused = true }
         }
         .onReceive(NotificationCenter.default.publisher(for: .cassetteSearchInApp)) { note in
             guard let query = note.userInfo?["query"] as? String else { return }
             searchQuery.wrappedValue = query
             _ = SiriSearchRequestStore.consume()
-            isSearchActive = false
+            searchFocused = false
         }
         .task(id: container?.libraryIndexService.lastIndexedAt) {
             await viewModel?.refreshLocalResults(includeDownloads: false)
@@ -135,15 +103,10 @@ struct SearchTabContent: View {
             await runSearch()
         }
         .onChange(of: downloadsOnly) { _, _ in category = .all }
-        .task(id: searchRunKey) { await runSearch() }
-        #if os(iOS)
-        .sheet(isPresented: $showAccountSheet) {
-            AccountSheetView()
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-                .presentationCornerRadius(28)
+        .onChange(of: isSearchActive) { _, active in
+            if !active, trimmedQuery.isEmpty { category = .all }
         }
-        #endif
+        .task(id: searchRunKey) { await runSearch() }
         .miniPlayerBottomMargin()
         .cassetteContentWidth()
     }
@@ -171,25 +134,18 @@ struct SearchTabContent: View {
     }
 
     private var categoryPicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
                 ForEach(downloadsOnly ? [.all, .songs] : SearchCategory.allCases) { item in
-                    Button { category = item } label: {
-                        Text(item.title)
-                            .font(.body.weight(category == item ? .semibold : .regular))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .foregroundStyle(category == item ? Color.white : Color.primary)
-                            .cassetteGlassCapsule(
-                                tint: category == item ? Color.cassetteAccent.opacity(0.78) : nil
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(category == item ? .isSelected : [])
+                    Button { category = item } label: { Text(item.title) }
+                        .buttonStyle(.bordered)
+                        .tint(category == item ? Color.accentColor : Color.secondary)
+                        .accessibilityAddTraits(category == item ? .isSelected : [])
                 }
             }
             .padding(.horizontal, 20)
         }
+        .scrollIndicators(.hidden)
         .padding(.bottom, 10)
     }
 
@@ -202,18 +158,23 @@ struct SearchTabContent: View {
             }
         }
         #else
-        if isSearchActive {
+        ZStack {
             SearchHistoryListView(serverId: serverId, path: $path)
-        } else {
+                .opacity(isSearchActive ? 1 : 0)
+                .allowsHitTesting(isSearchActive)
+                .accessibilityHidden(!isSearchActive)
             ScrollView {
                 SearchBrowseCategories { genre in
                     searchQuery.wrappedValue = genre
                     category = .songs
-                    isSearchActive = false
+                    searchFocused = false
                 }
                 .padding(.top, 6)
                 .padding(.bottom, 24)
             }
+            .opacity(isSearchActive ? 0 : 1)
+            .allowsHitTesting(!isSearchActive)
+            .accessibilityHidden(isSearchActive)
         }
         #endif
     }
@@ -230,6 +191,7 @@ private struct SearchBrowseCategories: View {
     }
 
     @Environment(\.appContainer) private var container
+    @State private var genreCovers: [String: String] = [:]
     let onSelect: (String) -> Void
 
     private let columns = [
@@ -244,7 +206,7 @@ private struct SearchBrowseCategories: View {
         Category(title: "Hip-Hop/Rap", query: "Hip-Hop", symbol: "music.note", colors: [.blue, .indigo]),
         Category(title: "R&B", query: "R&B", symbol: "music.quarternote.3", colors: [.purple, .pink]),
         Category(title: "Rock", query: "Rock", symbol: "guitars.fill", colors: [.red, .orange]),
-        Category(title: "Jazz", query: "Jazz", symbol: "saxophone", colors: [.cyan, .blue]),
+        Category(title: "Jazz", query: "Jazz", symbol: "pianokeys", colors: [.cyan, .blue]),
         Category(title: "Classical", query: "Classical", symbol: "pianokeys", colors: [.indigo, .purple]),
         Category(title: "Alternative", query: "Alternative", symbol: "bolt.fill", colors: [.orange, .pink]),
         Category(title: "Soundtrack", query: "Soundtrack", symbol: "film.fill", colors: [.red, .purple])
@@ -258,13 +220,21 @@ private struct SearchBrowseCategories: View {
                         title: genre.title,
                         systemImage: genre.symbol,
                         colors: genre.colors,
-                        coverArtId: container?.libraryIndexService.browseCoverArtId(for: genre.query)
+                        coverArtId: genreCovers[genre.query]
                     )
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 20)
+        .task(id: "\(container?.serverState.activeServer?.id.uuidString ?? "")|\(container?.libraryIndexService.lastIndexedAt?.description ?? "")") {
+            genreCovers = [:]
+            // Let the tab's first frame and transition finish before starting artwork work.
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            let covers = await container?.libraryIndexService.browseCoverArtIDs(for: genres.map(\.query)) ?? [:]
+            guard !Task.isCancelled else { return }
+            genreCovers = covers
+        }
     }
 }
 
@@ -280,7 +250,7 @@ private struct SearchBrowseCategoryCard: View {
                 LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
 
                 if let coverArtId {
-                    CoverArtView(id: coverArtId, size: 480)
+                    CoverArtView(id: coverArtId, size: 240, tier: .thumb)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .clipped()
                         .overlay {

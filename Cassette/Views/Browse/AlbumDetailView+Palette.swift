@@ -39,16 +39,20 @@ extension AlbumDetailContentView {
     }
 
     private func loadDominantColor(coverArtId: String) async {
-        guard let image = await container?.artworkImageCache.load(coverArtId: coverArtId) else { return }
+        let visibleImage = self.coverArtId == coverArtId ? effectiveInitialImage : nil
+        let image = if let visibleImage { visibleImage }
+            else { await container?.artworkImageCache.load(coverArtId: coverArtId) }
+        guard let image else { return }
         let palette = await Task.detached(priority: .utility) {
             AlbumColorAnalyzer.generateArtworkPalette(from: image)
         }.value
         guard let palette, !Task.isCancelled else { return }
         cacheAlbumPaletteAliases(palette, coverArtId: coverArtId)
-        let color = colorExtractor.storeColor(packed: palette.packedBackground, for: coverArtId)
-        withAnimation(CassetteAnimation.theme) {
-            dominantColor = color
-        }
+        // Replace provisional/legacy colors instead of retaining a stale gray cache hit.
+        colorExtractor.storePreparedBackground(palette.packedBackground, for: coverArtId)
+        let color = colorExtractor.colorOverride(for: coverArtId) ?? palette.background
+        // Publish the final background before removing the loading cover.
+        dominantColor = color
     }
 
     private func cacheAlbumPaletteAliases(_ palette: ArtworkPalette, coverArtId: String) {

@@ -328,7 +328,8 @@ final class SiriCatalogService: SiriCatalogServiceProtocol {
 
     func allAlbums(limit: Int) async -> [CassetteAlbumEntity] {
         guard let serverId = await resolveServerId() else { return [] }
-        let albums = (try? await libraryService.allAlbums()) ?? []
+        let rawAlbums = (try? await libraryService.allAlbums()) ?? []
+        let albums = await libraryService.presentedAlbums(rawAlbums)
         return albums.prefix(limit).map { CassetteAlbumEntity(album: $0, serverId: serverId, loadRelations: false) }
     }
 

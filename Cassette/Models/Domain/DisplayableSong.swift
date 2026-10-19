@@ -17,6 +17,7 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
     static func prepare(
         _ entries: [Song],
         downloadedIDs: Set<String>,
+        fallbackCoverArtID: String? = nil,
         sortedBy areInIncreasingOrder: (@Sendable (DisplayableSong, DisplayableSong) -> Bool)? = nil
     ) async throws -> [DisplayableSong] {
         try Task.checkCancellation()
@@ -25,7 +26,8 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
             result.reserveCapacity(entries.count)
             for (index, song) in entries.enumerated() {
                 if index.isMultiple(of: 256) { try Task.checkCancellation() }
-                result.append(DisplayableSong(from: song, isDownloaded: downloadedIDs.contains(song.id)))
+                result.append(DisplayableSong(from: song, isDownloaded: downloadedIDs.contains(song.id))
+                    .withFallbackCoverArtID(fallbackCoverArtID))
             }
             if let areInIncreasingOrder { result.sort(by: areInIncreasingOrder) }
             try Task.checkCancellation()
@@ -52,7 +54,7 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
     /// OpenSubsonic disc number (1-based). Nil when the server omits it.
     let discNumber: Int?
     var isDownloaded: Bool
-    let coverArtId: String?
+    private(set) var coverArtId: String?
     let audioFormat: String?
     let contentType: String?
     let bitRate: Int?
@@ -74,6 +76,10 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
     let replayGainFallbackGain: Double?
     /// Primary ISRC when the server provides one (Music Haptics / Now Playing).
     let isrc: String?
+    /// OpenSubsonic song musicBrainzId (recording identity); optional for old persisted queues.
+    let musicBrainzRecordingID: String?
+    /// Local download provenance. false means a deliberate stereo/lossy conversion.
+    let isOriginalAudio: Bool?
     /// Composer display string (OpenSubsonic).
     let displayComposer: String?
     /// Classical work name (OpenSubsonic `works`).
@@ -82,8 +88,8 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
     let movementLabel: String?
 
     /// Server payloads occasionally contain an empty/whitespace `coverArt` value.
-    /// Treat it as absent so every playback surface can consistently fall back to the
-    /// song identifier accepted by the Subsonic cover-art endpoint.
+    /// Treat it as absent so every surface can reuse album artwork before falling back
+    /// to a song identifier when no album is known.
     var explicitCoverArtId: String? {
         guard let value = coverArtId?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else { return nil }
@@ -91,7 +97,20 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
     }
 
     var effectiveCoverArtId: String {
-        explicitCoverArtId ?? id
+        explicitCoverArtId ?? albumId.flatMap {
+            let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        } ?? id
+    }
+
+    /// Missing track artwork may reuse known album metadata. Explicit alternate covers win.
+    func withFallbackCoverArtID(_ albumCoverID: String?) -> Self {
+        guard explicitCoverArtId == nil,
+              let cover = albumCoverID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !cover.isEmpty else { return self }
+        var result = self
+        result.coverArtId = cover
+        return result
     }
 
     func showsArtist(inAlbumBy albumArtist: String?) -> Bool {
@@ -142,6 +161,8 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
         replayGainBaseGain: Double? = nil,
         replayGainFallbackGain: Double? = nil,
         isrc: String? = nil,
+        musicBrainzRecordingID: String? = nil,
+        isOriginalAudio: Bool? = nil,
         displayComposer: String? = nil,
         workName: String? = nil,
         movementLabel: String? = nil
@@ -173,6 +194,8 @@ nonisolated struct DisplayableSong: Identifiable, Hashable, Sendable, Codable {
         self.replayGainBaseGain = replayGainBaseGain
         self.replayGainFallbackGain = replayGainFallbackGain
         self.isrc = isrc
+        self.musicBrainzRecordingID = musicBrainzRecordingID
+        self.isOriginalAudio = isOriginalAudio
         self.displayComposer = displayComposer
         self.workName = workName
         self.movementLabel = movementLabel
@@ -208,6 +231,8 @@ extension DisplayableSong {
         self.replayGainBaseGain = song.replayGain?.baseGain
         self.replayGainFallbackGain = song.replayGain?.fallbackGain
         self.isrc = song.isrc?.first
+        self.musicBrainzRecordingID = song.musicBrainzId
+        self.isOriginalAudio = nil
         self.displayComposer = song.displayComposer
         self.workName = song.works?.first?.name
         self.movementLabel = song.movements?.first?.displayLabel
@@ -243,6 +268,8 @@ extension DisplayableSong {
         self.replayGainBaseGain = track.replayGainBaseGain
         self.replayGainFallbackGain = track.replayGainFallbackGain
         self.isrc = track.isrc
+        self.musicBrainzRecordingID = track.musicBrainzID
+        self.isOriginalAudio = track.isOriginalAudio
         self.displayComposer = nil
         self.workName = nil
         self.movementLabel = nil
@@ -288,6 +315,7 @@ extension DisplayableSong {
             artistId: artistId,
             type: nil,
             comment: comment,
+            musicBrainzId: musicBrainzRecordingID,
             bitDepth: bitDepth,
             samplingRate: samplingRate,
             channelCount: channelCount,

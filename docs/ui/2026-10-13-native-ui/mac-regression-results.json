@@ -1,0 +1,47 @@
+{
+  "devicesAndConfigurations": [
+    {
+      "device": {
+        "architecture": "arm64",
+        "deviceName": "My Mac",
+        "modelName": "MacBook Air",
+        "osBuildNumber": "26B5101f",
+        "osVersion": "27.2",
+        "platform": "macOS"
+      },
+      "expectedFailures": 0,
+      "failedTests": 0,
+      "passedTests": 193,
+      "skippedTests": 0,
+      "testPlanConfiguration": {
+        "configurationId": "1",
+        "configurationName": "Test Scheme Action"
+      }
+    }
+  ],
+  "environmentDescription": "CassetteTests · Built with macOS 27.2",
+  "expectedFailures": 0,
+  "failedTests": 0,
+  "finishTime": 1791902177.431,
+  "passedTests": 178,
+  "result": "Passed",
+  "runtimeWarnings": [],
+  "skippedTests": 0,
+  "startTime": 1791902075.88,
+  "statistics": [
+    {
+      "subtitle": "26 test runs",
+      "title": "11 tests ran with dynamic parameters"
+    }
+  ],
+  "testFailures": [],
+  "title": "Test - CassetteTests",
+  "topInsights": [
+    {
+      "category": "Longest Test Runs",
+      "impact": "4% of duration",
+      "text": "2 longest test runs with outlier durations exceeding 3.40s (three standard deviations)"
+    }
+  ],
+  "totalTestCount": 178
+}

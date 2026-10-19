@@ -66,7 +66,7 @@ extension LyricsViewModel {
         let ttmlTranslations = lyricDocument?.translatedLines ?? []
         let hasTtmlTranslation = !ttmlTranslations.isEmpty
         if hasTtmlTranslation {
-            print("Loaded Apple Music embedded translations: \(ttmlTranslations.filter { !$0.isEmpty }.count) lines")
+            Logger.lyrics.debug("Loaded embedded translation lines: \(ttmlTranslations.filter { !$0.isEmpty }.count)")
         }
 
         let results = displayRows.enumerated().map { displayIndex, row -> TranslatedLyric in
@@ -83,24 +83,9 @@ extension LyricsViewModel {
             // The parser separates x-bg structurally — main and background are never merged.
             let ttmlText = ttmlTranslation?.main ?? ""
             let rawTtmlBg = ttmlTranslation?.background ?? ""
-            // Cross-validate: if the original English body line has no x-bg
-            // words, suppress the translation's phantom x-bg (Apple data error).
-            // displayRows are built from the same TTML body, so backgroundWords
-            // directly reflects whether this line actually has backing vocals.
-            // Cross-validate: the body line must actually contain x-bg words
-            // for the translation's background to be genuine. Server translation
-            // tracks always have empty backgroundWords in displayRows, so use
-            // the authoritative source: LyricDocument.bodyLineKeysWithBackground.
-            let bodyHasBackground = lyricDocument?.bodyLineKeysWithBackground.contains(lineKey ?? "") == true
-            || !displayRows[displayIndex].backgroundWords.isEmpty
-            let shouldSuppressBg = false
             let ttmlBg = Self.normalizedChorusTranslation(rawTtmlBg)
             let ttmlBgBegin: TimeInterval? = ttmlTranslation?.backgroundBegin
             let ttmlBgEnd: TimeInterval? = ttmlTranslation?.backgroundEnd
-            let ttmlTextAdjusted = ttmlText
-            if let key = lineKey, !rawTtmlBg.isEmpty {
-                print("[X-BG DEBUG] \(key) bodyHasBg=\(bodyHasBackground) suppress=\(shouldSuppressBg) bg=\"\(rawTtmlBg.prefix(30))...\"")
-            }
             // Secondary agents (chorus) keep their own text — don't paste lead translations.
             let keepClient = !row.isSecondaryAgent && existing?.originalText == row.text
                 ? (existing?.translatedText ?? "")
@@ -114,10 +99,10 @@ extension LyricsViewModel {
             let serverChorusText = serverSplit.chorus
             let translated = row.isSecondaryAgent
                 ? ""
-                : (!ttmlTextAdjusted.isEmpty ? ttmlTextAdjusted : (!strippedServerText.isEmpty ? strippedServerText : keepClient))
+                : (!ttmlText.isEmpty ? ttmlText : (!strippedServerText.isEmpty ? strippedServerText : keepClient))
             // TTML translation: use parsed x-bg. Server translation: use extracted parenthesized chorus.
             let bg: String
-            if !ttmlTextAdjusted.isEmpty {
+            if !ttmlText.isEmpty {
                 bg = row.isSecondaryAgent ? "" : ttmlBg
             } else {
                 bg = row.isSecondaryAgent ? "" : serverChorusText
@@ -146,18 +131,9 @@ extension LyricsViewModel {
                 translationSource: source
             )
         }
-        let bgChanged = results.map(\.backgroundTranslation) != translatedLyrics.map(\.backgroundTranslation)
-        let originalsChanged = results.map(\.originalText) != translatedLyrics.map(\.originalText)
-            || results.map(\.pronunciationText) != translatedLyrics.map(\.pronunciationText)
-            || results.count != translatedLyrics.count
-            || bgChanged
-        // Always apply when background translations have been suppressed
-        // (cross-validation removed phantom x-bg from Apple data).
-        if originalsChanged || bgChanged {
-            replaceTranslatedLyrics(results)
-        } else if hideTranslations {
-            areTranslationsVisible = false
-        } else if translatedLyrics.isEmpty {
+        // IDs are preserved by makeTranslatedLyric. Compare the entire payload: a
+        // server-language switch can change only translatedText or translation timing.
+        if results != translatedLyrics {
             replaceTranslatedLyrics(results)
         }
 
@@ -173,6 +149,9 @@ extension LyricsViewModel {
         else {
             return
         }
+
+        invalidateTranslationWork()
+        let generation = languageGeneration
 
         // Track change: discard all cached translations and chorus data from the
         // previous song so they never leak into the new display rows (Bug E).
@@ -233,15 +212,16 @@ extension LyricsViewModel {
                 }
                 if let match {
                     selectedServerTranslationLang = match.lang
-                    print("📖 Auto-selected server translation: \(match.lang)")
+                    Logger.lyrics.debug("Selected server translation: \(match.lang, privacy: .public)")
                 } else {
-                    print("📖 No matching server translation for target '\(targetLang)'. Available: \(availableServerTranslations.map { $0.lang })")
+                    Logger.lyrics.debug("No server translation for target: \(targetLang, privacy: .public)")
                 }
             }
             // Always paint originals first, preserving translation visibility state.
             let wasTranslationVisible = areTranslationsVisible
             let hasExistingTranslations = translatedLyrics.contains(where: { !$0.translatedText.isEmpty && $0.translatedText != $0.originalText })
             await seedOriginalLyrics(from: structured, hideTranslations: false)
+            guard generation == languageGeneration, !Task.isCancelled else { return }
             // Restore visibility when translations were previously shown.
             if wasTranslationVisible && hasExistingTranslations {
                 areTranslationsVisible = true
@@ -272,7 +252,8 @@ extension LyricsViewModel {
                     sourceLanguage: resolvedSource,
                     targetLanguage: finalTarget,
                     originalLines: originalLines,
-                    strategyPreference: settings.strategyPreference
+                    strategyPreference: settings.strategyPreference,
+                    customPrompt: settings.appleIntelligencePrompt
                 )
             } else {
                 TranslationCache.shared.get(
@@ -289,8 +270,12 @@ extension LyricsViewModel {
                 return
             }
 
-            if structured.synced, settings.isAutoTranslateEnabled {
-                Task { await translateCurrentLyrics() }
+            if structured.synced, settings.isAutoTranslateEnabled,
+               CassettePerformance.budget.allowsAutomaticTranslation {
+                Task { [weak self] in
+                    guard let self, self.languageGeneration == generation, !Task.isCancelled else { return }
+                    await self.translateCurrentLyrics()
+                }
             }
         }
 

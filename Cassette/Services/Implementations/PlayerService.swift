@@ -84,9 +84,13 @@ actor PlayerService: PlayerServiceProtocol {
     let gaplessSettings: GaplessSettings
     /// Snapshot of the gapless preference; refreshed by `gaplessSettingsDidChange()`.
     var gaplessEnabled = GaplessSettings.defaultEnabled
-    var nowPlayingService: (any NowPlayingServiceProtocol)?
+    // AppContainer owns both services; the return link must not form a retain cycle.
+    weak var nowPlayingService: (any NowPlayingServiceProtocol)?
     var widgetSyncService: WidgetSyncService?
     var replayGainService: ReplayGainService?
+    var playbackGain = PlaybackGainState()
+    var nativeGainMultiplier: Float = 1
+    var pendingFadeInDuration: Double?
     let toastService: ToastService
     let statsService: StatsService
     let listenBrainzService: ListenBrainzService
@@ -96,7 +100,7 @@ actor PlayerService: PlayerServiceProtocol {
     /// and a future adaptive-buffer path can swap the engine. Single instance for the app lifetime.
     let engine: any PlaybackEngine
     /// The engine's AVFoundation graph (ReplayGain EQ node, beat tap). Nil for engines without one.
-    private let audioGraph: (any AudioGraphHosting)?
+    let audioGraph: (any AudioGraphHosting)?
     private let audioDelegate: AudioStreamingDelegate
     var progressTask: Task<Void, Never>?
     var playbackRequestTask: Task<Void, Error>?
@@ -106,6 +110,7 @@ actor PlayerService: PlayerServiceProtocol {
     var playbackRequestID: UInt64 = 0
     var gaplessPreparationTask: Task<Void, Never>?
     var gaplessPreparationGeneration: UInt64 = 0
+    var gaplessPreparationStability = PlaybackPreparationStability()
     var nextGaplessPreparationAttempt = Date.distantPast
     /// Pending seek + optional pause applied once the player first reaches `.playing`.
     var pendingRestoreInfo: (seekTime: Double, pause: Bool)?
@@ -113,6 +118,16 @@ actor PlayerService: PlayerServiceProtocol {
     /// engine reports that it actually landed. Remote streams can take longer than a fixed
     /// delay, especially when seeking backward outside the current buffer.
     var seekState: PlaybackSeekState = .idle
+    /// Only the latest scrub may reopen a stream after an actor/MainActor hop.
+    var seekRequestGeneration: UInt64 = 0
+    var seekRecoveryRequest: UInt64?
+    var seekRecoveryInFlight: UInt64?
+    var seekDownloadTask: Task<Void, Never>?
+    var seekBufferURL: URL?
+    var seekCommitTask: Task<Void, Never>?
+    var seekCommitReopensSource = false
+    var seekNeedsCommit = false
+    var seekSettlementTask: Task<Void, Never>?
     /// Gapless bridge: when the AudioPlayer's internal queue already holds the next
     /// pre-buffered entry, a natural EOF transitions seamlessly. Cassette must then advance app
     /// state to that already-playing track instead of re-calling `play()` (which would flush the
@@ -124,16 +139,27 @@ actor PlayerService: PlayerServiceProtocol {
     var needsArtworkPreloadRecheck = false
     /// Source of the currently playing track; kept for repeat-one replay.
     var currentSource: MediaSource?
+    /// Invalidates a suspended resume when a newer transport command arrives.
+    nonisolated let authority = PlaybackAuthority()
+    var transport = PlaybackTransportModel()
+    var stopBarrierCount = 0
+    var transportCommandID: UInt64 {
+        get { authority.snapshot.command }
+        set { authority.setCommand(newValue) }
+    }
     /// A server-offset response starts its engine clock at zero. App/UI clocks remain song-relative.
     var streamTimeOffset: TimeInterval = 0
+    var engineFailureTask: Task<Void, Never>?
     var liveStreamStallTask: Task<Void, Never>?
 
     /// AVPlayer path for Dolby Atmos / E-AC-3 / multichannel so Spatial Audio can engage.
     nonisolated let systemEngine = AVPlayerPlaybackEngine()
     var systemPlayback = SystemPlaybackState()
 
+    var audioObjectsResetTask: Task<Void, Never>?
     var audioSessionConfigured = false
     #if os(iOS)
+    var mediaServicesResetObserver: NSObjectProtocol?
     var interruptionObserver: NSObjectProtocol?
     var routeChangeObserver: NSObjectProtocol?
     var spatialCapabilitiesObserver: NSObjectProtocol?
@@ -196,7 +222,8 @@ actor PlayerService: PlayerServiceProtocol {
         return Float(UserDefaults.standard.double(forKey: "cassette.lastVolume"))
         #endif
     }
-    var positionSaveTask: Task<Void, Never>?
+    let checkpointScheduler = PlaybackCheckpointScheduler()
+    let sessionLifetimeID = UUID()
     /// Task reserved for the playing-now notification. Cancelled on track change.
     var playingNowTask: Task<Void, Never>?
     var detector = ScrobbleThresholdDetector()
@@ -211,6 +238,7 @@ actor PlayerService: PlayerServiceProtocol {
     var periodicPlaybackReportTask: Task<Void, Never>?
     var gaplessMetadataTask: Task<Void, Never>?
     let cacheSession: URLSession
+    let transferCoordinator: MediaTransferCoordinator
     /// Task that prefetches the next queued track into cache ahead of the crossfade window.
     var prefetchTask: Task<Void, Never>?
     var prefetchScheduled = false
@@ -225,6 +253,7 @@ actor PlayerService: PlayerServiceProtocol {
     var originalQueueOrder: [DisplayableSong]?
     /// Single-slot guard preventing concurrent auto-extend fetches.
     var autoExtendFetchTask: Task<Void, Never>?
+    var autoExtendFetchGeneration: UInt64 = 0
     nonisolated static let autoExtendUserDefaultsKey = "cassette.player.autoExtendEnabled"
     nonisolated static let automaticDownloadUserDefaultsKey = "cassette.download.automaticAfterStreaming"
     nonisolated static let automaticDownloadOverCellularUserDefaultsKey = "cassette.download.automaticOverCellular"
@@ -234,24 +263,37 @@ actor PlayerService: PlayerServiceProtocol {
     }
     var automaticDownloadCheckDate = Date.distantPast
     var automaticDownloadTasks: Set<String> = []
+    var automaticDownloadRetry = AutomaticMediaRetryPolicy()
 
     /// Wall-clock time when the current track first started.
     var trackPlayStartDate: Date?
     /// Seconds of actual (non-paused) playback accumulated for the current track.
     var accumulatedPlayedSeconds: TimeInterval = 0
     /// Wall-clock start of the current play segment; nil when paused or stopped.
-    var currentPlaySegmentStart: Date?
+    var currentPlaySegmentStart: Date? {
+        didSet {
+            segmentStartedUptime = currentPlaySegmentStart.map {
+                ProcessInfo.processInfo.systemUptime - max(0, Date().timeIntervalSince($0))
+            }
+        }
+    }
+    var segmentStartedUptime: TimeInterval?
+    var accumulatorID = UUID()
+    var recordedAccumulatorID: UUID?
     /// Set to true by handleEndOfTrack before a natural completion transition.
     var wasTrackCompletedNaturally: Bool = false
     /// Cached ISRC for the current track (server or Apple Music catalog) for Music Haptics.
     var resolvedISRCForCurrentTrack: String?
     var resolvedISRCSongId: String?
     /// Throttle Now Playing position pushes — lock-screen drift correction doesn't need 2 Hz.
-    var lastNowPlayingPushDate: Date = .distantPast
     /// Bumped on pause/stop/track change so in-flight Now Playing pushes can't restore rate=1.
     var nowPlayingEpoch: UInt64 = 0
+    var presentationSequence: UInt64 = 0
     /// Bumped on every `play()` / `startPlayback` — stale resolves and EOF handlers bail out.
-    var playbackEpoch: UInt64 = 0
+    var playbackEpoch: UInt64 {
+        get { authority.snapshot.epoch }
+        set { authority.setEpoch(newValue) }
+    }
     var progressStallMonitor = PlaybackStallMonitor()
     /// The track the next `startPlayback` replaces. The visible track flips as soon as a tap is
     /// accepted (so the UI never waits on a network resolve), which means listening history has to
@@ -293,8 +335,10 @@ actor PlayerService: PlayerServiceProtocol {
         statsService: StatsService,
         listenBrainzService: ListenBrainzService,
         jellyfinService: JellyfinService? = nil,
-        engine: (any PlaybackEngine)? = nil
+        engine: (any PlaybackEngine)? = nil,
+        transferCoordinator: MediaTransferCoordinator = MediaTransferCoordinator()
     ) {
+        self.transferCoordinator = transferCoordinator
         self.state = state
         self.mediaResolver = mediaResolver
         self.serverService = serverService
@@ -334,27 +378,9 @@ actor PlayerService: PlayerServiceProtocol {
         delegate.service = self
         (resolvedEngine as? any AudioStreamingPlaybackEngine)?.delegate = delegate
         systemEngine.eventHandler = { [weak self] event in
-            Task { await self?.handleSystemEngineEvent(event) }
-        }
-        Self.installBeatMeter(on: self.audioGraph)
-    }
-
-    /// Mixer tap → `PlaybackBeatMeter` for full-player beat-reactive backgrounds.
-    ///
-    /// The tap is always installed: `PlaybackBeatMeter.enqueue` no-ops on a single flag check when
-    /// no on-screen view is listening, and the performance budget decides whether views listen
-    /// (`allowsBeatVisuals`). That keeps the cost at zero on a backgrounded / hot / Low Power
-    /// device while leaving the feature intact.
-    ///
-    /// Skipped for an engine with no AVFoundation graph (a test fake).
-    private nonisolated static func installBeatMeter(on graph: (any AudioGraphHosting)?) {
-        guard let graph else { return }
-        graph.addFrameFilter(named: PlaybackBeatMeter.filterName) { buffer, _ in
-            // Skip band work on the audio thread when no UI is listening. The heavy
-            // `bandEnergies` computation is gated inside enqueue and only runs once the
-            // publish interval has elapsed, so the audio render thread does almost nothing
-            // per buffer.
-            PlaybackBeatMeter.enqueue(buffer: buffer)
+            guard let self else { return }
+            let context = self.authority.snapshot
+            Task { [weak self] in await self?.handleSystemEngineEvent(event, expectedContext: context) }
         }
     }
 
@@ -370,6 +396,40 @@ actor PlayerService: PlayerServiceProtocol {
     func setReplayGainService(_ service: ReplayGainService) async {
         replayGainService = service
         await service.attach(to: audioGraph)
+    }
+
+    deinit {
+        progressTask?.cancel()
+        playbackRequestTask?.cancel()
+        playbackAcquisitionTask?.cancel()
+        engineFailureTask?.cancel()
+        liveStreamStallTask?.cancel()
+        seekCommitTask?.cancel()
+        seekSettlementTask?.cancel()
+        seekDownloadTask?.cancel()
+        restorePauseTask?.cancel()
+        cacheDownloadTask?.cancel()
+        prefetchTask?.cancel()
+        autoExtendFetchTask?.cancel()
+        gaplessPreparationTask?.cancel()
+        gaplessMetadataTask?.cancel()
+        fadeInTask?.cancel()
+        fadeOutTask?.cancel()
+        playingNowTask?.cancel()
+        periodicPlaybackReportTask?.cancel()
+        musicHapticsNudgeTask?.cancel()
+        nextTrackISRCPrefetchTask?.cancel()
+        checkpointScheduler.stop()
+        cacheSession.invalidateAndCancel()
+        prefetchSession.invalidateAndCancel()
+        #if os(iOS)
+        sessionActivationRetryTask?.cancel()
+        deferredInterruptionPauseTask?.cancel()
+        for observer in [interruptionObserver, routeChangeObserver, spatialCapabilitiesObserver,
+                         mediaServicesResetObserver, screenshotObserver].compactMap({ $0 }) {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        #endif
     }
 
 }

@@ -14,14 +14,17 @@ import OSLog
 /// PlaybackEvent PersistentModel instances never leave this actor.
 actor StatsService {
     private let modelContainer: ModelContainer
+    private let preparation: Task<Void, Never>?
 
-    init(modelContainer: ModelContainer) {
+    init(modelContainer: ModelContainer, preparation: Task<Void, Never>? = nil) {
         self.modelContainer = modelContainer
+        self.preparation = preparation
     }
 
     // MARK: - Public API
 
     func recordPlayback(_ event: PlaybackEventDTO, trigger: String = "") async {
+        await preparation?.value
         let context = ModelContext(modelContainer)
         let model = PlaybackEvent(
             trackId: event.trackId,
@@ -51,6 +54,7 @@ actor StatsService {
     }
 
     func eventCount(forServer serverId: String) async -> Int {
+        await preparation?.value
         let context = ModelContext(modelContainer)
         let descriptor = FetchDescriptor<PlaybackEvent>(
             predicate: #Predicate { $0.serverId == serverId }
@@ -61,6 +65,7 @@ actor StatsService {
     /// Most recent playback events (≥30s listens, as recorded), newest first.
     /// Returns Sendable DTOs — PlaybackEvent instances never leave this actor.
     func recentEvents(limit: Int, serverId: String) async -> [PlaybackEventDTO] {
+        await preparation?.value
         let context = ModelContext(modelContainer)
         var descriptor = FetchDescriptor<PlaybackEvent>(
             predicate: #Predicate { $0.serverId == serverId },
@@ -87,6 +92,7 @@ actor StatsService {
     }
 
     func deleteAllEvents(forServer serverId: String) async {
+        await preparation?.value
         let context = ModelContext(modelContainer)
         let descriptor = FetchDescriptor<PlaybackEvent>(
             predicate: #Predicate { $0.serverId == serverId }
@@ -111,6 +117,7 @@ actor StatsService {
         let start = range.start
         let end = range.end
         let sid = serverId
+        await preparation?.value
         let context = ModelContext(modelContainer)
         var descriptor = FetchDescriptor<PlaybackEvent>(
             predicate: #Predicate { $0.serverId == sid && $0.timestamp >= start && $0.timestamp < end }
@@ -128,6 +135,7 @@ actor StatsService {
         let start = range.start
         let end = range.end
         let sid = serverId
+        await preparation?.value
         let context = ModelContext(modelContainer)
         let descriptor = FetchDescriptor<PlaybackEvent>(
             predicate: #Predicate { $0.serverId == sid && $0.timestamp >= start && $0.timestamp < end }
@@ -158,6 +166,7 @@ actor StatsService {
         let start = range.start
         let end = range.end
         let sid = serverId
+        await preparation?.value
         let context = ModelContext(modelContainer)
         let descriptor = FetchDescriptor<PlaybackEvent>(
             predicate: #Predicate { $0.serverId == sid && $0.timestamp >= start && $0.timestamp < end }

@@ -210,6 +210,7 @@ struct SongContextMenuModifier: ViewModifier {
     @State private var favoriteSnapshot = false
     @State private var loadedCoverImage: PlatformImage?
     @State private var showAddToPlaylist = false
+    @State private var showAtmosSelection = false
 
     private var isFavorite: Bool { favoriteSnapshot }
     private var isPinned: Bool { pinnedSnapshot }
@@ -258,6 +259,12 @@ struct SongContextMenuModifier: ViewModifier {
 
                 pinButton
 
+                if !AtmosVariantCatalogue.isAtmos(song) {
+                    Button { showAtmosSelection = true } label: {
+                        Label("Dolby Atmos Version…", systemImage: "waveform")
+                    }
+                }
+
                 Button {
                     showAddToPlaylist = true
                 } label: {
@@ -289,11 +296,15 @@ struct SongContextMenuModifier: ViewModifier {
             .sheet(isPresented: $showAddToPlaylist) {
                 AddToPlaylistSheet(song: song)
             }
+            .sheet(isPresented: $showAtmosSelection) {
+                AtmosVersionSelectionView(song: song)
+            }
             .task(id: song.id) {
                 // Preload persistent state and artwork while the row is idle, so the
                 // long-press presentation performs no database or network work.
-                pinnedSnapshot = container?.pinService.isPinned(itemType: .song, itemId: song.id) == true
-                favoriteSnapshot = container?.favoritesService.isFavorite(itemType: .song, itemId: song.id) == true
+                pinnedSnapshot = await container?.pinService.isPinnedInBackground(itemType: .song, itemId: song.id) == true
+                favoriteSnapshot = await container?.favoritesService.isFavoriteInBackground(itemType: .song, itemId: song.id) == true
+                guard !Task.isCancelled else { return }
                 guard coverImage == nil else { return }
                 let artId = song.coverArtId ?? song.id
                 if let cached = artworkImageCache.cachedImage(for: artId, tier: .thumb) {
@@ -704,13 +715,14 @@ struct LazyCollectionContextMenuModifier: ViewModifier {
             .task(id: "\(itemType.rawValue):\(itemId):\(coverArtId ?? "")") {
                 // Snapshot persistent state before a press. Context-menu construction then
                 // performs no SwiftData fetches and appears immediately.
-                pinnedSnapshot = container?.pinService.isPinned(itemType: itemType, itemId: itemId) == true
+                pinnedSnapshot = await container?.pinService.isPinnedInBackground(itemType: itemType, itemId: itemId) == true
                 if let favoriteType {
-                    favoriteSnapshot = container?.favoritesService.isFavorite(
+                    favoriteSnapshot = await container?.favoritesService.isFavoriteInBackground(
                         itemType: favoriteType,
                         itemId: itemId
                     ) == true
                 }
+                guard !Task.isCancelled else { return }
                 guard coverImage == nil else { return }
                 let artId = coverArtId ?? itemId
                 if let cached = artworkImageCache.cachedImage(for: artId, tier: .thumb) {
@@ -907,7 +919,7 @@ private struct AlbumLongPressMenuModifier: ViewModifier {
             favoriteType: .album,
             songLoader: {
                 guard let c = container else { return [] }
-                let loaded = try await c.libraryService.album(id: albumId)
+                let loaded = try await c.libraryService.displayAlbum(id: albumId)
                 return (loaded.song ?? []).map { DisplayableSong(from: $0, isDownloaded: false) }
             }
         )

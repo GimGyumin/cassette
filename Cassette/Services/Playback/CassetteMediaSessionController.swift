@@ -38,8 +38,9 @@ final class CassetteMediaSessionController {
     private let artworkCache: ArtworkImageCache?
     private let preparedCoverIdProvider: (@MainActor (String?) -> String?)?
 
-    init(player: any PlayerServiceProtocol, artworkCache: ArtworkImageCache? = nil, preparedCoverIdProvider: (@MainActor (String?) -> String?)? = nil) {
-        let representation = CassetteMediaSessionRepresentation(player: player)
+    init(player: any PlayerServiceProtocol, artworkCache: ArtworkImageCache? = nil, preparedCoverIdProvider: (@MainActor (String?) -> String?)? = nil,
+         seekHandler: @escaping @Sendable (TimeInterval) async -> Void) {
+        let representation = CassetteMediaSessionRepresentation(player: player, seekHandler: seekHandler)
         self.representation = representation
         self.session = MediaSession(representation)
         self.artworkCache = artworkCache
@@ -48,7 +49,8 @@ final class CassetteMediaSessionController {
 
     func invalidateArtwork() { lastContentKey = nil }
 
-    func update(_ snapshot: NowPlayingSnapshot, serverId: UUID?) async {
+    func update(_ snapshot: NowPlayingSnapshot, serverId: UUID?, isCurrent: @MainActor () -> Bool = { true }) async {
+        guard isCurrent() else { return }
         guard !snapshot.isLiveStream,
               let trackId = snapshot.trackId,
               let serverId else {
@@ -124,9 +126,11 @@ final class CassetteMediaSessionController {
         representation.playbackSnapshot = playbackSnapshot(for: snapshot)
         if contentChanged || relevantEntityId != entity.id {
             try? await RelevantEntities.shared.updateEntities([entity], for: .audio(.nowPlaying))
+            guard isCurrent() else { return }
             relevantEntityId = entity.id
         }
 
+        guard isCurrent() else { return }
         if session.canBecomeApplicationPrimary && !session.isApplicationPrimary {
             try? await session.requestToBecomeApplicationPrimary()
         }
@@ -145,7 +149,8 @@ final class CassetteMediaSessionController {
         )
     }
 
-    func stop() async {
+    func stop(isCurrent: @MainActor () -> Bool = { true }) async {
+        guard isCurrent() else { return }
         representation.content = nil
         representation.playbackSnapshot = MediaPlaybackSnapshot(state: .stopped)
         lastContentKey = nil
@@ -162,7 +167,7 @@ final class CassetteMediaSessionController {
         return MediaPlaybackSnapshot(
             state: state,
             elapsedTime: snapshot.isLiveStream ? nil : snapshot.position,
-            timestamp: Date()
+            timestamp: snapshot.timestamp
         )
     }
 
@@ -199,6 +204,7 @@ final class CassetteMediaSessionController {
                 data = try Data(contentsOf: url)
             } else {
                 var request = URLRequest(url: url)
+                ArtworkNetworkPolicy.apply(to: &request)
                 request.timeoutInterval = 15
                 for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
                 let (responseData, response) = try await URLSession.shared.data(for: request)
@@ -225,27 +231,22 @@ final class CassetteMediaSessionController {
 @available(iOS 27.0, *)
 @Observable
 @MainActor
-/// The `NowPlaying` framework declares `MediaSessionRepresentable` without an actor
-/// isolation annotation, so this `@MainActor` representation emits
-/// `#ConformanceIsolation` in Swift 5 language mode. Keeping the representation on
-/// the main actor is the correct behaviour (the framework drives it from the same
-/// process as the player); the warning is recorded as a known acceptable one in
-/// `CONTRIBUTING.md` and disappears once the framework documents its isolation
-/// contract (or the project moves to the Swift 6 language mode).
+/// Mutable playback metadata stays on MainActor. The immutable identifier also
+/// satisfies Identifiable's nonisolated requirement.
 final class CassetteMediaSessionRepresentation: MediaSessionRepresentable {
-    let id = "app.cassette.primary-audio-session"
+    nonisolated let id = "app.cassette.primary-audio-session"
     var content: (any MediaContentRepresentable)?
     var playbackSnapshot: MediaPlaybackSnapshot?
     let commands: [MediaCommand]
 
-    init(player: any PlayerServiceProtocol) {
+    init(player: any PlayerServiceProtocol, seekHandler: @escaping @Sendable (TimeInterval) async -> Void) {
         commands = [
             .play { await player.resume() },
             .pause { await player.pause() },
             .togglePlayPause { await player.togglePlayPause() },
             .next { try await player.skipToNext() },
             .previous { try await player.skipToPrevious() },
-            .seekToPosition { position in await player.seek(to: position) }
+            .seekToPosition { position in await seekHandler(position) }
         ]
     }
 }

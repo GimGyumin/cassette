@@ -85,6 +85,7 @@ private struct PlaybackSettingsTab: View {
             ReplayGainSettingsSection()
             GaplessSettingsSection()
             CrossfadeSettingsSection()
+            LegacyPlaybackSessionSection()
         }
         .formStyle(.grouped)
         .frame(maxWidth: 540)
@@ -111,10 +112,16 @@ private struct MacAudioQualitySettingsSection: View {
                 systemImage: "arrow.down.circle.fill",
                 selection: $settings.downloadFormat
             )
+            Picker("Server Playback Method", selection: $settings.jellyfinRoute) {
+                ForEach(JellyfinPlaybackRoute.allCases, id: \.self) { route in
+                    Text(route.choiceTitle).tag(route)
+                }
+            }
+            .pickerStyle(.menu)
         } header: {
             Text("Audio Quality")
         } footer: {
-            Text("Dolby Atmos and multichannel tracks always play in their original format.")
+            Text("Automatic preserves Dolby Atmos and multichannel audio. Manual server playback methods require server support.")
         }
     }
 

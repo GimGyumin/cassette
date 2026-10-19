@@ -33,6 +33,7 @@ final class AppContainer {
     let jellyfinDiscoveryService = JellyfinLANDiscoveryService()
     let serverService: any ServerServiceProtocol
     let libraryService: any LibraryServiceProtocol
+    let homeDiscoveryFeed: HomeDiscoveryFeed
     let cacheService: any CacheServiceProtocol
     let downloadService: any DownloadServiceProtocol
     let mediaResolver: any MediaResolverProtocol
@@ -48,7 +49,10 @@ final class AppContainer {
     /// once the container is published, alongside `networkMonitor`.
     let serverReachabilityMonitor: ServerReachabilityMonitor
     let sessionService: PlaybackSessionService
+    /// Keeps the current artwork and palette across Now Playing presentations.
+    let fullPlayerViewModel = FullPlayerViewModel()
     let dominantColorExtractor = DominantColorExtractor()
+    let nowPlayingBackgroundPreparation = NowPlayingBackgroundPreparation()
     let artworkImageCache: ArtworkImageCache
     let statsService: StatsService
     private let _player: PlayerService
@@ -82,13 +86,18 @@ final class AppContainer {
         libraryIndexService = LibraryIndexService(
             serverID: { [serverState] in serverState.activeServer?.id },
             networkAvailable: { [serverState] in serverState.isOnline && serverState.isServerReachable },
-            directory: inMemory ? nil : LibraryIndexService.defaultDirectory
+            directory: inMemory ? nil : LibraryIndexService.defaultDirectory,
+            accountRevision: { [serverState] in serverState.accountRevision }
         )
         modelContainer = try ModelContainer.cassette(inMemory: inMemory)
         listeningModelContainer = try ModelContainer.listening(inMemory: inMemory)
         sessionService = PlaybackSessionService(modelContainer: try ModelContainer.session(inMemory: inMemory))
 
-        Self.migratePlaybackEventsIfNeeded(from: modelContainer, to: listeningModelContainer)
+        let sourceStore = modelContainer
+        let historyStore = listeningModelContainer
+        let historyPreparation: Task<Void, Never>? = inMemory ? nil : Task.detached(priority: .utility) {
+            Self.migratePlaybackEventsIfNeeded(from: sourceStore, to: historyStore)
+        }
 
         let keychain = KeychainService()
         keychainService = keychain
@@ -101,7 +110,7 @@ final class AppContainer {
         )
         cacheService = cache
 
-        let stats = StatsService(modelContainer: listeningModelContainer)
+        let stats = StatsService(modelContainer: listeningModelContainer, preparation: historyPreparation)
         statsService = stats
 
         let server = ServerService(state: serverState, keychain: keychain, modelContainer: modelContainer, cacheService: cache)
@@ -128,17 +137,23 @@ final class AppContainer {
         wrappedPlaylistService = WrappedPlaylistService(serverService: server, statsService: stats)
         radioService = RadioService(serverService: server)
 
+        let transfers = MediaTransferCoordinator()
         let download = DownloadService(
             serverService: server,
             modelContainer: modelContainer,
             toastService: toastService,
             mediaIdentityService: mediaIdentityService,
-            jellyfinService: jellyfinService
+            jellyfinService: jellyfinService,
+            journal: inMemory ? BackgroundDownloadJournal(directory: FileManager.default.temporaryDirectory
+                .appendingPathComponent("cassette-test-transfers-\(UUID())")) : .shared,
+            transferCoordinator: transfers,
+            cacheService: cache
         )
         downloadService = download
 
-        let library = LibraryService(serverService: server, modelContainer: modelContainer, downloadService: download, statsService: stats)
+        let library = LibraryService(serverService: server, modelContainer: modelContainer, downloadService: download, statsService: stats, libraryIndex: libraryIndexService)
         libraryService = library
+        homeDiscoveryFeed = HomeDiscoveryFeed(library: library, serverState: serverState, downloads: download)
         mediaIdentityReconciliationService = MediaIdentityReconciliationService(
             modelContainer: modelContainer,
             libraryService: library,
@@ -146,6 +161,10 @@ final class AppContainer {
         )
 
         artworkImageCache = ArtworkImageCache(downloadService: download, libraryService: library, serverService: server)
+        download.setOriginalArtworkLoader { @MainActor [weak artworkImageCache, serverState] id, serverID in
+            guard serverState.activeServer?.id == serverID, let artworkImageCache else { return false }
+            return await artworkImageCache.downloadOriginalAndCacheAsHero(coverArtId: id, cacheHero: false)
+        }
 
         guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             fatalError("Documents directory unavailable — cannot initialise AppContainer")
@@ -186,7 +205,8 @@ final class AppContainer {
             streamingSettings: streamingSettings,
             mediaIdentityService: mediaIdentityService,
             jellyfinService: jellyfinService,
-            speedProbe: networkSpeedProbe
+            speedProbe: networkSpeedProbe,
+            libraryIndex: libraryIndexService
         )
         mediaResolver = resolver
 
@@ -194,7 +214,7 @@ final class AppContainer {
         let lb = ListenBrainzService(client: lbClient, keychain: keychain)
         listenBrainzService = lb
 
-        let player = PlayerService(state: playerState, mediaResolver: resolver, serverService: server, sessionService: sessionService, artworkImageCache: artworkImageCache, lyricsService: lyricsService, libraryService: library, cacheService: cache, downloadService: download, cacheSettings: cacheSettings, streamingSettings: streamingSettings, replayGainSettings: replayGainSettings, crossfadeSettings: crossfadeSettings, gaplessSettings: gaplessSettings, toastService: toastService, statsService: stats, listenBrainzService: lb, jellyfinService: jellyfinService, engine: engine ?? AudioStreamingPlayerEngine())
+        let player = PlayerService(state: playerState, mediaResolver: resolver, serverService: server, sessionService: sessionService, artworkImageCache: artworkImageCache, lyricsService: lyricsService, libraryService: library, cacheService: cache, downloadService: download, cacheSettings: cacheSettings, streamingSettings: streamingSettings, replayGainSettings: replayGainSettings, crossfadeSettings: crossfadeSettings, gaplessSettings: gaplessSettings, toastService: toastService, statsService: stats, listenBrainzService: lb, jellyfinService: jellyfinService, engine: engine ?? AudioStreamingPlayerEngine(), transferCoordinator: transfers)
         _player = player
         playerService = player
 
@@ -213,7 +233,7 @@ final class AppContainer {
             modelContainer: modelContainer,
             mediaIdentityService: mediaIdentityService
         )
-        let pin = PinService(modelContainer: modelContainer)
+        let pin = PinService(modelContainer: modelContainer, serverState: serverState)
         pinService = pin
         let playlist = PlaylistService(serverService: server, modelContainer: modelContainer, downloadService: download)
         playlistService = playlist
@@ -278,7 +298,7 @@ final class AppContainer {
         let subsonicProvider = SubsonicRecommendationProvider(libraryService: library)
         let lbProvider = ListenBrainzRecommendationProvider(client: lbClient, service: lb, libraryService: library)
         recommendationService = RecommendationService(providers: [lbProvider, subsonicProvider])
-        personalMixService = PersonalMixService(libraryService: library, statsService: stats)
+        personalMixService = PersonalMixService(libraryService: library, statsService: stats, serverState: serverState)
 
         searchHistoryService = SearchHistoryService(container: modelContainer)
 
@@ -370,7 +390,7 @@ final class AppContainer {
 
     /// Each track may carry distinct embedded artwork, even within one album.
     func playbackCoverId(for song: DisplayableSong?) -> String? {
-        song?.effectiveCoverArtId
+        song.map { libraryIndexService.playbackCoverID(for: $0) }
     }
 
     /// Album-id → prepared cover id, for surfaces that only carry the album id (lock screen).
@@ -676,21 +696,32 @@ extension ModelContainer {
 // MARK: - Listening history migration
 
 extension AppContainer {
-    private static let listeningEventsMigratedKey = "cassette.listeningEventsMigrated.v1"
+    private nonisolated static let listeningEventsMigratedKey = "cassette.listeningEventsMigrated.v1"
 
     /// Copies legacy `PlaybackEvent` rows from the main store into the CloudKit listening store once.
-    static func migratePlaybackEventsIfNeeded(from main: ModelContainer, to listening: ModelContainer) {
-        guard !UserDefaults.standard.bool(forKey: listeningEventsMigratedKey) else { return }
+    nonisolated static func migratePlaybackEventsIfNeeded(
+        from main: ModelContainer, to listening: ModelContainer, defaults: UserDefaults = .standard,
+        fetch: (ModelContext) throws -> [PlaybackEvent] = { try $0.fetch(FetchDescriptor<PlaybackEvent>()) }
+    ) {
+        guard !defaults.bool(forKey: listeningEventsMigratedKey) else { return }
 
         let source = ModelContext(main)
         let destination = ModelContext(listening)
-        let descriptor = FetchDescriptor<PlaybackEvent>()
-        guard let legacy = try? source.fetch(descriptor), !legacy.isEmpty else {
-            UserDefaults.standard.set(true, forKey: listeningEventsMigratedKey)
+        let legacy: [PlaybackEvent]
+        let existingIDs: Set<UUID>
+        do {
+            legacy = try fetch(source)
+            existingIDs = Set(try fetch(destination).map(\.id))
+        } catch {
+            // A failed read is not an empty store. Leave the marker unset so startup can retry.
+            Logger.stats.error("Playback migration read failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        if legacy.isEmpty {
+            defaults.set(true, forKey: listeningEventsMigratedKey)
             return
         }
 
-        let existingIDs = Set(((try? destination.fetch(descriptor)) ?? []).map(\.id))
         var migrated = 0
         for event in legacy where !existingIDs.contains(event.id) {
             destination.insert(
@@ -715,7 +746,7 @@ extension AppContainer {
 
         do {
             try destination.save()
-            UserDefaults.standard.set(true, forKey: listeningEventsMigratedKey)
+            defaults.set(true, forKey: listeningEventsMigratedKey)
             Logger.stats.info("Migrated \(migrated, privacy: .public) playback events into CloudKit listening store")
         } catch {
             Logger.stats.error("Failed to migrate playback events: \(error.localizedDescription, privacy: .public)")
@@ -729,26 +760,26 @@ extension AppContainer {
     private static let coverArtCacheVersionKey = "cassette.coverArtCacheVersion"
     private static let currentCoverArtCacheVersion = 5
 
-    /// Purges cover art files from disk on the first launch after a cache format change,
-    /// so stale files don't shadow the new decode pipeline. Version history:
-    ///   v5 — ArtworkImageCache now decodes at 240 px (thumb) / 1200 px (full) via
-    ///         CGImageSourceCreateThumbnailAtIndex; legacy full-res files cause ~800 ms
-    ///         decodes on cold open even after the code fix — wipe forces a clean re-download.
-    ///   v4 and earlier — previous resolution bumps.
-    static func invalidateCoverArtCacheIfNeeded(artworkCache: ArtworkImageCache) {
-        let stored = UserDefaults.standard.integer(forKey: coverArtCacheVersionKey)
+    /// Invalidate resized derivatives after a decode-format change. Originals, offline
+    /// artwork and completion records are independent of the thumbnail pipeline.
+    static func invalidateCoverArtCacheIfNeeded(
+        artworkCache: ArtworkImageCache, coverArtsDirectory: URL? = nil,
+        defaults: UserDefaults = .standard
+    ) {
+        let stored = defaults.integer(forKey: coverArtCacheVersionKey)
         guard stored < currentCoverArtCacheVersion else { return }
-
         artworkCache.clearCache()
-        let coverArtsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let directory = coverArtsDirectory ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("app.cassette/coverarts")
-        try? FileManager.default.removeItem(at: coverArtsDir)
-        try? FileManager.default.createDirectory(at: coverArtsDir, withIntermediateDirectories: true)
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        for file in files where file.lastPathComponent.hasSuffix("@thumb") || file.lastPathComponent.hasSuffix("@hero") {
+            try? FileManager.default.removeItem(at: file)
+        }
         URLCache.shared.removeAllCachedResponses()
-
-        UserDefaults.standard.set(currentCoverArtCacheVersion, forKey: coverArtCacheVersionKey)
-        Logger.player.info("ArtworkImageCache: invalidated cover art disk cache (version \(stored) → \(currentCoverArtCacheVersion))")
+        defaults.set(currentCoverArtCacheVersion, forKey: coverArtCacheVersionKey)
+        Logger.player.info("ArtworkImageCache: invalidated resized derivatives (version \(stored) → \(currentCoverArtCacheVersion)); original covers retained")
     }
+
 }
 
 // MARK: - Legacy cover art sweep
@@ -799,7 +830,7 @@ extension AppContainer {
         Logger.migration.info("[ExtMigration] Ephemeral audio cache cleared")
 
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let downloadsDir = docs.appendingPathComponent("app.cassette/downloads", isDirectory: true)
+        let downloadsDir = docs.appendingPathComponent("app.cassette/audio", isDirectory: true)
 
         let ctx = ModelContext(modelContainer)
         let tracks = (try? ctx.fetch(FetchDescriptor<DownloadedTrack>())) ?? []
@@ -833,6 +864,11 @@ extension AppContainer {
                 }
                 try FileManager.default.moveItem(at: oldURL, to: newURL)
                 track.filePath = newPath
+                let songID = track.songId, serverID = track.serverId
+                let assets = (try? ctx.fetch(FetchDescriptor<CachedTrack>(predicate: #Predicate {
+                    $0.songId == songID && $0.serverId == serverID
+                }))) ?? []
+                for asset in assets where asset.filePath == oldPath { asset.filePath = newPath }
                 renamedCount += 1
                 Logger.migration.info("[ExtMigration] '\(oldPath, privacy: .public)' → '\(newPath, privacy: .public)'")
             } catch {
@@ -870,7 +906,7 @@ extension AppContainer {
         guard !UserDefaults.standard.bool(forKey: m4aFaststartMigrationKey) else { return }
 
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let downloadsDir = docs.appendingPathComponent("app.cassette/downloads", isDirectory: true)
+        let downloadsDir = docs.appendingPathComponent("app.cassette/audio", isDirectory: true)
 
         let ctx = ModelContext(modelContainer)
         let tracks = (try? ctx.fetch(FetchDescriptor<DownloadedTrack>())) ?? []
@@ -885,12 +921,22 @@ extension AppContainer {
             // Content sniff, not extension — catches a container with a wrong/renamed extension.
             guard AudioFaststartRemuxer.isM4AContainer(atPath: fileURL.path) else { continue }
             m4aCount += 1
+            ManagedAudioStore.shared.acquire(fileURL)
+            defer { ManagedAudioStore.shared.release(fileURL) }
             switch await remuxer.remuxToFaststartIfNeeded(at: fileURL) {
             case .remuxed:
                 // Bytes changed — refresh fileSize from the remuxed file (?? 0 mirrors the
                 // download path, where downloadedURL's `== 0` escape tolerates a read miss).
                 let newSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int64) ?? 0
                 track.fileSize = newSize
+                let songID = track.songId, serverID = track.serverId
+                let assets = (try? ctx.fetch(FetchDescriptor<CachedTrack>(predicate: #Predicate {
+                    $0.songId == songID && $0.serverId == serverID
+                }))) ?? []
+                for asset in assets where asset.filePath == track.filePath {
+                    asset.fileSize = newSize
+                    asset.transferIdentity = nil
+                }
                 remuxedCount += 1
                 Logger.migration.info("[M4AFaststart] faststart-remuxed '\(track.songId, privacy: .public)'")
             case .failed:

@@ -40,6 +40,9 @@ struct AccountSettingsView: View {
     var body: some View {
         Form {
             accountSection
+            if let server, container?.serverState.needsSubsonicVerification == true {
+                Section { AccountVerificationRow(server: server) }
+            }
             librarySection
             isrcCatalogSection
             spotifyCredentialsSection

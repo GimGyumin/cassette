@@ -1,0 +1,27 @@
+# Test/build evidence for Home, Discover and artwork changes.
+
+SOURCE: /tmp/cassette-home-discover-first-build.log
+SHA256: 00d9c2bd754437261e1ec4b568daa3b25459962173f86bc397580e753e32c9cc
+/tmp/cassette-validation/Cassette/Views/Browse/PlaylistDetailView.swift:364:58: warning: converting non-Sendable function value to '@MainActor @Sendable (Bool) async -> GeneratedPlaylistSnapshot?' may introduce data races
+✔ Test run with 19 tests in 3 suites passed after 3.349 seconds.
+** TEST SUCCEEDED **
+
+SOURCE: /tmp/cassette-home-discover-regressions-final.log
+SHA256: 00c663e859ff624787883cb972d372db9d7892eeb0074f6e83402647088a2b12
+✔ Test run with 74 tests in 9 suites passed after 4.419 seconds.
+** TEST SUCCEEDED **
+
+SOURCE: /tmp/cassette-home-discover-hero-reproduction.log
+SHA256: 70514188c4aa35c22063ee95d9ad3c8415250fb3f7c14985823d827bbdadc5a7
+✘ Test concurrentConsumersDownloadOneOriginalAndKeepAlternateArtwork() recorded an issue at ArtworkDownloadPolicyTests.swift:100:9: Expectation failed: f.cache.cachedImage(for: "shared", tier: .hero) != nil
+✘ Test run with 5 tests in 1 suite failed after 0.708 seconds with 1 issue.
+** TEST FAILED **
+
+SOURCE: /tmp/cassette-home-discover-verified-macos.log
+SHA256: d65f98e1c3687a5faf4b3fc9cc649279045f2949a1b6b346039582d829d14465
+✔ Test run with 1136 tests in 197 suites passed after 64.785 seconds.
+** TEST SUCCEEDED **
+
+SOURCE: /tmp/cassette-home-discover-verified-ios.log
+SHA256: b28247b661848d5a57762121bde1e567336b1d5ecc49f03627a3a2dac856cfe6
+** BUILD SUCCEEDED **

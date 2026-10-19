@@ -9,6 +9,7 @@ import SwiftSonic
 struct SongsListView: View {
     @Environment(\.appContainer) private var container
     @State private var viewModel: SongsListViewModel?
+    @State private var sourceAccountRevision: UInt64?
     @State private var songToAddToPlaylist: DisplayableSong?
     @State private var searchText = ""
     /// Ordering is persisted (like `cassette.albumSort` / `cassette.artistSort`); the source filter is
@@ -43,13 +44,15 @@ struct SongsListView: View {
                 SongFilterMenu(filter: $songFilter)
             }
         }
-        .task(id: container?.serverState.isOnline) {
+        .task(id: "\(container?.serverState.accountRevision ?? 0)|\(container?.serverState.isOnline == true)") {
             guard let svc = container?.libraryService else { return }
-            if viewModel == nil {
+            if viewModel == nil || sourceAccountRevision != container?.serverState.accountRevision {
+                sourceAccountRevision = container?.serverState.accountRevision
                 let vm = SongsListViewModel(
                     libraryService: svc,
                     modelContainer: container?.modelContainer,
-                    serverState: container?.serverState
+                    serverState: container?.serverState,
+                    downloadService: container?.downloadService
                 )
                 viewModel = vm
                 vm.setSort(songSort)
@@ -157,6 +160,7 @@ struct SongsListView: View {
                                 .textCase(nil)
                         }
                         .id(section.letter)
+                        .cassetteSectionIndexLabel(section.letter)
                     }
                 } else {
                     // "Date Added" is one newest-first list — no letter headers, no jump bar.
@@ -168,18 +172,10 @@ struct SongsListView: View {
             .listStyle(.plain)
             .refreshable { await vm.load() }
             .miniPlayerBottomMargin()
-            .safeAreaInset(edge: .trailing, spacing: 0) {
-                if songSort.groupsAlphabetically && songs.count >= 20 {
-                    AlphabetJumpBar(
-                        availableLetters: Set(sections.map(\.letter)),
-                        onLetterTap: { letter in
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                proxy.scrollTo(letter, anchor: .top)
-                            }
-                        }
-                    )
-                    .padding(.trailing, 4)
-                }
+            .cassetteSoftTopScrollEdge()
+            .cassetteListIndex(letters: Set(sections.map(\.letter)),
+                isVisible: songSort.groupsAlphabetically && songs.count >= 20) { letter in
+                proxy.scrollTo(letter, anchor: .top)
             }
             .sheet(item: $songToAddToPlaylist) { song in
                 AddToPlaylistSheet(song: song)

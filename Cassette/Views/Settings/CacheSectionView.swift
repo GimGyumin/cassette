@@ -96,15 +96,15 @@ struct CacheSectionView: View {
                         Text("Clearing…")
                     }
                 } else {
-                    SettingsRowLabel(title: "Clear cache", systemImage: "trash.fill", color: .red)
+                    SettingsRowLabel(title: "Clear automatic music storage", systemImage: "trash.fill", color: .red)
                 }
             }
             .disabled(isClearing || (usedBytes == 0 && trackCount == 0))
 
         } header: {
-            SettingsSectionHeader("Cache")
+            SettingsSectionHeader("Automatic music storage")
         } footer: {
-            Text(String(localized: "Cached tracks let recently-played music load instantly without re-fetching from the server. Cache is automatic, sliding window — the oldest track is replaced when the limit is reached. \"Use cellular data\" also governs background caching and prefetching on Low Data Mode.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            Text(String(localized: "Automatic storage reuses recently played music. The oldest unprotected tracks are removed when this limit is reached. Saved music shares the same storage and is protected from automatic cleanup.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
         .task {
             await refreshUsage()
@@ -121,7 +121,7 @@ struct CacheSectionView: View {
     private func usageDescription(maxBytes: Int64) -> String {
         let bytesString = ByteCountFormatter.string(fromByteCount: usedBytes, countStyle: .file)
         let limit = ByteCountFormatter.string(fromByteCount: maxBytes, countStyle: .file)
-        return "\(bytesString) / \(limit) · \(trackCount)"
+        return "\(bytesString) / \(limit)"
     }
 
     private func capacityLabel(_ megabytes: Int) -> String {
@@ -133,7 +133,7 @@ struct CacheSectionView: View {
 
     private func refreshUsage() async {
         guard let container else { return }
-        let bytes = await container.cacheService.usedBytes
+        let bytes = await container.cacheService.reclaimableBytes
         let count = await container.cacheService.trackCount
         usedBytes = bytes
         trackCount = count
@@ -143,9 +143,7 @@ struct CacheSectionView: View {
         guard let container else { return }
         isClearing = true
         defer { isClearing = false }
-        await container.cacheService.clearAll()
-        container.dominantColorExtractor.clearCache()
-        await DescriptionCache.shared.clear()
+        await container.cacheService.clearAudioTracksOnly()
         await refreshUsage()
     }
 }

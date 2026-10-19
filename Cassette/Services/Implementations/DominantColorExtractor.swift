@@ -25,9 +25,10 @@ import AppKit
 @MainActor
 @Observable
 final class DominantColorExtractor {
-    // v16: clean border decision tree rewrite (white / black / pastel / dominant).
-    private static let userDefaultsKey = "cassette.dominantColor.cache.v16"
+    // v17: distinguish white sleeves with dark subjects from genuinely silver artwork.
+    private static let userDefaultsKey = "cassette.dominantColor.cache.v17"
     private static let legacyUserDefaultsKeys = [
+        "cassette.dominantColor.cache.v16",
         "cassette.dominantColor.cache.v15",
         "cassette.dominantColor.cache.v14",
         "cassette.dominantColor.cache.v13",
@@ -78,6 +79,7 @@ final class DominantColorExtractor {
         UserDefaults.standard.removeObject(forKey: "cassette.artworkPalette.cache.v4")
         UserDefaults.standard.removeObject(forKey: "cassette.artworkPalette.cache.v5")
         UserDefaults.standard.removeObject(forKey: "cassette.artworkPalette.cache.v6")
+        UserDefaults.standard.removeObject(forKey: "cassette.artworkPalette.cache.v7")
         let stored = UserDefaults.standard.dictionary(forKey: Self.userDefaultsKey) ?? [:]
         var hydrated: [String: Color] = [:]
         hydrated.reserveCapacity(stored.count)

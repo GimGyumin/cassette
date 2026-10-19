@@ -7,9 +7,13 @@ import Foundation
 import SwiftSonic
 
 protocol LibraryServiceProtocol: AnyObject, Sendable {
+    func trimDetailCaches() async
     func artists() async throws -> [ArtistIndex]
     func artist(id: String) async throws -> ArtistID3
     func album(id: String) async throws -> AlbumID3
+    /// Logical display composition; raw album(id:) is preserved for server operations.
+    func displayAlbum(id: String) async throws -> AlbumID3
+    func presentedAlbums(_ albums: [AlbumID3]) async -> [AlbumID3]
     func albumInfo(id: String) async throws -> AlbumInfo
 
     /// Fetches every track from every album of the given artist.
@@ -111,9 +115,14 @@ protocol LibraryServiceProtocol: AnyObject, Sendable {
 
     /// Drops the cached SwiftSonic client so the next call picks up new credentials.
     func invalidateClientCache() async
+    /// Bypass short-lived album caches during a confirmed catalog refresh.
+    func albumsForIndex() async throws -> [AlbumID3]
 }
 
 extension LibraryServiceProtocol {
+    func trimDetailCaches() async {}
+    func displayAlbum(id: String) async throws -> AlbumID3 { try await album(id: id) }
+    func presentedAlbums(_ albums: [AlbumID3]) async -> [AlbumID3] { AtmosAlbumPolicy.presented(albums) }
     /// Compatibility for services without paging. Production LibraryService supplies all offsets.
     func search(_ query: String, page: SearchPageRequest) async throws -> SearchResult3 {
         guard page.artistOffset == 0, page.albumOffset == 0, page.songOffset == 0 else {
@@ -136,4 +145,5 @@ extension LibraryServiceProtocol {
     func songsByGenre(_ genre: String, count: Int) async throws -> [DisplayableSong] { [] }
 
     func invalidateClientCache() async {}
+    func albumsForIndex() async throws -> [AlbumID3] { try await allAlbums() }
 }

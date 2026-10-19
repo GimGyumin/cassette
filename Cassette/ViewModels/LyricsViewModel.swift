@@ -14,7 +14,10 @@ import QuartzCore
 final class LyricsViewModel {
 
     var pronunciationRows: [[LyricDisplayWord]] = []
-    var documentBuildGeneration = 0
+    @ObservationIgnored var documentBuildGeneration = 0
+    @ObservationIgnored private var loadGeneration = 0
+    @ObservationIgnored var languageGeneration = 0
+    @ObservationIgnored var translationSettingsIdentity = LyricsTranslationSettings.shared.translationIdentity
 
     let lyricsService: LyricsService
     let playerService: any PlayerServiceProtocol
@@ -48,7 +51,13 @@ final class LyricsViewModel {
     /// Clock used for word-level karaoke progress (ms, lyrics-offset adjusted).
     var karaokePlaybackMs: Int = 0
     /// 0...1 while waiting through a long instrumental / inter-line gap; `nil` when a lyric line is active.
-    var instrumentalGapProgress: Double?
+    var instrumentalGapProgress: Double? {
+        didSet {
+            let visible = instrumentalGapProgress != nil
+            if hasInstrumentalGap != visible { hasInstrumentalGap = visible }
+        }
+    }
+    private(set) var hasInstrumentalGap = false
     /// Insert the gap indicator after this lyric index (`nil` = before the first timed line).
     var instrumentalGapAfterIndex: Int?
     var availableLanguages: [String] = []
@@ -129,6 +138,13 @@ final class LyricsViewModel {
     var arePronunciationsVisible = false
     var isTranslating = false
     var translationErrorMessage: String?
+    var translationErrorCanRetry = true
+    var translationErrorOffersStandard = false
+    var usesStandardTranslationForCurrentTrack = false
+
+    var effectiveAppleIntelligencePrompt: String {
+        usesStandardTranslationForCurrentTrack ? "" : LyricsTranslationSettings.shared.appleIntelligencePrompt
+    }
     /// SwiftUI `.translationTask` 트리거용 — Apple 번역이 필요할 때 증가합니다.
     var appleTranslationRequestID = 0
     /// Bumped after translation content changes so LyricsView can re-center on the playing line.
@@ -158,6 +174,9 @@ final class LyricsViewModel {
     var lastDisplayedPositionMs: Int = 0
     /// True after `userTapped` pins the display position — supress `startTimer` overwrite.
     var justSeeked = false
+    @ObservationIgnored var lyricSeekTask: Task<Void, Never>?
+    @ObservationIgnored var lyricSeekGeneration: UInt64 = 0
+    @ObservationIgnored var lyricSeekTargetMs: Int?
 
 
     nonisolated enum State: Equatable {
@@ -215,51 +234,33 @@ final class LyricsViewModel {
     // MARK: Load
 
     func load() async {
-
+        usesStandardTranslationForCurrentTrack = false
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        guard !Task.isCancelled else { return }
+        invalidateTranslationWork()
         state = .loading
-
         do {
-
             let list = try await lyricsService.fetchLyrics(
-                forSongId: songId,
-                serverId: serverId,
-                match: match
+                forSongId: songId, serverId: serverId, match: match
             )
-
-            lyricsList = list
-            // Fetch raw TTML data so seedOriginalLyrics can parse embedded
-            // Apple Music translations and cross-validate x-bg chorus content.
-            if rawTTMLData == nil {
-                rawTTMLData = await lyricsService.fetchRawTTML(songId: songId, serverId: serverId)
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            let ttml = if let rawTTMLData { rawTTMLData } else {
+                await lyricsService.fetchRawTTML(songId: songId, serverId: serverId)
             }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            lyricsList = list
+            rawTTMLData = ttml
             await applyCurrentLanguage()
-
-        } catch LyricsError.notSupportedByServer {
-
-            state = .unsupported
-
-        } catch LyricsError.notFound {
-
-            state = .empty
-
-        } catch is CancellationError {
-
-            // View disappeared or a newer load superseded this one — leave state alone.
-
-        } catch let error as LyricsError {
-
-            state = .error(
-                networkErrorMessage(from: error)
-            )
-
         } catch {
-
-            state = .error(
-                error.localizedDescription
-            )
+            guard generation == loadGeneration, !Task.isCancelled,
+                  !(error is CancellationError), (error as? URLError)?.code != .cancelled else { return }
+            switch error {
+            case LyricsError.notSupportedByServer: state = .unsupported
+            case LyricsError.notFound: state = .empty
+            case let lyricsError as LyricsError: state = .error(networkErrorMessage(from: lyricsError))
+            default: state = .error(error.localizedDescription)
+            }
         }
     }
-
-
-
 }

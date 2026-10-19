@@ -27,12 +27,11 @@ extension NowPlayingService {
                 // Hand the controller the cover cache: the Now Playing artwork provider answers from
                 // it before it ever opens a request, so the lock screen can show a cover the app
                 // already has while the server is unreachable.
-                CassetteMediaSessionController(player: playerService, artworkCache: artworkImageCache, preparedCoverIdProvider: preparedCoverIdProvider)
+                CassetteMediaSessionController(player: playerService, artworkCache: artworkImageCache, preparedCoverIdProvider: preparedCoverIdProvider,
+                    seekHandler: { [weak self] position in await self?.seekFromSystem(to: position) })
             }
         }
         #endif
-
-        let playerService = playerService
 
         // Register every command handler SYNCHRONOUSLY, on the MAIN THREAD, in ONE atomic block — before any
         // actor suspension and before the first now-playing info is set. MPRemoteCommandCenter is a main-thread
@@ -73,10 +72,8 @@ extension NowPlayingService {
             // macOS Control Center may route the previous-track gesture through skipBackwardCommand
             // instead of previousTrackCommand. Register both so the gesture works on either path.
             center.skipBackwardCommand.preferredIntervals = [NSNumber(value: 0)]
-            center.skipBackwardCommand.addTarget { [playerService] _ in
-                Task.detached(priority: .userInitiated) {
-                    try? await playerService.skipToPrevious()
-                }
+            center.skipBackwardCommand.addTarget { [weak self] _ in
+                Task { await self?.enqueueRemoteCommand(.previous) }
                 return .success
             }
             #endif
@@ -96,11 +93,30 @@ extension NowPlayingService {
         #endif
     }
 
+    /// Framework command cancellation must not cancel the accepted seek operation.
+    /// Both native and legacy system controls use this service-owned, coalesced task.
+    func seekFromSystem(to position: Double) async {
+        enqueueRemoteCommand(.seek(position))
+        let seek = remoteSeekTask
+        await seek?.value
+    }
+
     private func enqueueRemoteCommand(_ command: RemoteCommand) {
         let precedingCommand = remoteCommandTail
         let playerService = playerService
+        remoteSeekTask?.cancel()
+        remoteSeekTask = nil
+        if case .seek(let position) = command {
+            remoteSeekTask = Task {
+                await precedingCommand?.value
+                guard !Task.isCancelled else { return }
+                await playerService.seek(to: position)
+            }
+            return
+        }
         remoteCommandTail = Task {
             await precedingCommand?.value
+            guard !Task.isCancelled else { return }
             switch command {
             case .play:
                 await playerService.resume()

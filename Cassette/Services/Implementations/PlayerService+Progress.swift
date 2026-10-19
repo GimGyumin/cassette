@@ -19,6 +19,9 @@ extension PlayerService {
     // MARK: - Progress timer
 
     func scheduleAutomaticDownload(song: DisplayableSong, serverId: UUID) async {
+        if AtmosVariantCatalogue.isAtmos(song),
+           await MainActor.run(body: { streamingSettings.downloadFormat.subsonicMaxBitRate != nil }) { return }
+        guard CassettePerformance.budget.allowsAutomaticMediaDownloads else { return }
         guard UserDefaults.standard.bool(forKey: Self.automaticDownloadUserDefaultsKey) else { return }
         let (isLimited, allowCellular) = await MainActor.run {
             (
@@ -34,6 +37,11 @@ extension PlayerService {
             return
         }
         let key = "\(serverId.uuidString):\(song.id)"
+        let requestKey = await MainActor.run {
+            let revision = (try? serverService.state.requestIdentity(for: serverId).revision) ?? 0
+            return "\(key):\(revision):\(streamingSettings.downloadFormat.rawValue)"
+        }
+        guard automaticDownloadRetry.permits(requestKey) else { return }
         guard automaticDownloadTasks.insert(key).inserted else { return }
         Task {
             defer { automaticDownloadTasks.remove(key) }
@@ -49,11 +57,12 @@ extension PlayerService {
                 try? await Task.sleep(for: .seconds(remaining))
                 guard !Task.isCancelled else { return }
                 let stillPlayingThisTrack = await MainActor.run {
-                    state.playbackState == .playing && state.currentTrack?.id == song.id
+                    state.playbackState == .playing && (state.currentPlaybackTrack?.id ?? state.currentTrack?.id) == song.id
                 }
                 guard stillPlayingThisTrack else { return }
             }
-            guard await MainActor.run(body: {
+            guard CassettePerformance.budget.allowsAutomaticMediaDownloads,
+                  await MainActor.run(body: {
                 let automaticDownloadsEnabled = UserDefaults.standard.bool(
                     forKey: Self.automaticDownloadUserDefaultsKey
                 )
@@ -71,16 +80,22 @@ extension PlayerService {
             do {
                 let downloadableSong = await MainActor.run { song.asSong() }
                 try await downloadService.download(song: downloadableSong, serverId: serverId)
+                automaticDownloadRetry.succeeded(requestKey)
                 // Normally playback is already healthy, so this is a no-op. If the engine fell
                 // back into acquisition while the transfer finished, immediately use the valid
                 // local file instead of continuing to wait on the remote response.
-                _ = await recoverAcquiringPlaybackFromLocalMedia(
-                    song: song,
+                let visibleSong = await MainActor.run {
+                    (state.currentPlaybackTrack?.id ?? state.currentTrack?.id) == song.id ? state.currentTrack : nil
+                }
+                if let visibleSong { _ = await recoverAcquiringPlaybackFromLocalMedia(
+                    song: visibleSong,
                     serverId: serverId,
                     expectedEpoch: nil,
                     reason: "automatic download completed"
-                )
+                ) }
             } catch {
+                if Task.isCancelled || PlaybackFailure.classify(error).kind == .cancelled { return }
+                automaticDownloadRetry.failed(requestKey, error: error)
                 Logger.download.error("Automatic download failed for '\(song.id, privacy: .public)': \(error, privacy: .public)")
             }
         }
@@ -89,13 +104,16 @@ extension PlayerService {
     /// Waits for a real advancing media clock rather than trusting an optimistic `.playing`
     /// callback. This keeps a background full-file transfer off the playback critical path.
     private func waitForEstablishedPlayback(of songID: String) async -> Bool {
-        for _ in 0..<40 {
+        var stability = PlaybackPreparationStability()
+        for _ in 0..<80 {
             guard !Task.isCancelled else { return false }
             let snapshot = await MainActor.run {
-                (state.currentTrack?.id, state.playbackState)
+                (state.currentPlaybackTrack?.id ?? state.currentTrack?.id, state.playbackState)
             }
             guard snapshot.0 == songID else { return false }
-            if snapshot.1 == .playing, engineProgress() >= 1 {
+            if stability.observe(mediaTime: engineProgress(), now: ProcessInfo.processInfo.systemUptime,
+                                 isPlaying: snapshot.1 == .playing, requiredDuration: 5),
+               !systemPlayback.isActive || currentSource?.isLocal == true || systemEngine.bufferedDuration >= 10 {
                 return true
             }
             if snapshot.1 == .paused || snapshot.1 == .idle {
@@ -126,7 +144,7 @@ extension PlayerService {
             return (song, serverId)
         }
         if let (song, serverId) = current {
-            await scheduleAutomaticDownload(song: song, serverId: serverId)
+            await scheduleAutomaticDownload(song: currentSource?.playbackSong ?? song, serverId: serverId)
         }
     }
 
@@ -134,8 +152,8 @@ extension PlayerService {
         stopProgressTimer()
         progressTask = Task { [weak self] in
             while !Task.isCancelled {
-                let interval: Duration = CassettePerformance.budget.isAppActive ? .milliseconds(500) : .seconds(1)
-                try? await Task.sleep(for: interval)
+                let interval = CassettePerformance.budget.playbackProgressInterval
+                do { try await Task.sleep(for: interval, tolerance: .milliseconds(100)) } catch { return }
                 guard !Task.isCancelled, let self else { break }
                 await self.handleSystemPlayerItemChanged(generation: self.systemPlayback.generation)
                 let epoch = await self.playbackEpoch
@@ -149,18 +167,32 @@ extension PlayerService {
                 let positionBeforeTick = await MainActor.run { self.state.position }
                 let seekState = await self.reconcilePendingSeek(engineProgress: progress)
                 let engineIsEstimate = await self.durationIsEstimate()
+                let preservesCatalog = await self.preservesCatalogDuration()
                 guard epoch == (await self.playbackEpoch), !Task.isCancelled else { continue }
+                if !seekState.isSettling, seekState.target != nil {
+                    // The progress loop can win settlement before the dedicated monitor.
+                    // It must publish the same atomic UI completion, rather than clear the
+                    // hint first and leave .recovering until some future clock increment.
+                    let producingAudio = await self.activeEngine.state == .playing
+                    await self.publishEnginePlaybackConfirmation(settledPosition: progress,
+                                                                 confirmsPlayback: producingAudio)
+                }
+                // A stream reconnect can reset its clock without ending the song. Recover
+                // before publishing zero, so neither the UI nor repeat-one treats it as EOF.
+                if !seekState.isSettling,
+                   await self.recoverUnexpectedProgressReset(progress: progress) { continue }
                 await MainActor.run {
-                    guard !isHandingOver, self.state.currentTrack?.id == trackID else { return }
+                    guard !Task.isCancelled, !isHandingOver, self.state.currentTrack?.id == trackID else { return }
                     let cur = self.state.isLiveStream ? 0 : PlaybackDurationPolicy.resolve(
                         catalog: self.state.currentTrack?.duration ?? 0,
                         engine: audioDuration,
-                        engineIsEstimate: engineIsEstimate
+                        engineIsEstimate: engineIsEstimate,
+                        preserveCatalog: preservesCatalog
                     )
                     if abs(self.state.duration - cur) > 0.5 || !self.state.duration.isFinite {
                         self.state.duration = cur
                     }
-                    if !seekState.isSettling {
+                    if !seekState.isSettling, self.state.pendingSeekPosition == nil {
                         let clamped = cur > 0 ? min(progress, cur) : progress
                         if self.state.position != clamped {
                             self.state.position = clamped
@@ -171,7 +203,7 @@ extension PlayerService {
                         self.state.isSeekable = canSeek
                     }
                 }
-                guard epoch == (await self.playbackEpoch), !isHandingOver else { continue }
+                guard epoch == (await self.playbackEpoch), !Task.isCancelled, !isHandingOver else { continue }
                 // Advancing media time confirms audio after startup, buffering or recovery.
                 // A seek clock jump is excluded until the seek has settled.
                 if !seekState.isSettling, progress > positionBeforeTick + 0.05 {
@@ -182,6 +214,7 @@ extension PlayerService {
                 }
                 guard epoch == (await self.playbackEpoch), !Task.isCancelled else { continue }
                 await self.checkSustainedPlaybackStall(progress: progress)
+                await self.ensureGaplessPreparation()
                 let publishedProgress = seekState.isSettling
                     ? (seekState.target ?? progress)
                     : progress
@@ -190,37 +223,82 @@ extension PlayerService {
                 await self.checkPrefetchThreshold()
                 await self.checkAutomaticDownload()
                 await self.checkFadeOutThreshold()
-                await self.ensureGaplessPreparation()
             }
         }
+    }
+
+    func recoverUnexpectedProgressReset(progress: Double) async -> Bool {
+        guard pendingRestoreInfo == nil, !isTrackTransitionPending, seekState == .idle,
+              Self.didEngineProgressWrap(previous: lastObservedEngineProgress, current: progress) else { return false }
+        let epoch = playbackEpoch
+        let previous = lastObservedEngineProgress
+        let request = seekRequestGeneration
+        let commandID = transportCommandID
+        let snapshot = await MainActor.run { (state.duration, state.playbackState.hasPlaybackIntent, state.isLiveStream) }
+        guard epoch == playbackEpoch, request == seekRequestGeneration, commandID == transportCommandID,
+              !Task.isCancelled, snapshot.1, !snapshot.2,
+              !gaplessBridge.wasSelected,
+              !Self.isClockResetNearEnd(previous: previous, duration: snapshot.0) else { return false }
+        await recoverUnexpectedStreamReset(position: previous)
+        return true
+    }
+
+    nonisolated static func isClockResetNearEnd(previous: Double, duration: Double) -> Bool {
+        duration.isFinite && duration > 0 && previous >= duration - 1
     }
 
     private func durationIsEstimate() -> Bool {
         !systemPlayback.isActive || currentSource.map(AudioQualityClassifier.isLossyTranscodeStream) == true
     }
 
-    private func reconcilePendingSeek(engineProgress: TimeInterval) -> (isSettling: Bool, target: TimeInterval?) {
-        switch seekState.reconcile(progress: engineProgress, now: Date()) {
+    private func preservesCatalogDuration() -> Bool {
+        currentSource?.supportsTranscodeOffset == true
+            || currentSource.map(AudioQualityClassifier.isLossyTranscodeStream) == true
+    }
+
+    func reconcilePendingSeek(engineProgress: TimeInterval, allowsPausedOffset: Bool = false) -> (isSettling: Bool, target: TimeInterval?) {
+        guard !Task.isCancelled else { return (true, seekState.target) }
+        // An offset is our requested origin, not proof that the new response has produced
+        // audio. Keep the target pinned until its own media clock actually advances.
+        if systemPlayback.isActive, systemEngine.isSeeking || systemEngine.lastSeekFailed {
+            return (true, seekState.target)
+        }
+        if !allowsPausedOffset, currentSource?.supportsTranscodeOffset == true,
+           activeEngine.progress <= 0.05,
+           case .settling(let target, let deadline) = seekState, Date() < deadline {
+            return (true, target)
+        }
+        // A broad server-segment tolerance can accept a local parser's old clock, especially
+        // for short backwards seeks. Local files can land accurately without that concession.
+        let tolerance: TimeInterval = currentSource?.isLocal == true || seekBufferURL != nil ? 0.15 : 2.5
+        switch seekState.reconcile(progress: engineProgress, now: Date(), tolerance: tolerance) {
         case .inactive:
             return (false, nil)
         case .waiting(let target):
             return (true, target)
         case .finished(let target, let landed):
             lastObservedEngineProgress = engineProgress
+            if landed { systemPlayback.seekSettleDeadline = .distantPast }
             if !landed {
+                seekState = .settling(target: target, deadline: Date().addingTimeInterval(600))
+                let generation = systemPlayback.generation
+                Task { [weak self] in await self?.recoverFailedSeek(target: target, failedGeneration: generation) }
                 Logger.player.warning(
                     "[SEEK] engine did not reach target in time target=\(target, format: .fixed(precision: 1))s engine=\(engineProgress, format: .fixed(precision: 1))s"
                 )
             }
-            return (false, target)
+            return (!landed, target)
         }
     }
 
     /// When AudioStreaming never reports EOF (common on AirPlay), advance from progress alone.
-    private func checkEndOfTrackFallback(progress: Double) async {
+    func checkEndOfTrackFallback(progress: Double) async {
+        let context = playbackContext
+        let request = seekRequestGeneration
         let (playbackState, duration, isLiveStream) = await MainActor.run {
             (state.playbackState, state.duration, state.isLiveStream)
         }
+        guard contextIsCurrent(context), request == seekRequestGeneration else { return }
         guard case .playing = playbackState, !isLiveStream, duration > 1 else {
             endOfTrackStallStartedAt = nil
             lastObservedEngineProgress = progress
@@ -287,7 +365,7 @@ extension PlayerService {
     private func checkSustainedPlaybackStall(progress: Double) async {
         let epoch = playbackEpoch
         let snapshot = await MainActor.run { (state.playbackState, state.isLiveStream) }
-        guard epoch == playbackEpoch else { return }
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
         let intendsToPlay = snapshot.0.hasPlaybackIntent
         let stalled = progressStallMonitor.observe(
             mediaTime: progress,

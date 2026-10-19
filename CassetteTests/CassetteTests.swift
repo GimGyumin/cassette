@@ -16,12 +16,21 @@ import Testing
 
 struct CassetteTests {
 
-    @Test func streamingSettings_dropsTheRetiredPlaybackRouteKey() {
-        // The Server Playback Method menu is gone, so a route written by an older build must not
-        // stay behind in UserDefaults where it could look like a live setting.
-        UserDefaults.standard.set("hls", forKey: "cassette.streaming.jellyfinRoute")
-        _ = StreamingSettings()
-        #expect(UserDefaults.standard.string(forKey: "cassette.streaming.jellyfinRoute") == nil)
+    @Test @MainActor func streamingSettings_persistsAndReloadsManualPlaybackRoute() throws {
+        let suite = "CassetteRouteTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = StreamingSettings(defaults: defaults)
+        #expect(settings.jellyfinRoute == .automatic)
+        settings.adaptiveCeiling = .aac128
+        settings.jellyfinRoute = .hls
+        #expect(settings.adaptiveCeiling == nil)
+        #expect(StreamingSettings(defaults: defaults).jellyfinRoute == .hls)
+        defaults.set("originalFile", forKey: "cassette.streaming.jellyfinRoute")
+        settings.reloadFromDefaults()
+        #expect(settings.jellyfinRoute == .originalFile)
+        defaults.set("unknown", forKey: "cassette.streaming.jellyfinRoute")
+        #expect(StreamingSettings(defaults: defaults).jellyfinRoute == .automatic)
     }
 
     @Test func streamingSettings_honorsLosslessSelection() {
@@ -42,6 +51,16 @@ struct CassetteTests {
         #expect(
             !PlayerService.didEngineProgressWrap(previous: 50, current: 45)
         )
+    }
+
+    @Test func albumArtworkFallbackPreservesExplicitAlternateCoversAndMetadata() {
+        let missing = DisplayableSong(id: "one", title: "One", albumId: "album", duration: 120, coverArtId: " ", bitRate: 1400)
+        let resolved = missing.withFallbackCoverArtID(" album-cover ")
+        #expect(resolved.explicitCoverArtId == "album-cover")
+        #expect(resolved.id == missing.id && resolved.duration == missing.duration && resolved.bitRate == missing.bitRate)
+        let alternate = DisplayableSong(id: "two", title: "Two", coverArtId: "different-cover")
+        #expect(alternate.withFallbackCoverArtID("album-cover") == alternate)
+        #expect(missing.withFallbackCoverArtID(" ") == missing)
     }
 
     @Test func displayableSong_normalizesMissingCoverIdentifier() {

@@ -13,6 +13,13 @@ struct SkeletonBlock: View {
     let cornerRadius: CGFloat
 
     @State private var isPulsing = false
+    @State private var isVisible = false
+    @State private var governor = PerformanceGovernor.shared
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var shouldAnimate: Bool {
+        isVisible && scenePhase == .active && governor.budget.allowsDecorativeMotion
+    }
 
     init(width: CGFloat? = nil, height: CGFloat, cornerRadius: CGFloat = 6) {
         self.width = width
@@ -24,10 +31,14 @@ struct SkeletonBlock: View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(Color.primary.opacity(isPulsing ? 0.10 : 0.05))
             .frame(width: width, height: height)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
-                    isPulsing = true
-                }
-            }
+            .onAppear { isVisible = true }
+            .onDisappear { isVisible = false; syncAnimation() }
+            .onChange(of: shouldAnimate) { _, _ in syncAnimation() }
+    }
+
+    private func syncAnimation() {
+        withAnimation(shouldAnimate ? .easeInOut(duration: 1.2).repeatForever(autoreverses: true) : nil) {
+            isPulsing = shouldAnimate
+        }
     }
 }

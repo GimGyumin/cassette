@@ -57,7 +57,7 @@ struct CrossfadeSettingsSection: View {
         } header: {
             SettingsSectionHeader(verbatim: String(localized: "Crossfade", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         } footer: {
-            Text(String(localized: "Smoothly blends the end of one track into the start of the next. Set to Off to disable.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            Text(String(localized: "Fades out the current track, then fades in the next. Tracks do not overlap. Fades are bypassed on Bluetooth and AirPlay routes. Set to Off to disable.", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
         }
     }
 

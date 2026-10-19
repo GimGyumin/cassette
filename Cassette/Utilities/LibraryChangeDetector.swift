@@ -13,6 +13,14 @@ import Foundation
 /// without `UserDefaults` or a server.
 nonisolated enum LibraryChangeDetector {
 
+    static let revalidationInterval: TimeInterval = 24 * 60 * 60
+
+    static func needsMetadataRefresh(lastIndexedAt: Date?, lastScan: Date?, now: Date = Date()) -> Bool {
+        guard let lastIndexedAt else { return true }
+        if let lastScan, lastScan > lastIndexedAt { return true }
+        return now.timeIntervalSince(lastIndexedAt) >= revalidationInterval
+    }
+
     /// Per-server storage key for the last-prepared media-file count.
     static func defaultsKey(serverId: UUID) -> String {
         "cassette.library.preparedCount.\(serverId.uuidString)"

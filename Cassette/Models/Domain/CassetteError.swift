@@ -23,6 +23,8 @@ nonisolated enum CassetteError: Error, Sendable {
     /// Header value contains \r, \n, or \0 — would enable header-splitting attacks.
     case invalidHeaderValue(key: String)
     case serverNotFound(id: UUID)
+    case seekUnavailable
+    case playbackMethodUnavailable
     case notImplemented
     /// Requested media is not downloaded and device is offline.
     case offlineUnavailable(songId: String)
@@ -31,6 +33,7 @@ nonisolated enum CassetteError: Error, Sendable {
     /// All album fetches failed while building the artist's full track list.
     case artistTracksUnavailable
     /// An operation exceeded its allowed time budget and was cancelled.
+    case playbackFailed(PlaybackFailure)
     case timeout
 }
 
@@ -63,6 +66,10 @@ extension CassetteError: LocalizedError {
             return "Header '\(key)' value contains invalid characters (\\r, \\n, or \\0 are not allowed)."
         case .serverNotFound(let id):
             return "No server found with ID \(id.uuidString)."
+        case .seekUnavailable:
+            return String(localized: "Unable to load audio at the requested position. Try seeking again.")
+        case .playbackMethodUnavailable:
+            return String(localized: "The selected server playback method is unavailable. Choose Automatic or OpenSubsonic, or check your server support.")
         case .notImplemented:
             return "This feature is not yet implemented."
         case .offlineUnavailable(let id):
@@ -71,6 +78,8 @@ extension CassetteError: LocalizedError {
             return "Your library is too small for Smart Shuffle. Try downloading more music or playing some tracks first."
         case .artistTracksUnavailable:
             return "Unable to load tracks for this artist. Please check your connection and try again."
+        case .playbackFailed(let failure):
+            return failure.errorDescription
         case .timeout:
             return "The operation timed out. Please check your connection and try again."
         }

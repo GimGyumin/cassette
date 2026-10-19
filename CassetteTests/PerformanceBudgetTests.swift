@@ -7,6 +7,29 @@ import Foundation
 /// reason.
 @Suite("PerformanceBudget")
 struct PerformanceBudgetTests {
+    @Test func warmArtworkStopsMotionWithoutDisablingLyricsOrGapless() {
+        let normal = budget()
+        let warm = budget(thermal: .fair)
+        #expect(normal.allowsArtworkMotion)
+        #expect(!warm.allowsArtworkMotion)
+        #expect(warm.allowsGaplessPrebuffer)
+        #expect(warm.lyricsTickIntervalNs(karaokePlayback: true) <= 50_000_000)
+        #expect(!budget(lowPower: true).allowsArtworkMotion)
+        #expect(!budget(active: false).allowsArtworkMotion)
+        #expect(!budget(memory: true).allowsArtworkMotion)
+    }
+
+    @Test func automaticTransfersYieldBeforePlaybackOrExplicitDownloads() {
+        for constrained in [budget(lowPower: true), budget(active: false), budget(thermal: .fair),
+                            budget(thermal: .serious), budget(memory: true)] {
+            #expect(!constrained.allowsAutomaticMediaDownloads)
+            #expect(constrained.maximumConcurrentDownloads == 1)
+        }
+        #expect(budget().allowsAutomaticMediaDownloads)
+        #expect(budget().maximumConcurrentDownloads == 3)
+        #expect(budget(lowPower: true).allowsGaplessPrebuffer)
+        #expect(budget(active: false).allowsGaplessPrebuffer)
+    }
     private func budget(
         thermal: ThermalPressure = .nominal,
         lowPower: Bool = false,
@@ -35,9 +58,9 @@ struct PerformanceBudgetTests {
         #expect(b.artworkPrefetchBatchSize == 3)
         #expect(b.artworkPrefetchPause == nil)
         #expect(b.meshFrameInterval == 1.0 / 12.0)
-        #expect(b.beatPublishInterval == 0.25)
-        #expect(b.lyricsTickIntervalNs(karaokePlayback: true) == 16_666_666)
-        #expect(b.lyricsTickIntervalNs(karaokePlayback: false) == 33_333_333)
+        #expect(b.beatPublishInterval == 0.05)
+        #expect(b.lyricsTickIntervalNs(karaokePlayback: true) == 33_333_333)
+        #expect(b.lyricsTickIntervalNs(karaokePlayback: false) == 100_000_000)
         #expect(!b.prefersCheapChrome)
         // Gapless pre-buffering is a core playback behaviour, so it stays on here.
         #expect(b.allowsGaplessPrebuffer)
@@ -53,8 +76,8 @@ struct PerformanceBudgetTests {
         #expect(b.artworkPrefetchPause != nil)
         #expect(b.beatPublishInterval == 0.40)
         #expect(b.meshFrameInterval == 1.0 / 8.0)
-        #expect(b.lyricsTickIntervalNs(karaokePlayback: true) == 33_333_333)
-        #expect(b.lyricsTickIntervalNs(karaokePlayback: false) == 50_000_000)
+        #expect(b.lyricsTickIntervalNs(karaokePlayback: true) == 50_000_000)
+        #expect(b.lyricsTickIntervalNs(karaokePlayback: false) == 150_000_000)
         #expect(!b.prefersCheapChrome)
         // Deliberate: Low Power Mode must not cost the user gapless playback (it is a listening
         // behaviour, not decoration) — the bridge usually reads an already-cached file.
@@ -67,8 +90,11 @@ struct PerformanceBudgetTests {
         // `fair` is "warm, still fine": visuals stay, background work slows down.
         #expect(fair.allowsDecorativeMotion)
         #expect(fair.allowsBeatVisuals)
-        #expect(fair.allowsHeavyColorAnalysis)
+        #expect(!fair.allowsHeavyColorAnalysis)
         #expect(fair.artworkPrefetchBatchSize == 2)
+        #expect(fair.artworkFramesPerSecond < budget().artworkFramesPerSecond)
+        #expect(fair.beatPublishInterval > budget().beatPublishInterval)
+        #expect(fair.lyricsTickIntervalNs(karaokePlayback: true) > budget().lyricsTickIntervalNs(karaokePlayback: true))
 
         let serious = budget(thermal: .serious)
         #expect(!serious.allowsDecorativeMotion)
@@ -95,6 +121,8 @@ struct PerformanceBudgetTests {
         #expect(!b.allowsHeavyColorAnalysis)
         #expect(!b.allowsArtworkPrefetch)
         #expect(b.prefersCheapChrome)
+        #expect(b.playbackProgressInterval == .seconds(1))
+        #expect(b.lyricsTickIntervalNs(karaokePlayback: true) == 1_000_000_000)
         #expect(b.allowsGaplessPrebuffer)
     }
 

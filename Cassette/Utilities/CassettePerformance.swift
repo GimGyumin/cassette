@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 import Foundation
+import Synchronization
 
 /// Lock-free read façade for the app-wide ``PerformanceBudget``.
 ///
@@ -16,16 +17,12 @@ import Foundation
 /// *re-render* on a policy change (Observation tracks that read); use these statics from services,
 /// view models and the audio thread.
 nonisolated enum CassettePerformance {
-    /// Written by `PerformanceGovernor.refresh()` on the MainActor. Scalars only, so a torn read
-    /// at worst yields one stale-but-valid value.
-    nonisolated(unsafe) private static var published: PerformanceBudget?
+    private static let published = PerformanceBudgetStore()
 
-    /// The governor publishes from `CassetteApp.init()`, before any view body runs; the
-    /// placeholder exists so pre-start reads (previews, tests, alternate entry points) cannot trap.
-    static var budget: PerformanceBudget { published ?? .placeholder }
+    static var budget: PerformanceBudget { published.load() }
 
     static func publish(_ budget: PerformanceBudget) {
-        published = budget
+        published.store(budget)
     }
 
     // MARK: - Chrome
@@ -76,5 +73,40 @@ nonisolated enum CassettePerformance {
     /// hot, in Low Power Mode, or backgrounded.
     static var forceLiquidGlass: Bool {
         UserDefaults.standard.bool(forKey: "cassette.forceLiquidGlass")
+    }
+}
+
+/// All six policy inputs fit in one atomic byte. Readers get one complete snapshot,
+/// without a lock or a data race on a multi-field Swift value.
+nonisolated final class PerformanceBudgetStore: Sendable {
+    private let bits: Atomic<UInt8>
+
+    init(_ budget: PerformanceBudget = .placeholder) {
+        bits = Atomic(Self.encode(budget))
+    }
+
+    func store(_ budget: PerformanceBudget) {
+        bits.store(Self.encode(budget), ordering: .relaxed)
+    }
+
+    func load() -> PerformanceBudget {
+        let value = bits.load(ordering: .relaxed)
+        return .make(
+            thermalPressure: ThermalPressure(rawValue: Int(value & 3)) ?? .nominal,
+            isLowPowerMode: value & 4 != 0,
+            isAppActive: value & 8 != 0,
+            reduceMotion: value & 16 != 0,
+            isMemoryPressured: value & 32 != 0,
+            liquidGlassOverride: value & 64 != 0
+        )
+    }
+
+    private static func encode(_ budget: PerformanceBudget) -> UInt8 {
+        UInt8(budget.thermalPressure.rawValue)
+            | (budget.isLowPowerMode ? 4 : 0)
+            | (budget.isAppActive ? 8 : 0)
+            | (budget.reduceMotion ? 16 : 0)
+            | (budget.isMemoryPressured ? 32 : 0)
+            | (budget.liquidGlassOverride ? 64 : 0)
     }
 }

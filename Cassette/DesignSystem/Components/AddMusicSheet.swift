@@ -336,6 +336,7 @@ private struct AddMusicAlbumList: View {
             case .recentlyAdded:  albums = try await svc.recentlyAddedAlbums(size: 100)
             case .recentlyPlayed: albums = try await svc.recentlyPlayedAlbums(size: 100)
             }
+            albums = await svc.presentedAlbums(albums)
             phase = albums.isEmpty ? .empty : .loaded
         } catch {
             Logger.library.error("[ADD-MUSIC] album list failed: \(error, privacy: .public)")
@@ -427,6 +428,7 @@ private struct AddMusicArtistAlbumList: View {
         phase = .loading
         do {
             albums = try await svc.artist(id: artistId).album ?? []
+            albums = await svc.presentedAlbums(albums)
             phase = albums.isEmpty ? .empty : .loaded
             allSongs = (try? await svc.fetchAllTracks(forArtistID: artistId)) ?? []
         } catch {

@@ -15,6 +15,9 @@ import SwiftSonic
 final class MockPlayerService: PlayerServiceProtocol {
     let state: PlayerState = PlayerState()
     var seekCalledWith: TimeInterval?
+    var seekDelay: Duration = .zero
+    var seekCompletedWith: TimeInterval?
+    var seekWasCancelled = false
 
     func play(tracks: [DisplayableSong], startIndex: Int) async throws {}
     func resume() async {}
@@ -22,7 +25,12 @@ final class MockPlayerService: PlayerServiceProtocol {
     func stop() async {}
     func skipToNext() async throws {}
     func skipToPrevious() async throws {}
-    func seek(to position: TimeInterval) async { seekCalledWith = position }
+    func seek(to position: TimeInterval) async {
+        seekCalledWith = position
+        try? await Task.sleep(for: seekDelay)
+        seekWasCancelled = Task.isCancelled
+        seekCompletedWith = position
+    }
     func setRepeatMode(_ mode: RepeatMode) async {}
     func toggleShuffle() async {}
     func appendToQueue(_ tracks: [DisplayableSong]) async {}
@@ -158,6 +166,23 @@ struct LyricsTrackingCacheTests {
 @Suite("Apple translation session lifecycle")
 @MainActor
 struct LyricsAppleTranslationSessionTests {
+    @Test func changedTranslationSettingsDiscardOldClientResult() async throws {
+        let (vm, _) = try makeViewModel(lyrics: syncedList())
+        await vm.load()
+        let original = try #require(vm.displayRows.first)
+        vm.replaceTranslatedLyrics([
+            TranslatedLyric(time: 0, originalText: original.text, translatedText: "이전 프롬프트 번역", isBlank: false, translationSource: .appleAPI)
+        ], reveal: true)
+        // Simulate a view model retained while the Settings screen changed its prompt.
+        vm.translationSettingsIdentity = ["previous configuration"]
+        let request = vm.appleTranslationRequestID
+        await vm.refreshTranslationSettingsIfNeeded()
+        #expect(vm.appleTranslationRequestID > request)
+        #expect(!vm.translatedLyrics.contains { $0.translatedText == "이전 프롬프트 번역" })
+        #expect(!vm.areTranslationsVisible)
+        #expect(vm.translationSettingsIdentity == LyricsTranslationSettings.shared.translationIdentity)
+    }
+
     @Test func ignoresOldAndInactiveSessions() throws {
         let (vm, _) = try makeViewModel()
         vm.appleTranslationRequestID = 2
@@ -347,6 +372,40 @@ struct LyricsViewModelUpdateTests {
 @Suite("LyricsViewModel — userTapped(lineIndex:)")
 @MainActor
 struct LyricsViewModelSeekTests {
+
+    @Test func lyricTapScrollsImmediatelyAndIgnoresOldCompletion() async throws {
+        let (vm, player) = try makeViewModel(lyrics: syncedList())
+        await vm.load()
+        player.seekDelay = .milliseconds(180)
+        vm.userTapped(lineIndex: 2)
+        #expect(vm.currentLineIndex == 2)
+        #expect(vm.pendingSeekScrollIndex == 2)
+        #expect(vm.interpolatedElapsedMs() == 2_000)
+        try await Task.sleep(for: .milliseconds(20))
+        player.seekDelay = .milliseconds(10)
+        vm.userTapped(lineIndex: 1)
+        #expect(vm.currentLineIndex == 1)
+        try await Task.sleep(for: .milliseconds(220))
+        #expect(vm.currentLineIndex == 1)
+        #expect(vm.lastDisplayedPositionMs == 1_000)
+        #expect(player.seekCalledWith == 1)
+    }
+
+    @Test func pendingFileSeekPinsLyricsDespiteStaleClockAndAllowsTinyBackwardsSeeks() async throws {
+        let (vm, _) = try makeViewModel(lyrics: syncedList())
+        await vm.load()
+        vm.playerState.position = 0
+        vm.playerState.pendingSeekPosition = 2
+        vm.synchronizeSeekClock(to: 2)
+        #expect(vm.currentLineIndex == 2)
+        for _ in 0..<5 { #expect(vm.interpolatedElapsedMs() == 2_000) }
+        vm.playerState.pendingSeekPosition = nil
+        vm.synchronizeSeekClock(to: 1.01)
+        #expect(vm.currentLineIndex == 1)
+        vm.synchronizeSeekClock(to: 0.99)
+        #expect(vm.currentLineIndex == 0)
+        #expect(vm.karaokePlaybackMs == 990)
+    }
 
     @Test func seeksSentWithCorrectTime() async throws {
         let id = UUID()
@@ -565,6 +624,86 @@ struct LyricsViewModelLoadTests {
         let (vm, _) = try makeViewModel(serverId: id, lyrics: empty)
         await vm.load()
         // applyCurrentLanguage with no structuredLyrics → .empty
+        #expect(vm.state == .empty)
+    }
+}
+
+@Suite("Release candidate lyrics language lifecycle")
+@MainActor
+struct LyricsLanguageLifecycleTests {
+    @Test func obsoleteFailuresDoNotPersistAcrossLanguageChanges() async throws {
+        let (vm, _) = try makeViewModel(lyrics: syncedList())
+        await vm.load()
+        vm.appleTranslationRequestID = 20
+        await vm.failAppleTranslation(message: "Old failure", requestID: 20)
+        #expect(vm.translationErrorMessage == "Old failure")
+        vm.invalidateTranslationWork()
+        #expect(vm.translationErrorMessage == nil)
+        await vm.failAppleTranslation(message: "Late failure", requestID: 20)
+        #expect(vm.translationErrorMessage == nil)
+        vm.translationErrorMessage = "Previous provider"
+        vm.clearTranslation()
+        #expect(vm.translationErrorMessage == nil)
+    }
+
+    @Test func serverSelectionRejectsThePreviousClientTranslation() async throws {
+        let (vm, _) = try makeViewModel()
+        let original = StructuredLyrics(lang: "en", synced: true, line: [Line(value: "Hello", start: 0)])
+        let french = StructuredLyrics(lang: "fr", synced: true,
+            line: [Line(value: "Bonjour", start: 0)], kind: .translation)
+        vm.lyricsList = LyricsList(structuredLyrics: [original, french])
+        vm.state = .loaded(original)
+        vm.appleTranslationRequestID = 10
+        vm.isTranslating = true
+        let oldWork = Task<Void, Error> { try await Task.sleep(for: .seconds(20)) }
+        defer { oldWork.cancel() }
+        vm.translationTask = oldWork
+        await vm.selectServerTranslation(lang: "fr")
+        await vm.applyAppleTranslation(["Obsolete"], chorusTexts: [], requestID: 10, trackID: vm.songId)
+        #expect(oldWork.isCancelled)
+        #expect(!vm.isTranslating)
+        #expect(vm.areTranslationsVisible)
+        #expect(vm.translatedLyrics.map(\.translatedText) == ["Bonjour"])
+    }
+
+    @Test func serverLanguageSwitchReplacesOnlyTranslationAndKeepsRowIdentity() async throws {
+        let (vm, _) = try makeViewModel()
+        let original = StructuredLyrics(lang: "en", synced: true,
+            line: [Line(value: "Hello", start: 0), Line(value: "Goodbye", start: 1000)])
+        let french = StructuredLyrics(lang: "fr", synced: true,
+            line: [Line(value: "Bonjour", start: 0), Line(value: "Au revoir", start: 1000)], kind: .translation)
+        let korean = StructuredLyrics(lang: "ko", synced: true,
+            line: [Line(value: "안녕", start: 0), Line(value: "잘 가", start: 1000)], kind: .translation)
+        vm.lyricsList = LyricsList(structuredLyrics: [original, french, korean])
+        vm.state = .loaded(original)
+        await vm.selectServerTranslation(lang: "fr")
+        #expect(vm.translatedLyrics.map(\.translatedText) == ["Bonjour", "Au revoir"])
+        let ids = vm.translatedLyrics.map(\.id)
+        await vm.selectServerTranslation(lang: "ko")
+        #expect(vm.translatedLyrics.map(\.translatedText) == ["안녕", "잘 가"])
+        #expect(vm.translatedLyrics.map(\.id) == ids)
+        #expect(vm.translatedLyrics.map(\.originalText) == ["Hello", "Goodbye"])
+    }
+
+    @Test func staleAppleResultCannotCancelTheCurrentWatchdog() async throws {
+        let (vm, _) = try makeViewModel()
+        vm.appleTranslationRequestID = 2
+        vm.isTranslating = true
+        let watchdog = Task<Void, Never> { try? await Task.sleep(for: .seconds(20)) }
+        defer { watchdog.cancel() }
+        vm.appleTranslationTimeoutTask = watchdog
+        await vm.applyAppleTranslation([], chorusTexts: [], requestID: 1, trackID: vm.songId)
+        #expect(!watchdog.isCancelled)
+        #expect(vm.appleTranslationTimeoutTask != nil)
+        #expect(vm.isTranslating)
+    }
+
+    @Test func cancelledLoadDoesNotChangeTheExistingPresentation() async throws {
+        let (vm, _) = try makeViewModel(lyrics: syncedList())
+        vm.state = .empty
+        let task = Task { await vm.load() }
+        task.cancel()
+        await task.value
         #expect(vm.state == .empty)
     }
 }

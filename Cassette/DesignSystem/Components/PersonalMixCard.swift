@@ -5,79 +5,100 @@
 
 import SwiftUI
 
-/// Tall portrait card for Home “Made for You” personal mixes.
-struct PersonalMixCard: View {
-    let mix: PersonalMix
+/// A square, locally rendered cover; every surface uses the same mix identity and palette.
+struct PersonalMixArtwork: View {
+    let kind: PersonalMixKind
+    var showsTitle = true
+    var showsSymbol = false
 
-    static let cardWidth: CGFloat = 168
-    static let cardHeight: CGFloat = 230
+    private var symbol: String {
+        switch kind {
+        case .getUp: "figure.run"
+        case .chill: "moon.stars.fill"
+        case .focus: "sparkles"
+        case .newMusic: "music.note"
+        case .heavyRotation: "repeat"
+        case .essentials: "star.fill"
+        }
+    }
+
+    private var colors: [Color] {
+        if kind == .getUp {
+            return ["#FF9164", "#F9AD51", "#DF5379", "#EF6A55", "#82BBD4", "#F4915A", "#AF242A", "#5964AB", "#F57B39"].map { Color(hex: $0) }
+        }
+        let top = Color(hex: kind.gradientHexes.top), bottom = Color(hex: kind.gradientHexes.bottom)
+        return [top.adjusted(hue: -0.10, brightness: 0.12), top, top.adjusted(hue: 0.16),
+                top.adjusted(hue: 0.20), bottom.adjusted(brightness: 0.18), top,
+                bottom, bottom.adjusted(hue: 0.15), bottom]
+    }
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            LinearGradient(
-                colors: [
-                    Color(hex: mix.kind.gradientHexes.top),
-                    Color(hex: mix.kind.gradientHexes.bottom)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text(String(localized: String.LocalizationValue(mix.kind.localizationKey), bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
+        ZStack {
+            MeshGradient(width: 3, height: 3,
+                points: [[0, 0], [0.5, 0], [1, 0], [0, 0.5], [0.5, 0.5], [1, 0.5], [0, 1], [0.5, 1], [1, 1]],
+                colors: colors)
+            if showsSymbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 56, weight: .medium))
                     .foregroundStyle(.white)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(3)
-                    .minimumScaleFactor(0.75)
-                    .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-
-                Spacer(minLength: CassetteSpacing.m)
-
-                if !mix.artistNames.isEmpty {
-                    Text(mix.artistNames.joined(separator: ", "))
-                        .font(.cassetteCaption)
-                        .foregroundStyle(.white.opacity(0.9))
+            } else if showsTitle {
+                VStack(alignment: .leading) {
+                    Text("Cassette")
+                        .font(.headline.bold())
+                    Spacer(minLength: 16)
+                    Text(String(localized: String.LocalizationValue(kind.localizationKey), bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                        .font(.system(.largeTitle, weight: .bold))
                         .lineLimit(3)
-                        .multilineTextAlignment(.leading)
+                        .minimumScaleFactor(0.7)
                 }
+                .foregroundStyle(.white)
+                .padding(18)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
-            .padding(CassetteSpacing.m)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(width: Self.cardWidth, height: Self.cardHeight)
-        .clipShape(RoundedRectangle(cornerRadius: CassetteCornerRadius.large, style: .continuous))
-        .accessibilityLabel(Text(String(localized: String.LocalizationValue(mix.kind.localizationKey), bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)))
-        .accessibilityHint(Text(String(localized: "Open playlist", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)))
     }
 }
 
-/// Horizontal shelf of personal mix portrait cards.
-struct PersonalMixShelf: View {
-    let mixes: [PersonalMix]
+struct PersonalMixCard: View {
+    let mix: PersonalMix
+    static let cardWidth: CGFloat = 250
+    static let cardHeight: CGFloat = 324
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CassetteSpacing.s) {
-            Text(String(localized: "Made for You", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-                .font(.cassetteSectionTitle)
+        VStack(alignment: .leading, spacing: 8) {
+            PersonalMixArtwork(kind: mix.kind)
+                .frame(width: Self.cardWidth, height: Self.cardWidth)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Text(String(localized: String.LocalizationValue(mix.kind.localizationKey), bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(String(localized: "Updated \(mix.updatedAt.formatted(.relative(presentation: .named)))", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                Text(CassetteCountLabel.tracks(mix.tracks.count))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .frame(width: Self.cardWidth, alignment: .leading)
+        .accessibilityHint(Text("Open playlist"))
+    }
+}
 
+/// Compatibility shelf; generated mixes navigate to PlaylistDetailView via HomeDestination.
+struct PersonalMixShelf: View {
+    let mixes: [PersonalMix]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Your Playlists").font(.title2.bold())
             ScrollView(.horizontal, showsIndicators: false) {
-                // Eager HStack (≤5 cards) — LazyHStack in a horizontal ScrollView often reports
-                // height 0 during rotation / background, which triggers UIKit “Conversion error!”
-                // with frames like {{0,1024},{1366,0}}.
-                HStack(spacing: CassetteSpacing.m) {
+                HStack(alignment: .top, spacing: 12) {
                     ForEach(mixes) { mix in
-                        NavigationLink(value: HomeDestination.personalMix(mix.kind)) {
-                            PersonalMixCard(mix: mix)
-                        }
-                        .buttonStyle(.plain)
+                        NavigationLink(value: HomeDestination.personalMix(mix.kind)) { PersonalMixCard(mix: mix) }
+                            .buttonStyle(.plain)
                     }
                 }
-                .frame(height: PersonalMixCard.cardHeight)
-                .padding(.vertical, 1)
             }
-            .frame(height: PersonalMixCard.cardHeight + 2)
-            .clipped()
         }
     }
 }

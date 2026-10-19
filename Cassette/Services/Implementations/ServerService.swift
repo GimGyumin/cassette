@@ -18,6 +18,8 @@ actor ServerService: ServerServiceProtocol {
     /// Joins concurrent Keychain+URLSession client builds — cold start used to stampede this.
     private var clientGeneration: UInt64 = 0
     private var clientInFlight: Task<SwiftSonicClient, Error>?
+    private var clientInFlightIdentity: ServerRequestIdentity?
+    private var cachedClientIdentity: ServerRequestIdentity?
     /// Reused client for the current active server, so playback state transitions and
     /// periodic reports do not rebuild Keychain + URLSession every time.
     private var cachedClient: SwiftSonicClient?
@@ -366,31 +368,41 @@ actor ServerService: ServerServiceProtocol {
     }
 
     func makeSwiftSonicClient() async throws -> SwiftSonicClient {
-        if let cachedClient, let cachedClientServerID,
-           await MainActor.run(body: { state.activeServer?.id }) == cachedClientServerID {
-            return cachedClient
+        let (snapshot, identity) = try await MainActor.run {
+            guard let snapshot = state.activeServer else { throw CassetteError.serverNotConfigured }
+            return (snapshot, try state.requestIdentity(for: snapshot.id))
         }
-        if let clientInFlight {
-            return try await clientInFlight.value
+        if let cachedClient, cachedClientIdentity == identity { return cachedClient }
+        if let clientInFlight, clientInFlightIdentity == identity {
+            let generation = clientGeneration
+            let client = try await clientInFlight.value
+            try Task.checkCancellation()
+            guard await MainActor.run(body: { state.requestIsCurrent(identity) }),
+                  generation == clientGeneration else { throw CancellationError() }
+            return client
         }
+        clientGeneration &+= 1
+        clientInFlight?.cancel()
         let generation = clientGeneration
-        let serverID = await MainActor.run { state.activeServer?.id }
-        let task = Task {
-            try await self.buildSwiftSonicClient()
-        }
+        let task = Task { try await self.buildSwiftSonicClient(snapshot: snapshot) }
         clientInFlight = task
+        clientInFlightIdentity = identity
         do {
             let client = try await task.value
-            guard generation == clientGeneration,
-                  await MainActor.run(body: { state.activeServer?.id }) == serverID else {
-                throw CancellationError()
-            }
+            try Task.checkCancellation()
+            guard await MainActor.run(body: { state.requestIsCurrent(identity) }),
+                  generation == clientGeneration else { throw CancellationError() }
             clientInFlight = nil
+            clientInFlightIdentity = nil
             cachedClient = client
-            cachedClientServerID = serverID
+            cachedClientServerID = identity.serverID
+            cachedClientIdentity = identity
             return client
         } catch {
-            if generation == clientGeneration { clientInFlight = nil }
+            if generation == clientGeneration {
+                clientInFlight = nil
+                clientInFlightIdentity = nil
+            }
             throw error
         }
     }
@@ -428,14 +440,7 @@ actor ServerService: ServerServiceProtocol {
         }
     }
 
-    private func buildSwiftSonicClient() async throws -> SwiftSonicClient {
-        let snapshot = await MainActor.run { state.activeServer }
-        Logger.server.debug("makeSwiftSonicClient — activeServer=\(String(describing: snapshot?.baseURL), privacy: .public)")
-        guard let snapshot else {
-            Logger.server.error("makeSwiftSonicClient: activeServer is nil → serverNotConfigured")
-            throw CassetteError.serverNotConfigured
-        }
-
+    private func buildSwiftSonicClient(snapshot: ServerSnapshot) async throws -> SwiftSonicClient {
         let creds = try await keychain.retrieve(
             ServerCredentials.self,
             forKey: ServerCredentials.keychainKey(for: snapshot.id)

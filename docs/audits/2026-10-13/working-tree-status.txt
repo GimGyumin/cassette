@@ -1,0 +1,201 @@
+ M .github/workflows/ci.yml
+ M CONTRIBUTING.md
+ M Cassette.xcodeproj/project.pbxproj
+ M Cassette.xcodeproj/xcshareddata/xcschemes/Cassette.xcscheme
+ M Cassette.xcodeproj/xcshareddata/xcschemes/CassetteTests.xcscheme
+ M Cassette.xcodeproj/xcshareddata/xcschemes/CassetteUITests.xcscheme
+ M Cassette/App/AppContainer+Logout.swift
+ M Cassette/App/AppContainer.swift
+ M Cassette/App/CassetteApp.swift
+ M Cassette/DesignSystem/Components/AddMusicSheet.swift
+ M Cassette/DesignSystem/Components/ItemContextMenus.swift
+ M Cassette/DesignSystem/Components/LoadingStateView.swift
+ M Cassette/DesignSystem/Components/MeshGradientBackground.swift
+ M Cassette/DesignSystem/Components/MiniPlayerBottomMargin.swift
+ M Cassette/DesignSystem/Components/NowPlayingBarsIndicator.swift
+ M Cassette/DesignSystem/SkeletonBlock.swift
+ M Cassette/Localizable.xcstrings
+ M Cassette/Models/Domain/AudioQualityInfo.swift
+ M Cassette/Models/Domain/CacheFormat.swift
+ M Cassette/Models/Domain/CassetteError.swift
+ M Cassette/Models/Domain/DisplayableSong.swift
+ M Cassette/Models/Domain/DownloadedAlbumDisplay.swift
+ M Cassette/Models/Domain/MediaSource.swift
+ M Cassette/Models/Domain/PlaybackDecisionPolicy.swift
+ M Cassette/Models/Domain/PlaybackDetails.swift
+ M Cassette/Models/Domain/PlaybackDurationPolicy.swift
+ M Cassette/Models/Domain/PlaybackState.swift
+ M Cassette/Models/LyricsTranslationSettings.swift
+ M Cassette/Models/Persistence/DownloadedAlbum.swift
+ M Cassette/Models/Persistence/DownloadedTrack.swift
+ M Cassette/Models/Persistence/PinnedItem.swift
+ M Cassette/ObservableState/PlayerState.swift
+ M Cassette/ObservableState/ServerState.swift
+ M Cassette/ObservableState/StreamingSettings.swift
+ M Cassette/Services/AppleTranslator.swift
+ M Cassette/Services/Implementations/AlbumCoverPreloadService.swift
+ M Cassette/Services/Implementations/ArtworkImageCache.swift
+ M Cassette/Services/Implementations/ArtworkLoader.swift
+ M Cassette/Services/Implementations/AudioFaststartRemuxer.swift
+ M Cassette/Services/Implementations/AudioResponseValidator.swift
+ M Cassette/Services/Implementations/CacheService.swift
+ M Cassette/Services/Implementations/CassetteBackgroundDownloads.swift
+ M Cassette/Services/Implementations/DownloadService.swift
+ M Cassette/Services/Implementations/FavoritesService.swift
+ M Cassette/Services/Implementations/LibraryIndexService.swift
+ M Cassette/Services/Implementations/LibraryService.swift
+ M Cassette/Services/Implementations/MediaIdentityService.swift
+ M Cassette/Services/Implementations/MediaResolver.swift
+ M Cassette/Services/Implementations/NowPlayingService+Commands.swift
+ M Cassette/Services/Implementations/NowPlayingService.swift
+ M Cassette/Services/Implementations/PinService.swift
+ M Cassette/Services/Implementations/PlaybackSessionService.swift
+ M Cassette/Services/Implementations/PlayerService+AudioSession.swift
+ M Cassette/Services/Implementations/PlayerService+Controls.swift
+ M Cassette/Services/Implementations/PlayerService+Crossfade.swift
+ M Cassette/Services/Implementations/PlayerService+Details.swift
+ M Cassette/Services/Implementations/PlayerService+Engine.swift
+ M Cassette/Services/Implementations/PlayerService+Gapless.swift
+ M Cassette/Services/Implementations/PlayerService+NowPlaying.swift
+ M Cassette/Services/Implementations/PlayerService+Progress.swift
+ M Cassette/Services/Implementations/PlayerService+Queue.swift
+ M Cassette/Services/Implementations/PlayerService+Radio.swift
+ M Cassette/Services/Implementations/PlayerService+Reporting.swift
+ M Cassette/Services/Implementations/PlayerService+Session.swift
+ M Cassette/Services/Implementations/PlayerService+Transition.swift
+ M Cassette/Services/Implementations/PlayerService.swift
+ M Cassette/Services/Implementations/PlaylistService.swift
+ M Cassette/Services/Implementations/RadioService.swift
+ M Cassette/Services/Implementations/ServerService.swift
+ M Cassette/Services/Implementations/SiriCatalogService.swift
+ M Cassette/Services/Implementations/StorageManagementService.swift
+ M Cassette/Services/Implementations/WidgetSyncService.swift
+ M Cassette/Services/Lyrics/AppleLyricTTMLParser.swift
+ M Cassette/Services/LyricsTranslationService.swift
+ M Cassette/Services/Playback/AVPlayerPlaybackEngine.swift
+ M Cassette/Services/Playback/AudioStreamingPlayerEngine.swift
+ M Cassette/Services/Playback/CassetteMediaSessionController.swift
+ M Cassette/Services/Playback/PlaybackBeatMeter.swift
+ M Cassette/Services/Playback/PlaybackBufferPolicy.swift
+ M Cassette/Services/Protocols/DownloadServiceProtocol.swift
+ M Cassette/Services/Protocols/FavoritesServiceProtocol.swift
+ M Cassette/Services/Protocols/LibraryServiceProtocol.swift
+ M Cassette/Services/Protocols/MediaResolverProtocol.swift
+ M Cassette/Services/Protocols/PinServiceProtocol.swift
+ M Cassette/Services/Protocols/PlayerServiceProtocol.swift
+ M Cassette/Services/Protocols/ServerServiceProtocol.swift
+ M Cassette/Services/Recommendations/PersonalMixService.swift
+ M Cassette/Utilities/CassettePerformance.swift
+ M Cassette/Utilities/LyricWordKaraokeLine.swift
+ M Cassette/Utilities/PerformanceGovernor.swift
+ M Cassette/ViewModels/AlbumDetailViewModel.swift
+ M Cassette/ViewModels/AlbumListViewModel.swift
+ M Cassette/ViewModels/ArtistDetailViewModel.swift
+ M Cassette/ViewModels/FullPlayerViewModel.swift
+ M Cassette/ViewModels/HomeViewModel.swift
+ M Cassette/ViewModels/LyricsViewModel+Chorus.swift
+ M Cassette/ViewModels/LyricsViewModel+Display.swift
+ M Cassette/ViewModels/LyricsViewModel+Seeding.swift
+ M Cassette/ViewModels/LyricsViewModel+Tracking.swift
+ M Cassette/ViewModels/LyricsViewModel+Translation.swift
+ M Cassette/ViewModels/LyricsViewModel.swift
+ M Cassette/ViewModels/PlaylistDetailViewModel.swift
+ M Cassette/ViewModels/SearchViewModel.swift
+ M Cassette/ViewModels/SongsListViewModel.swift
+ M Cassette/Views/Browse/AlbumDetailView+Header.swift
+ M Cassette/Views/Browse/AlbumDetailView.swift
+ M Cassette/Views/Browse/ArtistDetailView.swift
+ M Cassette/Views/Browse/CoverArtView.swift
+ M Cassette/Views/Browse/SongsListView.swift
+ M Cassette/Views/LyricsView.swift
+ M Cassette/Views/Main/FullPlayerView.swift
+ M Cassette/Views/Main/HomeView.swift
+ M Cassette/Views/Main/MiniPlayerAccessoryView.swift
+ D Cassette/Views/Main/Player/BeatReactiveBackgroundView.swift
+ M Cassette/Views/Main/Player/PlayerTransportControls.swift
+ M Cassette/Views/Main/RootView.swift
+ M Cassette/Views/Main/SearchResultsList.swift
+ M Cassette/Views/Main/SearchTabContent.swift
+ M Cassette/Views/Onboarding/EssentialSupportPreparationView.swift
+ M Cassette/Views/Platform/macOS/AlbumDetailMacOS.swift
+ M Cassette/Views/Platform/macOS/CassetteSettingsScene.swift
+ M Cassette/Views/Platform/macOS/FullPlayerExpandedView.swift
+ M Cassette/Views/Platform/macOS/MacLyricsSidePanel.swift
+ M Cassette/Views/Settings/Screens/AudioQualitySettingsView.swift
+ M Cassette/Views/Settings/Screens/CurrentPlaybackSettingsView.swift
+ M Cassette/Views/Settings/Screens/LyricsSettingsView.swift
+ M CassetteTests/AlbumDetailOfflineTests.swift
+ M CassetteTests/CassetteTests.swift
+ M CassetteTests/DownloadedPlayerArtworkTests.swift
+ M CassetteTests/LyricsViewModelTests.swift
+ M CassetteTests/MediaIdentityCompatibilityTests.swift
+ M CassetteTests/NowPlayingArtworkLoaderTests.swift
+ M CassetteTests/OfflineDownloadRoundTripTests.swift
+ M CassetteTests/OnboardingViewModelTests.swift
+ M CassetteTests/PerformanceBudgetTests.swift
+ M CassetteTests/PlaybackBeatMeterTests.swift
+ M CassetteTests/PlaybackBufferPolicyTests.swift
+ M CassetteTests/PlaybackControlAppearanceTests.swift
+ M CassetteTests/PlaybackDetailsTests.swift
+ M CassetteTests/PlaybackDurationPolicyTests.swift
+ M CassetteTests/PlaybackRequestCancellationTests.swift
+ M CassetteTests/SearchViewModelDebounceTests.swift
+ M CassetteTests/ServerServiceTests.swift
+ M CassetteTests/TranscodeSeekTests.swift
+ M docs/ARCHITECTURE.md
+ M docs/RESPONSIVENESS_AND_AAC_PLAYBACK.md
+?? Cassette/Models/Domain/AtmosVariantCatalogue.swift
+?? Cassette/Models/Domain/LyricTranslationFailure.swift
+?? Cassette/Services/AppleIntelligenceLyricsTranslator.swift
+?? Cassette/Services/Implementations/AACDownloadEncoder.swift
+?? Cassette/Services/Implementations/BackgroundDownloadJournal.swift
+?? Cassette/Services/Implementations/DownloadBatchRunner.swift
+?? Cassette/Services/Implementations/NowPlayingBackgroundPreparation.swift
+?? Cassette/Services/Implementations/PlayerService+Seeking.swift
+?? Cassette/Services/OnDeviceLyricTranslation.swift
+?? Cassette/Services/Playback/NativePlaybackMeterTap.swift
+?? Cassette/Services/Playback/PlaybackCheckpointScheduler.swift
+?? Cassette/Views/Main/Player/AppleMusicLyricsBackground.swift
+?? Cassette/Views/Main/Player/ArtworkRendererPreparation.swift
+?? Cassette/Views/Main/Player/ArtworkSceneMotion.swift
+?? Cassette/Views/Main/Player/ArtworkSceneTextureCache.swift
+?? Cassette/Views/Main/Player/LyricsArtwork.metal
+?? Cassette/Views/Main/Player/LyricsArtworkGPU.swift
+?? Cassette/Views/Settings/Screens/AtmosVersionSelectionView.swift
+?? Cassette/Views/Settings/Screens/ServerPlaybackMethodSelectionView.swift
+?? CassetteTests/AccountAndPlaybackRegressionTests.swift
+?? CassetteTests/AppleIntelligencePromptTests.swift
+?? CassetteTests/ArtworkRendererPreparationTests.swift
+?? CassetteTests/ArtworkSceneTests.swift
+?? CassetteTests/AtmosVariantTests.swift
+?? CassetteTests/BackgroundDownloadRecoveryTests.swift
+?? CassetteTests/Fixtures/SilentAAC.adts
+?? CassetteTests/Fixtures/SilentMP3.mp3
+?? CassetteTests/GaplessContinuityTests.swift
+?? CassetteTests/IsolationAndOfflineRegressionTests.swift
+?? CassetteTests/LocalSeekSmoothnessTests.swift
+?? CassetteTests/LyricTranslationFailureTests.swift
+?? CassetteTests/LyricsPresentationRegressionTests.swift
+?? CassetteTests/NativePlaybackMeterTests.swift
+?? CassetteTests/OnDeviceLyricTranslationTests.swift
+?? CassetteTests/PlaybackRecoveryPositionTests.swift
+?? CassetteTests/RCAuditRegressionTests.swift
+?? CassetteTests/ReleaseCandidateRegressionTests.swift
+?? CassetteTests/SeekAndAACDownloadRegressionTests.swift
+?? CassetteTests/TranscodeHTTPSeekTests.swift
+?? CassetteUITests/ListeningJourneyUITests.swift
+?? ci_scripts/test_ui_fixture_server.py
+?? ci_scripts/ui_fixture_server.py
+?? docs/ARTWORK_LYRICS_BACKGROUND.md
+?? docs/ATMOS_VARIANTS.md
+?? docs/ENERGY_PLAYBACK_AND_TRANSLATION_PROMPTS.md
+?? docs/GAPLESS_TRANSITION_FIX.md
+?? docs/LYRICS_PRESENTATION_AND_AUDIO_INDICATOR.md
+?? docs/RC_ACCOUNT_AND_PLAYBACK_FIXES.md
+?? docs/RC_AUDIT_FIXES.md
+?? docs/RC_FOLLOWUP_AUDIT.md
+?? docs/RC_ISOLATION_AND_OFFLINE_FIXES.md
+?? docs/RELEASE_CANDIDATE_AUDIT.md
+?? docs/RELEASE_HARDENING.md
+?? docs/audits/
+?? docs/image.png

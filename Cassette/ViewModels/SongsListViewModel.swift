@@ -46,8 +46,10 @@ final class SongsListViewModel {
     private let modelContainer: ModelContainer?
     /// Supplies the active server id for the local downloads lookup.
     private let serverState: ServerState?
+    private let downloadService: (any DownloadServiceProtocol)?
 
     private let pageSize = 500
+    private var requestGeneration: UInt64 = 0
     private var offset = 0
     private var libraryHasMore = true
     /// Songs of the active filter before sorting (library pages, starred songs, or local downloads).
@@ -61,11 +63,13 @@ final class SongsListViewModel {
     init(
         libraryService: any LibraryServiceProtocol,
         modelContainer: ModelContainer? = nil,
-        serverState: ServerState? = nil
+        serverState: ServerState? = nil,
+        downloadService: (any DownloadServiceProtocol)? = nil
     ) {
         self.libraryService = libraryService
         self.modelContainer = modelContainer
         self.serverState = serverState
+        self.downloadService = downloadService
     }
 
     // MARK: - Loading
@@ -73,39 +77,51 @@ final class SongsListViewModel {
     /// Reloads the active source from its origin (page 0 for the library, a fresh fetch otherwise).
     func load() async {
         guard !isLoading else { return }
+        requestGeneration &+= 1
+        let generation = requestGeneration
+        let requestedFilter = filter
+        let requestedServer = serverState?.activeServer?.id
         isLoading = true
+        defer { if generation == requestGeneration { isLoading = false } }
         error = nil
-        refreshLocalTracks()
+        await refreshLocalTracks()
+        guard isCurrent(generation, filter: requestedFilter, server: requestedServer) else { return }
 
         switch filter {
         case .allSongs:
             offset = 0
             do {
                 let page = try await libraryService.librarySongs(offset: 0, count: pageSize)
+                guard isCurrent(generation, filter: requestedFilter, server: requestedServer) else { return }
                 rawSongs = page
                 offset = page.count
                 libraryHasMore = page.count == pageSize
                 addedDates = Self.addedDates(from: page)
                 source = page.map { DisplayableSong(from: $0) }
             } catch {
+                guard isCurrent(generation, filter: requestedFilter, server: requestedServer) else { return }
                 self.error = UserFacingError.from(error)
             }
         case .favorites:
-            await reloadStarredSongs()
+            await reloadStarredSongs(generation: generation, server: requestedServer)
         case .downloads:
             applyLocalTrackSource()
         }
 
+        guard isCurrent(generation, filter: requestedFilter, server: requestedServer) else { return }
         hasMore = filter == .allSongs && libraryHasMore
         rebuild()
-        isLoading = false
     }
 
     func loadMoreIfNeeded() async {
         guard filter == .allSongs, !isLoading, !isLoadingMore, libraryHasMore else { return }
+        let generation = requestGeneration
+        let requestedServer = serverState?.activeServer?.id
         isLoadingMore = true
+        defer { if generation == requestGeneration { isLoadingMore = false } }
         do {
             let page = try await libraryService.librarySongs(offset: offset, count: pageSize)
+            guard isCurrent(generation, filter: .allSongs, server: requestedServer) else { return }
             if page.isEmpty {
                 libraryHasMore = false
             } else {
@@ -123,8 +139,8 @@ final class SongsListViewModel {
         } catch {
             // Pagination failures are non-fatal; pull-to-refresh retries from the top.
         }
-        hasMore = filter == .allSongs && libraryHasMore
-        isLoadingMore = false
+        guard isCurrent(generation, filter: .allSongs, server: requestedServer) else { return }
+        hasMore = libraryHasMore
     }
 
     // MARK: - Source & ordering
@@ -133,7 +149,13 @@ final class SongsListViewModel {
     /// alphabet jump bar and the Play/Shuffle header always act on the complete selection.
     func setFilter(_ newFilter: SongListFilter) async {
         guard newFilter != filter else { return }
+        requestGeneration &+= 1
+        let generation = requestGeneration
+        let requestedServer = serverState?.activeServer?.id
         filter = newFilter
+        isLoading = false
+        isLoadingMore = false
+        isLoadingFilterSource = false
         error = nil
 
         switch newFilter {
@@ -149,13 +171,15 @@ final class SongsListViewModel {
             rebuild()
         case .favorites:
             isLoadingFilterSource = true
-            await reloadStarredSongs()
+            await reloadStarredSongs(generation: generation, server: requestedServer)
+            guard isCurrent(generation, filter: newFilter, server: requestedServer) else { return }
             hasMore = false
             rebuild()
             isLoadingFilterSource = false
         case .downloads:
             isLoadingFilterSource = true
-            refreshLocalTracks()
+            await refreshLocalTracks()
+            guard isCurrent(generation, filter: newFilter, server: requestedServer) else { return }
             applyLocalTrackSource()
             hasMore = false
             rebuild()
@@ -170,12 +194,18 @@ final class SongsListViewModel {
         rebuild()
     }
 
-    private func reloadStarredSongs() async {
+    private func isCurrent(_ generation: UInt64, filter expected: SongListFilter, server: UUID?) -> Bool {
+        !Task.isCancelled && generation == requestGeneration && filter == expected && serverState?.activeServer?.id == server
+    }
+
+    private func reloadStarredSongs(generation: UInt64, server: UUID?) async {
         do {
             let songs = try await libraryService.getStarred2().song ?? []
+            guard isCurrent(generation, filter: .favorites, server: server) else { return }
             addedDates = Self.addedDates(from: songs)
             source = songs.map { DisplayableSong(from: $0) }
         } catch {
+            guard isCurrent(generation, filter: .favorites, server: server) else { return }
             self.error = UserFacingError.from(error)
             addedDates = [:]
             source = []
@@ -190,17 +220,23 @@ final class SongsListViewModel {
 
     /// Reads the active server's downloaded tracks (metadata only) so the Downloads filter and the
     /// per-row downloaded badge need no network round-trip.
-    private func refreshLocalTracks() {
+    private func refreshLocalTracks() async {
         guard let modelContainer, let serverId = serverState?.activeServer?.id else {
             localTracks = []
             downloadedSongIds = []
             return
         }
+        let usable = await downloadService?.downloadedSongIds(serverId: serverId)
+        guard serverState?.activeServer?.id == serverId, !Task.isCancelled else { return }
         let context = ModelContext(modelContainer)
         let sid = serverId
         let descriptor = FetchDescriptor<DownloadedTrack>(predicate: #Predicate<DownloadedTrack> { $0.serverId == sid })
-        localTracks = (try? context.fetch(descriptor)) ?? []
-        downloadedSongIds = Set(localTracks.map(\.songId))
+        localTracks = ((try? context.fetch(descriptor)) ?? []).filter { track in
+            guard let usable else { return true }
+            return usable.contains(track.songId) || track.currentRemoteID.map(usable.contains) == true
+                || !usable.isDisjoint(with: track.legacyRemoteIDs ?? [])
+        }
+        downloadedSongIds = usable ?? Set(localTracks.map(\.songId))
     }
 
     // MARK: - Grouping

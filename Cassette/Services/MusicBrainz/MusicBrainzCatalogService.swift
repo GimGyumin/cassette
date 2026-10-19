@@ -12,9 +12,15 @@ actor MusicBrainzCatalogService {
 
     private let session: URLSession
     private var isrcCache: [String: String] = [:]
-    private var lastRequest: Date = .distantPast
+    private var nextRequestAt: Date = .distantPast
+    private var blockedUntil: Date = .distantPast
+    private var lookupCooldown: [String: Date] = [:]
+    private let requestInterval: TimeInterval
+    private let retryBaseDelay: TimeInterval
 
-    init(session: URLSession? = nil) {
+    init(session: URLSession? = nil, requestInterval: TimeInterval = 1.1, retryBaseDelay: TimeInterval = 0.8) {
+        self.requestInterval = requestInterval
+        self.retryBaseDelay = retryBaseDelay
         // Dedicated session — avoids sharing a flaky connection pool with other hosts.
         if let session {
             self.session = session
@@ -34,6 +40,7 @@ actor MusicBrainzCatalogService {
     func catalogISRC(title: String, artist: String?, album: String?) async -> String? {
         let key = "isrc|\(title)|\(artist ?? "")|\(album ?? "")".lowercased()
         if let cached = isrcCache[key] { return cached }
+        if let until = lookupCooldown[key], Date() < until { return nil }
 
         let titleQ = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !titleQ.isEmpty else { return nil }
@@ -54,16 +61,24 @@ actor MusicBrainzCatalogService {
             return list
         }()
 
-        for query in queries {
-            if let isrc = await searchISRC(query: query, title: titleQ, artist: artist) {
-                isrcCache[key] = isrc
-                return isrc
+        do {
+            for query in queries {
+                if let isrc = try await searchISRC(query: query, title: titleQ, artist: artist) {
+                    isrcCache[key] = isrc
+                    return isrc
+                }
             }
+        } catch {
+            guard !Task.isCancelled, PlaybackFailure.classify(error).kind != .cancelled else { return nil }
+            Logger.library.warning("MusicBrainz ISRC lookup failed: \(String(describing: error), privacy: .public)")
         }
+        lookupCooldown = lookupCooldown.filter { $0.value > Date() }
+        if lookupCooldown.count >= 256 { lookupCooldown.removeAll(keepingCapacity: true) }
+        lookupCooldown[key] = max(Date().addingTimeInterval(60), blockedUntil)
         return nil
     }
 
-    private func searchISRC(query: String, title: String, artist: String?) async -> String? {
+    private func searchISRC(query: String, title: String, artist: String?) async throws -> String? {
         guard var components = URLComponents(string: "https://musicbrainz.org/ws/2/recording") else {
             return nil
         }
@@ -74,66 +89,49 @@ actor MusicBrainzCatalogService {
         ]
         guard let url = components.url else { return nil }
 
-        do {
-            let data = try await getWithRetry(url)
-            let page = try JSONDecoder().decode(MBRecordingSearch.self, from: data)
-            let ranked = (page.recordings ?? []).sorted {
-                Self.score($0, title: title, artist: artist) > Self.score($1, title: title, artist: artist)
-            }
-            for recording in ranked {
-                if let isrc = recording.isrcs?.first(where: { !$0.isEmpty }) {
-                    Logger.library.debug(
-                        "MusicBrainz ISRC ok isrc=\(isrc, privacy: .public) title=\(recording.title ?? "", privacy: .public)"
-                    )
-                    return isrc
-                }
-                if let id = recording.id, let isrc = await fetchISRCs(recordingID: id).first {
-                    Logger.library.debug(
-                        "MusicBrainz ISRC ok (detail) isrc=\(isrc, privacy: .public) id=\(id, privacy: .public)"
-                    )
-                    return isrc
-                }
-            }
-        } catch is CancellationError {
-            return nil
-        } catch {
-            let ns = error as NSError
-            if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorTimedOut || ns.code == NSURLErrorCancelled {
+        let data = try await getWithRetry(url)
+        let page = try JSONDecoder().decode(MBRecordingSearch.self, from: data)
+        let ranked = (page.recordings ?? []).sorted {
+            Self.score($0, title: title, artist: artist) > Self.score($1, title: title, artist: artist)
+        }
+        for recording in ranked {
+            if let isrc = recording.isrcs?.first(where: { !$0.isEmpty }) {
                 Logger.library.debug(
-                    "MusicBrainz ISRC lookup skipped: \(error.localizedDescription, privacy: .public)"
+                    "MusicBrainz ISRC ok isrc=\(isrc, privacy: .public) title=\(recording.title ?? "", privacy: .public)"
                 )
-            } else {
-                Logger.library.warning(
-                    "MusicBrainz ISRC lookup failed: \(error.localizedDescription, privacy: .public)"
+                return isrc
+            }
+            if let id = recording.id, let isrc = try await fetchISRCs(recordingID: id).first {
+                Logger.library.debug(
+                    "MusicBrainz ISRC ok (detail) isrc=\(isrc, privacy: .public) id=\(id, privacy: .public)"
                 )
+                return isrc
             }
         }
         return nil
     }
 
-    private func fetchISRCs(recordingID: String) async -> [String] {
+    private func fetchISRCs(recordingID: String) async throws -> [String] {
         guard let url = URL(string: "https://musicbrainz.org/ws/2/recording/\(recordingID)?inc=isrcs&fmt=json") else {
             return []
         }
-        do {
-            let data = try await getWithRetry(url)
-            let detail = try JSONDecoder().decode(MBRecordingDetail.self, from: data)
-            return detail.isrcs ?? []
-        } catch {
-            return []
-        }
+        let data = try await getWithRetry(url)
+        let detail = try JSONDecoder().decode(MBRecordingDetail.self, from: data)
+        return detail.isrcs ?? []
     }
 
     private func getWithRetry(_ url: URL) async throws -> Data {
         var lastError: Error?
         for attempt in 0..<3 {
             do {
-                await throttle()
+                try await throttle()
                 return try await get(url)
             } catch {
                 lastError = error
+                if Task.isCancelled || PlaybackFailure.classify(error).kind == .cancelled { throw CancellationError() }
                 let ns = error as NSError
-                let retryable = ns.domain == NSURLErrorDomain
+                let http = error as? HTTPTransferFailure
+                let retryable = http.map { $0.statusCode == 429 || (500...599).contains($0.statusCode) } ?? (ns.domain == NSURLErrorDomain
                     && [
                         NSURLErrorTimedOut,
                         NSURLErrorNetworkConnectionLost,
@@ -141,10 +139,11 @@ actor MusicBrainzCatalogService {
                         NSURLErrorCannotConnectToHost,
                         NSURLErrorSecureConnectionFailed, // -1200 TLS
                         NSURLErrorCannotLoadFromNetwork,
-                    ].contains(ns.code)
+                    ].contains(ns.code))
+                let delay = max(retryBaseDelay * pow(2, Double(attempt)), http?.retryAfter ?? 0)
+                if retryable { blockedUntil = max(blockedUntil, Date().addingTimeInterval(delay)) }
                 guard retryable, attempt < 2 else { throw error }
-                let delay = Double(attempt + 1) * 0.8
-                try? await Task.sleep(for: .seconds(delay))
+                try await Task.sleep(for: .seconds(delay))
             }
         }
         throw lastError ?? URLError(.unknown)
@@ -156,18 +155,22 @@ actor MusicBrainzCatalogService {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw URLError(.badServerResponse)
+            throw HTTPTransferFailure(response: response, stage: "MusicBrainz lookup")
         }
         return data
     }
 
-    private func throttle() async {
-        let gap: TimeInterval = 1.1
-        let elapsed = Date().timeIntervalSince(lastRequest)
-        if elapsed < gap {
-            try? await Task.sleep(for: .seconds(gap - elapsed))
+    private func throttle() async throws {
+        while true {
+            try Task.checkCancellation()
+            let now = Date()
+            let readyAt = max(nextRequestAt, blockedUntil)
+            if readyAt <= now {
+                nextRequestAt = now.addingTimeInterval(requestInterval)
+                return
+            }
+            try await Task.sleep(for: .seconds(readyAt.timeIntervalSince(now)))
         }
-        lastRequest = Date()
     }
 
     private static func escape(_ value: String) -> String {

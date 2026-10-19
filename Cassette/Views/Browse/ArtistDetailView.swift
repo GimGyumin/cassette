@@ -72,6 +72,7 @@ struct ArtistDetailView: View {
     /// the artist id (placeholder glyph).
     private var heroCoverArtId: String {
         if let cover = viewModel?.artist?.coverArt, !cover.isEmpty { return cover }
+        if let cover = artist.coverArt, !cover.isEmpty { return cover }
         if let latest = latestReleaseCoverArtId { return latest }
         return artist.id
     }
@@ -130,7 +131,7 @@ struct ArtistDetailView: View {
                         }
                         .chromeAppearance(atmosphere.preferredColorScheme)
                         .ignoresSafeArea(.container, edges: .top)
-                        .cassetteHideTopScrollEdgeEffect()
+                        .cassetteSoftTopScrollEdge()
                         .cassetteStatusBarScrim(isLightPage: atmosphere.isLight)
                         // One page tone for the whole page, matching the hero's terminal melt tone
                         // (the same solid backdrop the album page uses) and animating the tone change
@@ -139,21 +140,25 @@ struct ArtistDetailView: View {
                         .background { AlbumAtmosphereBackground(atmosphere: atmosphere) }
                         .refreshable { await vm.reloadAll() }
                         .miniPlayerBottomMargin()
-                        .task(id: heroCoverArtId) {
-                            // Bottom-strip tone, not the whole-image dominant: the cold path below stores
-                            // the bottom strip, so a warm cache must not fall back to a different tone.
-                            let cached = colorExtractor.bottomStripColor(for: heroCoverArtId, image: nil)
-                            if cached != .clear {
-                                withAnimation(CassetteAnimation.theme) { dominantColor = cached }
-                            } else {
-                                await loadDominantColor(coverArtId: heroCoverArtId)
-                            }
-                        }
                     }
                 }
             } else {
                 skeletonGrid
             }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { AlbumAtmosphereBackground(atmosphere: atmosphere) }
+        .overlay {
+            if viewModel == nil || (viewModel?.artist == nil && viewModel?.error == nil) {
+                AlbumAtmosphereBackground(atmosphere: atmosphere)
+                    .overlay { ProgressView().tint(headerTextColor) }
+            }
+        }
+        .task(id: heroCoverArtId) {
+            // Resolve the tone even while the initial artist request is still covered.
+            let cached = colorExtractor.bottomStripColor(for: heroCoverArtId, image: nil)
+            if cached != .clear { dominantColor = cached }
+            else { await loadDominantColor(coverArtId: heroCoverArtId) }
         }
         .navigationTitle("")
         .navigationBarTitleDisplayModeInline()

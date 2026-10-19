@@ -14,6 +14,7 @@ protocol NowPlayingServiceProtocol: AnyObject, Sendable {
 
     /// Deregisters all handlers and clears now playing info.
     func stop() async
+    func stop(publication: PlaybackPublication?) async
 
     /// Releases reusable artwork without removing the currently displayed Now Playing item.
     func clearArtworkCache() async
@@ -22,15 +23,17 @@ protocol NowPlayingServiceProtocol: AnyObject, Sendable {
     func update(with snapshot: NowPlayingSnapshot) async
 
     /// Merges elapsed time, rate, and duration into the existing nowPlayingInfo dict without
-    /// touching title, artist, or artwork. Called on every periodic tick to prevent iOS
-    /// extrapolation drift on the lock screen.
+    /// touching title, artist, or artwork. Reserved for explicit clock corrections;
+    /// normal progress is extrapolated by the system from event updates.
     func pushPosition(elapsed: TimeInterval, rate: Float, duration: TimeInterval) async
+    func pushPosition(elapsed: TimeInterval, rate: Float, duration: TimeInterval, publication: PlaybackPublication?) async
 
     /// Patches ISRC into the current Now Playing info for system Music Haptics.
     func setISRC(_ isrc: String) async
 
     /// Immediately updates playback rate in Now Playing (Music Haptics follows this).
     func setPlaybackRate(_ rate: Float) async
+    func setPlaybackRate(_ rate: Float, publication: PlaybackPublication?) async
 
     /// Removes ISRC from Now Playing so system Music Haptics detach from the prior track.
     func clearISRC() async
@@ -40,4 +43,19 @@ protocol NowPlayingServiceProtocol: AnyObject, Sendable {
 
     /// Re-enable skip / previous / scrub after sleep or route changes (CarPlay / lock screen).
     func reassertRemoteCommands() async
+}
+
+extension NowPlayingServiceProtocol {
+    func stop(publication: PlaybackPublication?) async {
+        guard publication?.isCurrent != false else { return }
+        await stop()
+    }
+    func setPlaybackRate(_ rate: Float, publication: PlaybackPublication?) async {
+        guard publication?.isCurrent != false else { return }
+        await setPlaybackRate(rate)
+    }
+    func pushPosition(elapsed: TimeInterval, rate: Float, duration: TimeInterval, publication: PlaybackPublication?) async {
+        guard publication?.isCurrent != false else { return }
+        await pushPosition(elapsed: elapsed, rate: rate, duration: duration)
+    }
 }

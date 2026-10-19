@@ -73,6 +73,7 @@ private struct LibraryPreparationGate: ViewModifier {
             .animation(.easeInOut(duration: 0.2), value: container?.libraryPreparationService.phase)
             .task(id: container?.serverState.activeServer?.id) {
                 guard let container, container.serverState.activeServer != nil else { return }
+                await container.nowPlayingBackgroundPreparation.prepare(using: container)
                 await container.libraryPreparationService.prepareIfLibraryChanged(
                     serverService: container.serverService,
                     libraryService: container.libraryService,
@@ -81,6 +82,7 @@ private struct LibraryPreparationGate: ViewModifier {
                 )
                 // Let the finished checkmarks register before the screen goes away.
                 if container.libraryPreparationService.phase == .complete {
+                    await container.nowPlayingBackgroundPreparation.prepare(using: container, refreshArtwork: true)
                     try? await Task.sleep(for: .milliseconds(600))
                     container.libraryPreparationService.reset()
                 }

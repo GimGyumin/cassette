@@ -23,6 +23,7 @@ struct PlaybackSettingsView: View {
     var body: some View {
         Form {
             playbackSection
+            LegacyPlaybackSessionSection()
             #if os(iOS)
             hapticsSection
             #endif

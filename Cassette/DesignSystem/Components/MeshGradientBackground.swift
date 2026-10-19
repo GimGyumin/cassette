@@ -19,7 +19,6 @@ struct MeshGradientBackground: View {
     /// Observed so a budget change restarts/stops the animation immediately instead of waiting for
     /// the next unrelated state change.
     @State private var governor = PerformanceGovernor.shared
-    @State private var animationPhase: CGFloat = 0
     @State private var isVisible = false
 
     private var shouldAnimate: Bool {
@@ -27,53 +26,31 @@ struct MeshGradientBackground: View {
     }
 
     var body: some View {
-        gradient
-            .onAppear {
-                isVisible = true
-                syncAnimation()
+        Group {
+            if shouldAnimate {
+                TimelineView(.animation(minimumInterval: governor.budget.meshFrameInterval)) { context in
+                    let phase = Float((1 - cos(context.date.timeIntervalSinceReferenceDate * .pi / 8)) / 2)
+                    gradient(phase: phase)
+                }
+            } else {
+                gradient(phase: 0)
             }
-            .onDisappear {
-                isVisible = false
-                syncAnimation()
-            }
-            .onChange(of: scenePhase) { _, _ in syncAnimation() }
-            .onChange(of: governor.budget) { _, _ in syncAnimation() }
-            .onChange(of: animated) { _, _ in syncAnimation() }
-    }
-
-    private func syncAnimation() {
-        guard shouldAnimate else {
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) { animationPhase = 0 }
-            return
         }
-        withAnimation(.easeInOut(duration: 8).repeatForever(autoreverses: true)) {
-            animationPhase = 1
-        }
+        .onAppear { isVisible = true }
+        .onDisappear { isVisible = false }
     }
 
     @ViewBuilder
-    private var gradient: some View {
+    private func gradient(phase: Float) -> some View {
         if #available(iOS 18, macOS 15, *) {
-            MeshGradient(
-                width: 3,
-                height: 3,
-                points: currentPoints,
-                colors: distributedColors
-            )
+            MeshGradient(width: 3, height: 3, points: points(phase: phase), colors: distributedColors)
         } else {
-            LinearGradient(
-                colors: palette,
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            LinearGradient(colors: palette, startPoint: .topLeading, endPoint: .bottomTrailing)
         }
     }
 
-    private var currentPoints: [SIMD2<Float>] {
-        let p = Float(shouldAnimate ? animationPhase : 0)
-        return [
+    private func points(phase p: Float) -> [SIMD2<Float>] {
+        [
             [0.0, 0.0], [0.5 + 0.04 * p, 0.0],                        [1.0, 0.0],
             [0.0, 0.5 + 0.03 * p], [0.5 - 0.04 * p, 0.5 + 0.04 * p], [1.0, 0.5 - 0.03 * p],
             [0.0, 1.0], [0.5 + 0.03 * p, 1.0],                        [1.0, 1.0]

@@ -12,9 +12,41 @@ import OSLog
 final class MediaIdentityService {
     private let modelContainer: ModelContainer
     private static let maximumAliasDepth = 64
+    private var lookupRevision: UInt64 = 0
+    nonisolated private let backgroundLookup: IdentityLookupWorker
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
+        backgroundLookup = IdentityLookupWorker(modelContainer: modelContainer)
+    }
+
+    /// Artwork and cell preparation must not hydrate identity tables on the UI thread.
+    func candidateRemoteIDsInBackground(
+        for remoteID: String, serverId: UUID, entityType: RemoteMediaEntityType
+    ) async -> [String] {
+        while !Task.isCancelled {
+            let revision = lookupRevision
+            let result = await backgroundLookup.candidates(
+                for: remoteID, serverId: serverId, entityType: entityType, revision: revision
+            )
+            guard revision == lookupRevision else { continue }
+            return result
+        }
+        return []
+    }
+
+    /// Expand a library snapshot with one indexed background operation, not one UI fetch per song.
+    func candidateRemoteIDsInBackground(
+        for remoteIDs: Set<String>, serverId: UUID, entityType: RemoteMediaEntityType
+    ) async -> Set<String> {
+        while !Task.isCancelled {
+            let revision = lookupRevision
+            let result = await backgroundLookup.candidates(
+                for: remoteIDs, serverId: serverId, entityType: entityType, revision: revision
+            )
+            if revision == lookupRevision { return result }
+        }
+        return remoteIDs
     }
 
     struct IdentitySnapshot: Sendable, Equatable {
@@ -23,6 +55,19 @@ final class MediaIdentityService {
         let legacyRemoteIDs: [String]
         let jellyfinID: String?
         let needsRelink: Bool
+    }
+
+    /// Preserve each requested ID's aliases with one background index snapshot.
+    func candidateRemoteIDMapInBackground(
+        for remoteIDs: Set<String>, serverId: UUID, entityType: RemoteMediaEntityType
+    ) async -> [String: [String]] {
+        while !Task.isCancelled {
+            let revision = lookupRevision
+            let result = await backgroundLookup.candidateMap(
+                for: remoteIDs, serverId: serverId, entityType: entityType, revision: revision)
+            if revision == lookupRevision { return result }
+        }
+        return [:]
     }
 
     func resolveCurrentID(
@@ -87,8 +132,9 @@ final class MediaIdentityService {
             append(identity.currentRemoteID)
             identity.legacyRemoteIDs.forEach { append($0) }
         }
-        for alias in aliases(serverId: serverId, entityType: entityType, context: context) {
-            if resolveWithoutSaving(alias.currentRemoteID, aliases: aliases(serverId: serverId, entityType: entityType, context: context)) == current {
+        let scopedAliases = aliases(serverId: serverId, entityType: entityType, context: context)
+        for alias in scopedAliases {
+            if resolveWithoutSaving(alias.currentRemoteID, aliases: scopedAliases) == current {
                 append(alias.oldRemoteID)
                 append(alias.currentRemoteID)
             }
@@ -103,6 +149,7 @@ final class MediaIdentityService {
         entityType: RemoteMediaEntityType,
         jellyfinID: String? = nil
     ) -> String {
+        defer { lookupRevision &+= 1 }
         let current = resolveCurrentID(remoteID, serverId: serverId, entityType: entityType)
         let context = ModelContext(modelContainer)
         if let identity = identities(serverId: serverId, entityType: entityType, context: context).first(where: {
@@ -167,6 +214,7 @@ final class MediaIdentityService {
         serverId: UUID,
         entityType: RemoteMediaEntityType
     ) {
+        defer { lookupRevision &+= 1 }
         let current = resolveCurrentID(remoteID, serverId: serverId, entityType: entityType)
         let context = ModelContext(modelContainer)
         let values = identities(serverId: serverId, entityType: entityType, context: context)
@@ -200,6 +248,7 @@ final class MediaIdentityService {
         confidence: Double,
         jellyfinID: String? = nil
     ) -> Bool {
+        defer { lookupRevision &+= 1 }
         guard !oldID.isEmpty, !newID.isEmpty else { return false }
         if oldID == newID {
             _ = observe(remoteID: newID, serverId: serverId, entityType: entityType, jellyfinID: jellyfinID)
@@ -305,5 +354,96 @@ final class MediaIdentityService {
             current = next
         }
         return current
+    }
+}
+
+/// A scope is loaded once per identity revision. No SwiftData models escape this actor.
+private actor IdentityLookupWorker {
+    private struct Scope: Hashable {
+        let serverId: UUID
+        let type: String
+    }
+    private struct Index: Sendable {
+        let revision: UInt64
+        var aliases: [String: String] = [:]
+        var groups: [[String]] = []
+        var groupIDs: [String: [Int]] = [:]
+        var historicalIDs: [String: [String]] = [:]
+
+        func resolve(_ id: String) -> String {
+            var current = id
+            var visited = Set<String>()
+            for _ in 0..<64 {
+                guard visited.insert(current).inserted else { return id }
+                guard let next = aliases[current], next != current else { break }
+                current = next
+            }
+            return current
+        }
+
+        func candidates(_ id: String) -> [String] {
+            let current = resolve(id)
+            var result: [String] = []
+            var seen = Set<String>()
+            func append(_ value: String) {
+                if !value.isEmpty, seen.insert(value).inserted { result.append(value) }
+            }
+            append(id)
+            append(current)
+            let indices = Set((groupIDs[id] ?? []) + (groupIDs[current] ?? []))
+            for index in indices.sorted() { groups[index].forEach(append) }
+            (historicalIDs[current] ?? []).forEach(append)
+            return result
+        }
+    }
+    private let modelContainer: ModelContainer
+    private var indices: [Scope: Index] = [:]
+
+    init(modelContainer: ModelContainer) { self.modelContainer = modelContainer }
+
+    func candidates(for id: String, serverId: UUID, entityType: RemoteMediaEntityType,
+                    revision: UInt64) -> [String] {
+        index(serverId: serverId, entityType: entityType, revision: revision).candidates(id)
+    }
+
+    func candidates(for ids: Set<String>, serverId: UUID, entityType: RemoteMediaEntityType,
+                    revision: UInt64) -> Set<String> {
+        let index = index(serverId: serverId, entityType: entityType, revision: revision)
+        return ids.reduce(into: ids) { $0.formUnion(index.candidates($1)) }
+    }
+
+    func candidateMap(for ids: Set<String>, serverId: UUID, entityType: RemoteMediaEntityType,
+                      revision: UInt64) -> [String: [String]] {
+        let index = index(serverId: serverId, entityType: entityType, revision: revision)
+        return Dictionary(uniqueKeysWithValues: ids.map { ($0, index.candidates($0)) })
+    }
+
+    private func index(serverId: UUID, entityType: RemoteMediaEntityType, revision: UInt64) -> Index {
+        let scope = Scope(serverId: serverId, type: entityType.rawValue)
+        if let index = indices[scope], index.revision == revision { return index }
+        let context = ModelContext(modelContainer)
+        let sid = serverId
+        let type = entityType.rawValue
+        let aliases = (try? context.fetch(FetchDescriptor<RemoteIDAlias>(predicate: #Predicate {
+            $0.serverId == sid && $0.entityTypeRaw == type
+        }))) ?? []
+        let identities = (try? context.fetch(FetchDescriptor<RemoteMediaIdentity>(predicate: #Predicate {
+            $0.serverId == sid && $0.entityTypeRaw == type
+        }))) ?? []
+        var index = Index(revision: revision)
+        for alias in aliases { index.aliases[alias.oldRemoteID] = alias.currentRemoteID }
+        for identity in identities {
+            let group = [identity.currentRemoteID] + identity.legacyRemoteIDs
+            let groupID = index.groups.count
+            index.groups.append(group)
+            for key in Set(group) { index.groupIDs[key, default: []].append(groupID) }
+        }
+        for alias in aliases {
+            let terminal = index.resolve(alias.currentRemoteID)
+            index.historicalIDs[terminal, default: []] += [alias.oldRemoteID, alias.currentRemoteID]
+        }
+        if indices.count >= 10 { indices.removeAll() }
+        indices[scope] = index
+        return index
     }
 }
