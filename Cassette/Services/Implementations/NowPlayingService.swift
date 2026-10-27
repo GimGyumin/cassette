@@ -30,10 +30,11 @@ actor NowPlayingService: NowPlayingServiceProtocol {
     /// Album id → the cover a downloaded album stored during library preparation. Lets the lock
     /// screen prefer downloaded artwork over a server fetch, matching the in-app player.
     let preparedCoverIdProvider: (@MainActor (String?) -> String?)?
-    var modernMediaSession: AnyObject?
+    var nowPlayingEntityPublisher: AnyObject?
     var commandsRegistered = false
     var currentSong: NowPlayingSnapshot?
     var artworkGeneration = 0
+    var artworkLoadGeneration: Int?
     var hasArtwork = false
     var artworkRetryDate = Date.distantPast
     var artworkRetryAttempt = 0
@@ -87,8 +88,8 @@ actor NowPlayingService: NowPlayingServiceProtocol {
         artworkRetryDate = .distantPast
         #if os(iOS)
         if #available(iOS 27.0, *),
-           let controller = modernMediaSession as? CassetteMediaSessionController {
-            await controller.stop(isCurrent: { [playbackRevision] in publication?.isCurrent != false && playbackRevision.accept(revision) })
+           let publisher = nowPlayingEntityPublisher as? CassetteNowPlayingEntityPublisher {
+            await publisher.stop(isCurrent: { [playbackRevision] in publication?.isCurrent != false && playbackRevision.accept(revision) })
         }
         #endif
         await commitNowPlaying(publication, revision: revision) {

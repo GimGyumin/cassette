@@ -5,6 +5,10 @@
 
 import Foundation
 
+extension Notification.Name {
+    static let cassetteFullPlayerPresentationChanged = Notification.Name("cassetteFullPlayerPresentationChanged")
+}
+
 // MARK: - Player navigation helpers
 
 func postNavigateToAlbum(track: DisplayableSong) {

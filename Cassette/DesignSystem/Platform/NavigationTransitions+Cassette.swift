@@ -26,6 +26,8 @@ extension View {
     func cassetteMatchedTransitionSource(id: String?, in namespace: Namespace.ID?) -> some View {
         #if os(iOS)
         if let id, let namespace {
+            // Match upstream's unconfigured source. The cover already owns its
+            // clipping; UIKit owns the source snapshot's shape during the zoom.
             self.matchedTransitionSource(id: id, in: namespace)
         } else {
             self

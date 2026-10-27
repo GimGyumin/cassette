@@ -38,6 +38,7 @@ protocol PlayerServiceProtocol: AnyObject, Sendable {
     func restoreSession() async
     func restoreLegacySession() async
     func handleNetworkRestored() async
+    func handleNetworkPathChange(_ path: PlaybackNetworkPath) async
     /// Starts live stream playback of an Internet Radio Station.
     /// Clears the current queue's playing state but preserves the queue itself.
     func playRadio(_ station: InternetRadioStation) async throws
@@ -74,6 +75,7 @@ protocol PlayerServiceProtocol: AnyObject, Sendable {
 }
 
 extension PlayerServiceProtocol {
+    func handleNetworkPathChange(_ path: PlaybackNetworkPath) async {}
     func restoreLegacySession() async {}
     func playbackVariantSettingsDidChange() async {}
     func playbackDetails() async -> PlaybackDetails? { nil }

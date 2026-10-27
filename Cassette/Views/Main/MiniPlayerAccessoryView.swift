@@ -13,15 +13,9 @@ struct MiniPlayerAccessoryView: View {
     /// Opens the full player already on the queue panel (iPad floating bar).
     var onOpenQueue: (() -> Void)? = nil
     var usesSystemAccessory = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appContainer) private var container
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var dragOffset: CGFloat = 0
-    @State private var isAnimatingSwipe = false
-
-    private let swipeThreshold: CGFloat = 100
-    private let velocityThreshold: CGFloat = 200
 
     // Semantic colors follow the system accessory's own appearance and contrast settings.
     private var typoColor: Color { .primary }
@@ -90,11 +84,13 @@ struct MiniPlayerAccessoryView: View {
                 )
             } else if isInline {
                 inlineBar(
+                    playerState: playerState,
                     coverArtId: coverArtId,
                     title: title,
                     artist: artist,
                     playbackAppearance: playbackAppearance,
-                    isAvailable: isAvailable
+                    isAvailable: isAvailable,
+                    isLiveStream: isLiveStream
                 )
             } else {
                 expandedBar(
@@ -108,13 +104,10 @@ struct MiniPlayerAccessoryView: View {
                 )
             }
         }
-        .offset(x: dragOffset)
-        .opacity(1.0 - min(abs(dragOffset) / 200, 0.4))
         .modifier(MiniPlayerTapOpenModifier(
             enabled: (!usesPadFloatingBar || isInline) && hasTrack,
             open: { showingFullPlayer = true }
         ))
-        .gesture(isAvailable && !isLiveStream && !usesPadFloatingBar ? swipeSkipGesture : nil)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(miniPlayerAccessibilityLabel(title: title, artist: artist))
         .accessibilityHint(hasTrack ? String(localized: "Opens full player", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale) : "")
@@ -148,6 +141,7 @@ struct MiniPlayerAccessoryView: View {
                 .frame(minWidth: 200, alignment: .leading)
 
             padNowPlayingBlock(
+                playerState: playerState,
                 coverArtId: coverArtId,
                 title: title,
                 artist: artist,
@@ -260,45 +254,59 @@ struct MiniPlayerAccessoryView: View {
     }
 
     private func padNowPlayingBlock(
+        playerState: PlayerState,
         coverArtId: String,
         title: String,
         artist: String?,
         isAvailable: Bool,
         isLiveStream: Bool
     ) -> some View {
-        Button {
+        HStack(spacing: 12) {
+            artwork(coverArtId: coverArtId, size: 44, isAvailable: isAvailable || !hasTrack)
+
+            VStack(alignment: .leading, spacing: 2) {
+                MarqueeText(
+                    text: title,
+                    font: .subheadline.weight(.semibold),
+                    color: typoColor
+                )
+                if isLiveStream, hasTrack {
+                    HStack(spacing: 4) {
+                        Circle().fill(Color.red).frame(width: 6, height: 6)
+                        Text("LIVE")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.red)
+                    }
+                } else if let artist, hasTrack {
+                    Text(artist)
+                        .font(.caption)
+                        .foregroundStyle(typoSecondaryColor)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(
+                TrackTextSwipeTransition(
+                    playerState: playerState,
+                    enabled: isAvailable && !isLiveStream && hasTrack,
+                    onNext: {
+                        Task { try? await container?.playerService.skipToNext() }
+                    },
+                    onPrevious: {
+                        Task { try? await container?.playerService.skipToPrevious() }
+                    },
+                    commitDistance: 44,
+                    predictedDistance: 100,
+                    maxOffset: 90,
+                    resistance: 0.6
+                )
+            )
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
             guard hasTrack else { return }
             showingFullPlayer = true
-        } label: {
-            HStack(spacing: 12) {
-                artwork(coverArtId: coverArtId, size: 44, isAvailable: isAvailable || !hasTrack)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(typoColor)
-                        .lineLimit(1)
-                    if isLiveStream, hasTrack {
-                        HStack(spacing: 4) {
-                            Circle().fill(Color.red).frame(width: 6, height: 6)
-                            Text("LIVE")
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.red)
-                        }
-                    } else if let artist, hasTrack {
-                        Text(artist)
-                            .font(.caption)
-                            .foregroundStyle(typoSecondaryColor)
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .disabled(!hasTrack)
     }
 
     private func padSecondaryActions(isLiveStream: Bool) -> some View {
@@ -384,35 +392,72 @@ struct MiniPlayerAccessoryView: View {
 
     /// Compact pill content for the minimized tab bar: art · title/artist · play.
     private func inlineBar(
+        playerState: PlayerState,
         coverArtId: String,
         title: String,
         artist: String?,
         playbackAppearance: PlaybackControlAppearance,
-        isAvailable: Bool
+        isAvailable: Bool,
+        isLiveStream: Bool
     ) -> some View {
         HStack(spacing: 10) {
             artwork(coverArtId: coverArtId, size: 28, isAvailable: isAvailable || !hasTrack)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(typoColor)
-                    .lineLimit(1)
-                if let artist, hasTrack {
-                    Text(artist)
-                        .font(.caption2)
-                        .foregroundStyle(typoSecondaryColor)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer(minLength: 4)
+            miniPlayerTitle(
+                playerState: playerState,
+                title: title,
+                subtitle: artist,
+                compact: true,
+                enabled: isAvailable && !isLiveStream && hasTrack
+            )
 
             playPauseButton(playbackAppearance: playbackAppearance, compact: true)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background { miniPlayerSurface }
+    }
+
+    /// Shared Apple Music–style title block for both mini-player sizes. The
+    /// title marquee and the swipe/transition container own separate state.
+    private func miniPlayerTitle(
+        playerState: PlayerState,
+        title: String,
+        subtitle: String?,
+        compact: Bool,
+        enabled: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 1 : 2) {
+            MarqueeText(
+                text: title,
+                font: compact ? .subheadline.weight(.semibold) : .cassetteCellTitle,
+                color: typoColor
+            )
+
+            if let subtitle, hasTrack {
+                Text(subtitle)
+                    .font(compact ? .caption2 : .cassetteCaption)
+                    .foregroundStyle(typoSecondaryColor)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(
+            TrackTextSwipeTransition(
+                playerState: playerState,
+                enabled: enabled,
+                onNext: {
+                    Task { try? await container?.playerService.skipToNext() }
+                },
+                onPrevious: {
+                    Task { try? await container?.playerService.skipToPrevious() }
+                },
+                commitDistance: compact ? 34 : 44,
+                predictedDistance: compact ? 80 : 100,
+                maxOffset: compact ? 64 : 90,
+                resistance: 0.6
+            )
+        )
     }
 
     private func expandedBar(
@@ -428,27 +473,13 @@ struct MiniPlayerAccessoryView: View {
             HStack(alignment: .center, spacing: CassetteSpacing.m) {
                 artwork(coverArtId: coverArtId, size: 36, isAvailable: isAvailable || !hasTrack)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.cassetteCellTitle)
-                        .foregroundStyle(typoColor)
-                        .lineLimit(1)
-                    if hasTrack {
-                        if !isAvailable {
-                            Text("Reconnect to resume")
-                                .font(.cassetteCaption)
-                                .foregroundStyle(typoSecondaryColor)
-                                .lineLimit(1)
-                        } else if let artist {
-                            Text(artist)
-                                .font(.cassetteCaption)
-                                .foregroundStyle(typoSecondaryColor)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-
-                Spacer(minLength: 0)
+                miniPlayerTitle(
+                    playerState: playerState,
+                    title: title,
+                    subtitle: hasTrack ? (isAvailable ? artist : String(localized: "Reconnect to resume", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)) : nil,
+                    compact: false,
+                    enabled: isAvailable && !isLiveStream && hasTrack
+                )
 
                 HStack(spacing: CassetteSpacing.s) {
                     playPauseButton(playbackAppearance: playbackAppearance, compact: false)
@@ -535,69 +566,6 @@ struct MiniPlayerAccessoryView: View {
             : playbackAppearance == .loading
                 ? String(localized: "Loading", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
                 : String(localized: "Paused", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
-    }
-
-    private var swipeSkipGesture: some Gesture {
-        DragGesture(minimumDistance: 10)
-            .onChanged { value in
-                guard !isAnimatingSwipe else { return }
-                let h = value.translation.width
-                guard abs(h) > abs(value.translation.height) else { return }
-                withAnimation(reduceMotion ? nil : .interactiveSpring()) {
-                    dragOffset = h
-                }
-            }
-            .onEnded { value in
-                guard !isAnimatingSwipe else { return }
-                let h = value.translation.width
-                let velocity = value.velocity.width
-                guard abs(h) > abs(value.translation.height) else {
-                    bounceback()
-                    return
-                }
-
-                let triggeredNext = h < -swipeThreshold || velocity < -velocityThreshold
-                let triggeredPrev = h > swipeThreshold || velocity > velocityThreshold
-
-                if triggeredNext || triggeredPrev {
-                    commitSwipe(goNext: triggeredNext)
-                } else {
-                    bounceback()
-                }
-            }
-    }
-
-    private func commitSwipe(goNext: Bool) {
-        isAnimatingSwipe = true
-        HapticFeedback.medium.trigger()
-
-        let exitOffset: CGFloat = goNext ? -300 : 300
-        withAnimation(reduceMotion ? nil : .easeIn(duration: 0.18)) {
-            dragOffset = exitOffset
-        }
-
-        Task {
-            if goNext {
-                try? await container?.playerService.skipToNext()
-            } else {
-                try? await container?.playerService.skipToPrevious()
-            }
-
-            let entryOffset: CGFloat = goNext ? 300 : -300
-            await MainActor.run {
-                dragOffset = entryOffset
-                withAnimation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.75)) {
-                    dragOffset = 0
-                }
-                isAnimatingSwipe = false
-            }
-        }
-    }
-
-    private func bounceback() {
-        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.7)) {
-            dragOffset = 0
-        }
     }
 }
 

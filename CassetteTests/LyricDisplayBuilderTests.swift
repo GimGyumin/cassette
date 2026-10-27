@@ -265,4 +265,30 @@ struct LyricDisplayBuilderTests {
         let after = LyricDisplayBuilder.activeRows(for: 12_500, in: rows)
         #expect(after.indices == [1])
     }
+
+    @Test func activeRows_leadClipsWhenNextLeadStartsBeforeDeclaredEnd() {
+        let rows = LyricDisplayBuilder.withPrecomputedEnds([
+            LyricDisplayRow(
+                sourceLineIndex: 0,
+                text: "First line",
+                startMs: 1_000,
+                endMs: 5_000,
+                cueLine: nil,
+                isSecondaryAgent: false,
+                speakerSide: .leading
+            ),
+            LyricDisplayRow(
+                sourceLineIndex: 1,
+                text: "Second line",
+                startMs: 4_200,
+                endMs: 6_000,
+                cueLine: nil,
+                isSecondaryAgent: false,
+                speakerSide: .leading
+            ),
+        ])
+        #expect(rows[0].endMs == 4_200)
+        let after = LyricDisplayBuilder.activeRows(for: 4_300, in: rows)
+        #expect(after.indices == [1])
+    }
 }

@@ -153,7 +153,8 @@ struct FullPlayerExpandedView: View {
                 serverId: serverId,
                 lyricsService: lyricsService,
                 playerService: pService,
-                playerState: pState
+                playerState: pState,
+                match: LyricsMatchInfo(song: track)
             )
             lyricsViewModel = newVM
             await newVM.load()
@@ -601,7 +602,7 @@ struct FullPlayerExpandedView: View {
                     // Flat mark + title under the bar — no pill chrome / padding (Apple Music desktop).
                     AudioQualityLabelView(
                         quality: quality,
-                        foreground: .white.opacity(0.7),
+                        foreground: .white,
                         interactive: false,
                         usesGlass: false
                     )

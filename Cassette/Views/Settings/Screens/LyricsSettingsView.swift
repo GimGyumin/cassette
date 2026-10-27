@@ -56,9 +56,11 @@ struct LyricsSettingsSections: View {
     private static let languageCodes = ["ko", "en", "ja", "zh", "es", "fr"]
 
     var body: some View {
-        lyricsSection
-        translationSection
-        dataSection
+        Group {
+            lyricsSection
+            translationSection
+            dataSection
+        }
     }
 
     // MARK: - 가사

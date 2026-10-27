@@ -19,6 +19,12 @@
 
 ## Dark mode behavior
 
+- Album canvases retain the existing dominant-color palette and manual color override,
+  including when artwork fills the page width. Measured edge colors decide layout
+  suitability; they do not replace the page background. Preparation uses the same
+  color algorithm at every power budget. Black/white ink and secondary text use
+  the existing contrast utilities.
+
 - Shadows on cover art are invisible against dark backgrounds. Use `.cassetteCoverStyle()` on all cover art views — it automatically switches to a 1pt border in dark mode.
 - `cassetteAccentSecondary` is slightly warmer in dark mode to maintain perceived brightness.
 

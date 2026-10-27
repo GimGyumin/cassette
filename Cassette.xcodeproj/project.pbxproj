@@ -483,6 +483,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1029;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = ZKZ9SNL8LZ;
@@ -550,6 +551,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1029;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = ZKZ9SNL8LZ;
@@ -582,7 +584,6 @@
 				CODE_SIGN_ENTITLEMENTS = Cassette/Cassette.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Cassette/Cassette-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1002;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = ZKZ9SNL8LZ;
 				ENABLE_APP_SANDBOX = YES;
@@ -599,6 +600,8 @@
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				"EXECUTABLE_NAME[sdk=iphoneos*]" = "$(PRODUCT_NAME)-$(CURRENT_PROJECT_VERSION)";
+				"EXECUTABLE_NAME[sdk=iphonesimulator*]" = "$(PRODUCT_NAME)-$(CURRENT_PROJECT_VERSION)";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Cassette-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Cassette;
@@ -647,7 +650,6 @@
 				CODE_SIGN_ENTITLEMENTS = Cassette/Cassette.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Cassette/Cassette-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1002;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = ZKZ9SNL8LZ;
 				ENABLE_APP_SANDBOX = YES;
@@ -664,6 +666,8 @@
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				"EXECUTABLE_NAME[sdk=iphoneos*]" = "$(PRODUCT_NAME)-$(CURRENT_PROJECT_VERSION)";
+				"EXECUTABLE_NAME[sdk=iphonesimulator*]" = "$(PRODUCT_NAME)-$(CURRENT_PROJECT_VERSION)";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Cassette-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Cassette;
@@ -709,7 +713,6 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = ZKZ9SNL8LZ;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -728,6 +731,8 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Cassette.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Cassette";
+				"TEST_HOST[sdk=iphoneos*]" = "$(BUILT_PRODUCTS_DIR)/Cassette.app/Cassette-$(CURRENT_PROJECT_VERSION)";
+				"TEST_HOST[sdk=iphonesimulator*]" = "$(BUILT_PRODUCTS_DIR)/Cassette.app/Cassette-$(CURRENT_PROJECT_VERSION)";
 			};
 			name = Debug;
 		};
@@ -736,7 +741,6 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = ZKZ9SNL8LZ;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -755,6 +759,8 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Cassette.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Cassette";
+				"TEST_HOST[sdk=iphoneos*]" = "$(BUILT_PRODUCTS_DIR)/Cassette.app/Cassette-$(CURRENT_PROJECT_VERSION)";
+				"TEST_HOST[sdk=iphonesimulator*]" = "$(BUILT_PRODUCTS_DIR)/Cassette.app/Cassette-$(CURRENT_PROJECT_VERSION)";
 			};
 			name = Release;
 		};
@@ -762,7 +768,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = ZKZ9SNL8LZ;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -787,7 +792,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = ZKZ9SNL8LZ;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -816,7 +820,6 @@
 				CODE_SIGN_ENTITLEMENTS = "fr.mathieu-dubart.CassetteWidgetsExtension.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1002;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = ZKZ9SNL8LZ;
 				ENABLE_APP_SANDBOX = YES;
@@ -859,7 +862,6 @@
 				CODE_SIGN_ENTITLEMENTS = "fr.mathieu-dubart.CassetteWidgetsExtension.entitlements";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1002;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = ZKZ9SNL8LZ;
 				ENABLE_APP_SANDBOX = YES;

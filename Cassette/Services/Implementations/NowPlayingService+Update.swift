@@ -78,7 +78,7 @@ extension NowPlayingService {
         let snapshot = snapshot.projectingPlayback()
         let publication = snapshot.publication
         guard let revision = beginPublication(publication) else { return }
-        await updateModernMediaSession(with: snapshot, revision: revision)
+        await updateNowPlayingEntity(with: snapshot, revision: revision)
         guard revision == playbackGeneration else { return }
         if snapshot.isLiveStream {
             artworkRetryTask?.cancel()
@@ -221,16 +221,8 @@ extension NowPlayingService {
         if let song = currentSong {
             currentSong = song.updatingPlayback(position: elapsed, rate: rate, duration: duration, publication: publication)
         }
-        #if os(iOS)
-        if #available(iOS 27.0, *),
-           let controller = modernMediaSession as? CassetteMediaSessionController {
-            await commitNowPlaying(publication, revision: revision) {
-                controller.updatePlayback(elapsed: elapsed, rate: rate)
-            }
-        }
-        #endif
-        if !hasArtwork,
-           artworkRetryAttempt < Self.maximumArtworkRetryAttempts,
+        if artworkRetryAttempt < Self.maximumArtworkRetryAttempts,
+           artworkLoadGeneration != artworkGeneration,
            let pendingArtwork,
            artworkRetryTask == nil,
            Date() >= artworkRetryDate {
@@ -278,14 +270,6 @@ extension NowPlayingService {
             currentSong = latest.updatingPlayback(position: latest.position, rate: rate, duration: latest.duration, publication: publication)
         }
         let position = latest?.position
-        #if os(iOS)
-        if #available(iOS 27.0, *), let controller = modernMediaSession as? CassetteMediaSessionController {
-            await commitNowPlaying(publication, revision: revision) {
-                let elapsed = position ?? (MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? NSNumber)?.doubleValue ?? 0
-                controller.updatePlayback(elapsed: elapsed, rate: rate)
-            }
-        }
-        #endif
         await commitNowPlaying(publication, revision: revision) {
             guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo,
                   info[MPMediaItemPropertyTitle] != nil else { return }
@@ -311,7 +295,7 @@ extension NowPlayingService {
     func publishTrackChange(_ snapshot: NowPlayingSnapshot) async {
         let publication = snapshot.publication
         guard let revision = beginPublication(publication) else { return }
-        await updateModernMediaSession(with: snapshot, revision: revision)
+        await updateNowPlayingEntity(with: snapshot, revision: revision)
         guard revision == playbackGeneration else { return }
         // Fresh dict without artwork so the previous track's ISRC/rate cannot linger
         // while we resolve cover art / credentials on the full update path.
@@ -341,13 +325,13 @@ extension NowPlayingService {
         await updateRemoteCommandsAvailability(isLiveStream: snapshot.isLiveStream)
     }
 
-    func updateModernMediaSession(with snapshot: NowPlayingSnapshot, revision: Int? = nil) async {
+    func updateNowPlayingEntity(with snapshot: NowPlayingSnapshot, revision: Int? = nil) async {
         #if os(iOS)
         if #available(iOS 27.0, *),
-           let controller = modernMediaSession as? CassetteMediaSessionController {
+           let publisher = nowPlayingEntityPublisher as? CassetteNowPlayingEntityPublisher {
             let serverId = await MainActor.run { serverState?.activeServer?.id }
             let token = revision ?? playbackGeneration
-            await controller.update(snapshot, serverId: serverId, isCurrent: { [playbackRevision] in
+            await publisher.update(snapshot, serverId: serverId, isCurrent: { [playbackRevision] in
                 playbackRevision.accept(token) && snapshot.publication?.isCurrent != false
             })
         }

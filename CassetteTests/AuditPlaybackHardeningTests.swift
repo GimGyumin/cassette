@@ -51,6 +51,46 @@ final class AuditPlaybackFixture {
 @MainActor
 @Suite("Audit playback hardening", .serialized)
 struct AuditPlaybackHardeningTests {
+    @Test func waitingClockCannotPublishAudiblePlayback() async throws {
+        let f = try AuditPlaybackFixture()
+        f.engine.state = .bufferring
+        f.engine.progress = 132.1
+        f.container.playerState.playbackState = .buffering
+        await f.player.publishEnginePlaybackConfirmation()
+        #expect(f.container.playerState.playbackState == .buffering)
+        f.engine.state = .playing
+        await f.player.publishEnginePlaybackConfirmation()
+        #expect(f.container.playerState.playbackState == .playing)
+        await f.player.stop()
+    }
+
+    @Test func truncatedOriginalStreamDoesNotSkipTheSelectedAlbumTrack() async throws {
+        let f = try AuditPlaybackFixture()
+        await f.player.installAuditRemoteSource()
+        f.container.playerState.queue = [f.track, DisplayableSong(id: "next", title: "Next", duration: 180)]
+        f.engine.progress = 0.5
+        f.container.playerState.position = 0.5
+        await f.player.handleEndOfTrack(engineConfirmed: true, finishedProgress: 0.5)
+        #expect(f.container.playerState.currentTrack?.id == f.track.id)
+        #expect(f.container.playerState.currentIndex == 0)
+        #expect(await f.player.systemPlayback.recoveredCurrentStall)
+        await f.player.stop()
+    }
+
+    @Test func outgoingEOFDoesNotAdvanceWhileAlbumSelectionIsPending() async throws {
+        let f = try AuditPlaybackFixture()
+        let next = DisplayableSong(id: "next", title: "Next", duration: 180)
+        f.container.playerState.queue = [f.track, next]
+        f.engine.progress = 180
+        f.container.playerState.position = 180
+        await f.player.reserveSelectionForRegression()
+        await f.player.handleEndOfTrack(engineConfirmed: true)
+        #expect(f.resolver.resolveCount == 0)
+        #expect(f.container.playerState.currentTrack?.id == f.track.id)
+        #expect(f.container.playerState.currentIndex == 0)
+        await f.player.stop()
+    }
+
     @Test(arguments: [PlaybackState.loading, .playing, .buffering, .recovering])
     func zeroClockStartupTimesOutWithoutSkippingTrack(phase: PlaybackState) async throws {
         let f = try AuditPlaybackFixture()
@@ -416,4 +456,8 @@ extension PlayerService {
         transport.intent = .play
         currentSource = .cached(URL(fileURLWithPath: "/tmp/cassette-failed-cache.m4a"))
     }
+}
+
+extension PlayerService {
+    func reserveSelectionForRegression() { pendingSelectionCommand = transportCommandID }
 }

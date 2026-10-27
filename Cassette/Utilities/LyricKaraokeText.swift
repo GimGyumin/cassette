@@ -17,10 +17,11 @@ enum LyricKaraokeText {
         activeThroughByteEnd: Int?,
         isCurrent: Bool,
         followsPlayback: Bool,
-        fontSize: CGFloat
+        fontSize: CGFloat,
+        dimsInactive: Bool = true
     ) -> AttributedString {
         var attributed = AttributedString(text)
-        attributed.font = Font.system(size: fontSize, weight: .heavy)
+        attributed.font = Font.system(size: fontSize, weight: .bold)
 
         guard followsPlayback else {
             attributed.foregroundColor = Color.white.opacity(0.88)
@@ -28,7 +29,7 @@ enum LyricKaraokeText {
         }
 
         guard isCurrent else {
-            attributed.foregroundColor = inactiveColor
+            attributed.foregroundColor = dimsInactive ? inactiveColor : .white
             return attributed
         }
 

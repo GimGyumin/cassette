@@ -94,13 +94,18 @@ struct LibraryCatalogStoreTests {
         #expect(!vm.canLoadMore(.all))
     }
 
-    @Test func finalRemotePageIsProbedBeforeShowingMore() async {
+    @Test func finalRemotePageStopsPagingAfterExplicitLoadMore() async {
         let library = SearchLibraryStub()
         library.pageHandler = { _, page in
             .init(song: page.songOffset == 0 ? [DisplayableSong(id: "1", title: "Only").asSong()] : [])
         }
         let vm = SearchViewModel(libraryService: library)
         await vm.search(query: "Only")
+        #expect(vm.songs.count == 1)
+        // The first page no longer waits on a speculative request. A short page
+        // may be a server cap; an explicit next page establishes end-of-results.
+        #expect(vm.canLoadMore(.songs))
+        await vm.loadMore(category: .songs)
         #expect(vm.songs.count == 1)
         #expect(!vm.canLoadMore(.all))
     }

@@ -7,6 +7,13 @@ import Foundation
 /// reason.
 @Suite("PerformanceBudget")
 struct PerformanceBudgetTests {
+    @Test func artworkInventoryPollingBacksOffUnderResourcePressure() {
+        #expect(budget().artworkInventoryInterval == .seconds(2))
+        for constrained in [budget(lowPower: true), budget(active: false),
+                            budget(thermal: .serious), budget(memory: true)] {
+            #expect(constrained.artworkInventoryInterval == .seconds(5))
+        }
+    }
     @Test func warmArtworkStopsMotionWithoutDisablingLyricsOrGapless() {
         let normal = budget()
         let warm = budget(thermal: .fair)
@@ -20,16 +27,27 @@ struct PerformanceBudgetTests {
     }
 
     @Test func automaticTransfersYieldBeforePlaybackOrExplicitDownloads() {
-        for constrained in [budget(lowPower: true), budget(active: false), budget(thermal: .fair),
+        for constrained in [budget(lowPower: true),
                             budget(thermal: .serious), budget(memory: true)] {
             #expect(!constrained.allowsAutomaticMediaDownloads)
             #expect(constrained.maximumConcurrentDownloads == 1)
         }
+        #expect(budget(active: false).allowsAutomaticMediaDownloads)
+        #expect(budget(thermal: .fair).allowsAutomaticMediaDownloads)
+        #expect(budget(active: false).maximumConcurrentDownloads == 1)
         #expect(budget().allowsAutomaticMediaDownloads)
         #expect(budget().maximumConcurrentDownloads == 3)
         #expect(budget(lowPower: true).allowsGaplessPrebuffer)
         #expect(budget(active: false).allowsGaplessPrebuffer)
     }
+    @Test func lyricFrameBudgetBacksOffWithoutChangingTiming() {
+        #expect(budget().lyricsRenderInterval == 1.0 / 60)
+        for constrained in [budget(lowPower: true), budget(thermal: .fair), budget(thermal: .serious), budget(memory: true)] {
+            #expect(constrained.lyricsRenderInterval == 1.0 / 30)
+        }
+        #expect(budget(active: false).lyricsRenderInterval == 1)
+    }
+
     private func budget(
         thermal: ThermalPressure = .nominal,
         lowPower: Bool = false,

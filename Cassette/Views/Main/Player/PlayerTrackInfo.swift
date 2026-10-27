@@ -73,7 +73,7 @@ struct FullPlayerFavoriteStarButton: View {
             }
         } label: {
             Image(systemName: isFavorite ? "star.fill" : "star")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 19, weight: .medium))
                 .foregroundStyle(isFavorite ? CassetteColors.accent : contentColor)
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
@@ -152,6 +152,8 @@ struct LyricsTranslateButton: View {
 enum TrackInfoLayout {
     case standard
     case lyricsHeader
+    case phoneLandscape
+    case immersivePortrait
 }
 
 struct TrackInfoSection: View {
@@ -169,9 +171,12 @@ struct TrackInfoSection: View {
 
     @Query private var favoriteMatches: [FavoriteRecord]
     @Query private var downloadedMatches: [DownloadedTrack]
+    private let downloadTargetID: String
+    private let downloadRequiresOriginal: Bool
     @Environment(ArtworkImageCache.self) private var artworkImageCache
     @State private var songToAddToPlaylist: DisplayableSong?
     @State private var showSongInfo = false
+    @State private var atmosSelectionSong: DisplayableSong?
     @State private var isDownloading = false
 
     init(
@@ -204,17 +209,34 @@ struct TrackInfoSection: View {
         _favoriteMatches = Query(filter: #Predicate<FavoriteRecord> {
             $0.serverId == sid && $0.itemType == type
         })
-        _downloadedMatches = Query(filter: #Predicate<DownloadedTrack> { $0.songId == songId })
+        let preferredDownload: DisplayableSong? = {
+            guard container?.streamingSettings.preferDolbyAtmosDownload == true,
+                  let track = playerState.currentTrack else { return nil }
+            return AtmosVariantCatalogue.isAtmos(track) ? track
+                : container?.libraryIndexService.preferredAtmosSong(for: track, serverId: sid)
+        }()
+        let targetID = preferredDownload?.id ?? songId
+        downloadTargetID = targetID
+        downloadRequiresOriginal = preferredDownload != nil
+        _downloadedMatches = Query(filter: #Predicate<DownloadedTrack> {
+            $0.serverId == sid && $0.songId == targetID
+        })
     }
 
     private var isFavorite: Bool {
         currentSongIsFavorite(playerState: playerState, container: container, records: favoriteMatches)
     }
-    private var isDownloaded: Bool { !downloadedMatches.isEmpty }
+    private var isDownloaded: Bool {
+        downloadedMatches.contains { !downloadRequiresOriginal || $0.isOriginalAudio == true }
+    }
     private var isOnline: Bool { container?.serverState.isOnline == true }
     private var isLyricsHeader: Bool { layout == .lyricsHeader }
+    private var artistFont: Font {
+        if layout == .immersivePortrait { return .cassetteImmersivePlayerArtist }
+        return layout == .phoneLandscape ? .system(size: 20) : (isLyricsHeader ? .system(size: 16) : .callout)
+    }
     private static let collapsedCoverSize: CGFloat = 64
-    private var actionButtonSize: CGFloat { isLyricsHeader ? 48 : 44 }
+    private var actionButtonSize: CGFloat { 44 }
     private var titleText: String {
         if playerState.isLiveStream {
             return playerState.currentRadio?.name ?? "Not Playing"
@@ -236,10 +258,12 @@ struct TrackInfoSection: View {
                 lyricsCoverThumbnail
             }
 
-            VStack(alignment: .leading, spacing: isLyricsHeader ? 2 : CassetteSpacing.xs) {
+            VStack(alignment: .leading, spacing: layout == .immersivePortrait ? 0 : (isLyricsHeader ? 2 : CassetteSpacing.xs)) {
                 MarqueeText(
                     text: titleText,
-                    font: isLyricsHeader ? .title3.weight(.semibold) : .title2.weight(.bold),
+                    font: layout == .immersivePortrait ? .cassetteImmersivePlayerTitle
+                        : layout == .phoneLandscape ? .system(size: 20, weight: .semibold)
+                        : (isLyricsHeader ? .system(size: 18, weight: .semibold) : .title2.weight(.semibold)),
                     color: contentColor
                 )
 
@@ -251,7 +275,7 @@ struct TrackInfoSection: View {
                             .lineLimit(1)
                     } else if playerState.isLiveStream {
                         Text("Live Radio")
-                            .font(isLyricsHeader ? .body : .subheadline)
+                            .font(artistFont)
                             .foregroundStyle(secondaryContentColor)
                             .lineLimit(1)
                     } else if let artist = playerState.currentTrack?.artist {
@@ -277,7 +301,7 @@ struct TrackInfoSection: View {
                             }
                         } label: {
                             Text(artist)
-                                .font(isLyricsHeader ? .body : .subheadline)
+                                .font(artistFont)
                                 .foregroundStyle(secondaryContentColor)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -297,9 +321,23 @@ struct TrackInfoSection: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
+            .modifier(
+                TrackTextSwipeTransition(
+                    playerState: playerState,
+                    enabled: !playerState.isLiveStream
+                        && playerState.currentTrack != nil
+                        && playerState.isPlaybackAvailable,
+                    onNext: {
+                        Task { try? await container?.playerService.skipToNext() }
+                    },
+                    onPrevious: {
+                        Task { try? await container?.playerService.skipToPrevious() }
+                    }
+                )
+            )
 
             if playerState.currentTrack != nil || playerState.isLiveStream {
-                HStack(spacing: CassetteSpacing.m) {
+                HStack(spacing: layout == .standard || layout == .immersivePortrait || isLyricsHeader ? CassetteSpacing.xs : CassetteSpacing.m) {
                     if !playerState.isLiveStream, showsFavoriteStar {
                         favoriteStarButton
                     }
@@ -354,6 +392,18 @@ struct TrackInfoSection: View {
                                         itemID: track.id,
                                         itemDescription: track.title,
                                         fallbackText: trackShareText
+                                    )
+                                }
+                            }
+
+                            if let track = playerState.currentTrack,
+                               !AtmosVariantCatalogue.isAtmos(track) {
+                                Button {
+                                    atmosSelectionSong = track
+                                } label: {
+                                    Label(
+                                        String(localized: "Dolby Atmos Version…", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale),
+                                        systemImage: "waveform"
                                     )
                                 }
                             }
@@ -421,7 +471,7 @@ struct TrackInfoSection: View {
                         }
                     } label: {
                         Image(systemName: "ellipsis")
-                            .font(.system(size: 17, weight: .bold))
+                            .font(.system(size: layout == .immersivePortrait || isLyricsHeader ? ImmersivePlayerMetrics.menuGlyph : 17, weight: .bold))
                             .foregroundStyle(contentColor)
                             .frame(width: actionButtonSize, height: actionButtonSize)
                             .contentShape(Rectangle())
@@ -431,6 +481,7 @@ struct TrackInfoSection: View {
                     .accessibilityLabel("More options")
                 }
                 .fixedSize(horizontal: true, vertical: false)
+                .padding(.trailing, layout == .standard ? 10 : 0)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -442,6 +493,17 @@ struct TrackInfoSection: View {
             if let track = playerState.currentTrack {
                 SongInfoSheet(song: track, lyricsLines: songInfoLyricsLines)
             }
+        }
+        .sheet(item: $atmosSelectionSong) { song in
+            AtmosVersionSelectionView(song: song)
+        }
+        // This section now keeps its identity across track changes so the title
+        // can animate; reset the per-track sheet state explicitly.
+        .onChange(of: playerState.currentTrack?.id) { _, _ in
+            showSongInfo = false
+            atmosSelectionSong = nil
+            songToAddToPlaylist = nil
+            isDownloading = false
         }
         .task(id: playerState.currentTrack?.id) {
             isDownloading = false
@@ -529,7 +591,7 @@ struct TrackInfoSection: View {
             toggleFavorite()
         } label: {
             Image(systemName: isFavorite ? "star.fill" : "star")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: layout == .immersivePortrait || isLyricsHeader ? ImmersivePlayerMetrics.favoriteGlyph : 17, weight: isLyricsHeader ? .regular : .semibold))
                 .foregroundStyle(isFavorite ? CassetteColors.accent : contentColor)
                 .frame(width: actionButtonSize, height: actionButtonSize)
                 .contentShape(Rectangle())
@@ -553,21 +615,44 @@ struct TrackInfoSection: View {
         Task {
             defer { isDownloading = false }
             do {
-                try await downloadService.download(song: track.asSong(), serverId: serverId)
+                if let variant = await container?.mediaResolver.preferredAtmosDownloadSong(for: track, serverId: serverId) {
+                    try await downloadService.downloadOriginal(song: variant.asSong(), serverId: serverId)
+                    container?.toastService.showSuccess(String(localized: "Downloaded in Dolby Atmos", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+                } else {
+                    try await downloadService.download(song: track.asSong(), serverId: serverId)
+                }
             } catch {
                 container?.toastService.showError(error.localizedDescription)
             }
         }
     }
 
-    private func removeDownload() {
-        guard let track = playerState.currentTrack,
-              let serverId = container?.serverState.activeServer?.id,
+    private func downloadAtmos(_ variant: DisplayableSong) {
+        guard let serverId = container?.serverState.activeServer?.id,
               let downloadService = container?.downloadService else { return }
+        isDownloading = true
+        HapticFeedback.light.trigger()
+        Task {
+            defer { isDownloading = false }
+            do {
+                try await downloadService.downloadOriginal(song: variant.asSong(), serverId: serverId)
+                container?.toastService.showSuccess(String(localized: "Downloaded in Dolby Atmos", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            } catch {
+                if !UserFacingError.isCancellation(error) {
+                    container?.toastService.showError(UserFacingError.from(error).displayMessage)
+                }
+            }
+        }
+    }
+
+    private func removeDownload() {
+        guard let serverId = container?.serverState.activeServer?.id,
+              let downloadService = container?.downloadService else { return }
+        let songID = downloadTargetID
         HapticFeedback.light.trigger()
         Task {
             do {
-                try await downloadService.remove(songId: track.id, serverId: serverId)
+                try await downloadService.remove(songId: songID, serverId: serverId)
             } catch {
                 container?.toastService.showError(error.localizedDescription)
             }

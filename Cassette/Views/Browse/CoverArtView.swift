@@ -150,13 +150,15 @@ private struct CoverArtViewContent: View {
                 }
             }
 
-            // A local thumbnail is preferable to fetching another copy for the player.
+            // Resolve the requested tier before deciding whether a network upgrade is needed.
             if let local = await artworkCache.load(coverArtId: id, tier: t, allowNetwork: false) {
                 guard !Task.isCancelled else { return }
                 apply(local, for: id)
                 return
             }
-            if displayedId == id, cachedImage != nil { return }
+            // A thumbnail/initial image is only a first frame for a hero. Stopping here
+            // left full-width album pages permanently enlarged from the 240px tier.
+            if t == .thumb, displayedId == id, cachedImage != nil { return }
 
             // 3. Tiered load (RAM → disk `{id}@{tier}` → optional network). Always go through the
             //    cache so disk decode is gated — never ungated ImageIO from this view.

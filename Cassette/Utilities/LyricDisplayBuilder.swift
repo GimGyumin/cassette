@@ -172,29 +172,34 @@ nonisolated enum LyricDisplayBuilder {
             )
         }
 
-        rows = withClippedBackgroundEnds(rows)
+        rows = withClippedEnds(rows)
         return rows
     }
 
-    /// Clip background-only rows to the next lead start when it arrives first.
-    private static func withClippedBackgroundEnds(_ rows: [LyricDisplayRow]) -> [LyricDisplayRow] {
+    /// A lead row must dim as soon as the next lead starts. TTML often ends a line
+    /// after the next line has already begun; keeping both in `activeRows` made the
+    /// previous line stay bright until its own end. Preserved backing-vocal timings
+    /// remain untouched.
+    private static func withClippedEnds(_ rows: [LyricDisplayRow]) -> [LyricDisplayRow] {
         rows.enumerated().map { index, row in
-            guard row.isSecondaryAgent, !row.preservesSourceTiming else { return row }
-            guard let ownEnd = row.endMs else { return row }
-            if let nextLead = nextLeadStartMs(after: index, in: rows), nextLead < ownEnd {
-                return LyricDisplayRow(
-                    sourceLineIndex: row.sourceLineIndex,
-                    text: row.text,
-                    startMs: row.startMs,
-                    endMs: nextLead,
-                    cueLine: row.cueLine,
-                    isSecondaryAgent: row.isSecondaryAgent,
-                    speakerSide: row.speakerSide,
-                    words: row.words,
-                    agentId: row.agentId
-                )
-            }
-            return row
+            guard let ownEnd = row.endMs,
+                  let nextLead = nextLeadStartMs(after: index, in: rows),
+                  let start = row.startMs,
+                  nextLead > start,
+                  nextLead < ownEnd else { return row }
+            if row.isSecondaryAgent && row.preservesSourceTiming { return row }
+            return LyricDisplayRow(
+                sourceLineIndex: row.sourceLineIndex,
+                text: row.text,
+                startMs: row.startMs,
+                endMs: nextLead,
+                cueLine: row.cueLine,
+                isSecondaryAgent: row.isSecondaryAgent,
+                speakerSide: row.speakerSide,
+                words: row.words,
+                agentId: row.agentId,
+                preservesSourceTiming: row.preservesSourceTiming
+            )
         }
     }
 
@@ -230,7 +235,7 @@ nonisolated enum LyricDisplayBuilder {
 
     static func withPrecomputedEnds(_ rows: [LyricDisplayRow]) -> [LyricDisplayRow] {
         // Ends already come from the document; keep API for tests.
-        withClippedBackgroundEnds(rows)
+        withClippedEnds(rows)
     }
 
     static func chronologicallyOrdered(_ rows: [LyricDisplayRow]) -> [LyricDisplayRow] {

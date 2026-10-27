@@ -30,8 +30,10 @@ extension PlayerService {
     func checkScrobbleThreshold() async {
         // A track change is in flight: the accumulated time still belongs to the outgoing track,
         // so attributing it to the incoming one would scrobble the wrong song.
-        guard !isTrackTransitionPending else { return }
+        guard !isTrackTransitionPending, !detector.fired else { return }
+        let context = playbackContext
         guard let song = await MainActor.run(body: { state.currentTrack }) else { return }
+        guard contextIsCurrent(context), !isTrackTransitionPending else { return }
         fireScrobbleIfThresholdMet(song: song)
     }
 
@@ -54,6 +56,7 @@ extension PlayerService {
     func cancelPendingCacheDownload() {
         cacheDownloadTask?.cancel()
         cacheDownloadTask = nil
+        cacheDownloadID = nil
     }
 
     // MARK: - Play-time accumulator

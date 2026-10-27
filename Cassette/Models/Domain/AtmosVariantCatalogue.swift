@@ -11,7 +11,16 @@ nonisolated enum AtmosAlbumPolicy {
 
     static func isAtmos(_ name: String?) -> Bool {
         guard let name else { return false }
-        return baseName(name) != name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Dedicated collections (e.g. "Michael Jackson's The Dolby Atmos") need
+        // not be an album's parenthesized edition. Only baseName controls merging.
+        return name.range(of: #"\bdolby\s+atmos\b"#,
+                          options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    static func hasSameArtist(_ first: AlbumID3, _ second: AlbumID3) -> Bool {
+        guard let firstKey = artistKey(first), firstKey == artistKey(second) else { return false }
+        if let a = first.artistId, let b = second.artistId, !a.isEmpty, !b.isEmpty, a != b { return false }
+        return true
     }
 
     static func normalized(_ value: String) -> String {
@@ -88,7 +97,7 @@ nonisolated struct AtmosVariantCatalogue: Sendable {
     let songsByID: [String: DisplayableSong]
     private let buckets: [String: [DisplayableSong]]
     let matches: [String: String]
-    static let matchingVersion = 1
+    static let matchingVersion = 2
 
     func coverArtID(forAlbumID id: String?) -> String? {
         guard let id, let value = albumsByID[id]?.coverArt?.trimmingCharacters(in: .whitespacesAndNewlines),

@@ -27,6 +27,8 @@ out of view bodies and service layer.
 - `NavigationTitle+Cassette.swift` — `navigationBarTitleDisplayModeInline/Large()` wrappers (no-op on macOS)
 - `ListStyles+Cassette.swift` — `cassetteSheetListStyle()` for cross-platform list styles in sheets
 - `NavigationTransitions+Cassette.swift` — `cassetteZoomTransition()` (zoom transition iOS 18+, no-op on macOS)
+- `AlbumPresentationLifecycle.swift` — album page UIKit appearance bridge: suspends/resumes
+  page-owned loads and retires a hosting view that has left the navigation stack (iOS only)
 
 ## Related
 

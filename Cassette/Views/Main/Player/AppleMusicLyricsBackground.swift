@@ -8,6 +8,8 @@ struct AppleMusicLyricsBackground: View {
     let fallbackColor: Color
     let isPlaying: Bool
     var animated = true
+    var isPresented = true
+    var flowSpeed = AMLLArtworkMotion.defaultFlowSpeed
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -29,9 +31,10 @@ struct AppleMusicLyricsBackground: View {
                 LyricsMetalSurface(
                     image: coverImage,
                     framesPerSecond: governor.budget.artworkFramesPerSecond,
-                    renderEnabled: isVisible && scenePhase == .active,
+                    renderEnabled: isVisible && isPresented && scenePhase == .active,
                     motionEnabled: isPlaying && animated && !reduceMotion && governor.budget.allowsArtworkMotion,
                     transitionEnabled: animated && !reduceMotion && governor.budget.allowsDecorativeMotion && !governor.budget.isMemoryPressured,
+                    flowSpeed: flowSpeed,
                     onUnavailable: { metalUnavailable = true }
                 )
             }
@@ -53,6 +56,7 @@ private struct LyricsMetalSurface {
     let renderEnabled: Bool
     let motionEnabled: Bool
     let transitionEnabled: Bool
+    let flowSpeed: Double
     let onUnavailable: () -> Void
 
     func makeCoordinator() -> LyricsSceneCoordinator { LyricsSceneCoordinator(onUnavailable: onUnavailable) }
@@ -85,7 +89,7 @@ extension LyricsMetalSurface: UIViewRepresentable {
     func makeUIView(context: Context) -> ArtworkMetalView { makeSurface(coordinator: context.coordinator) }
     func updateUIView(_ view: ArtworkMetalView, context: Context) {
         view.preferredFramesPerSecond = framesPerSecond
-        context.coordinator.update(image: image, renderEnabled: renderEnabled, motionEnabled: motionEnabled, transitionEnabled: transitionEnabled)
+        context.coordinator.update(image: image, renderEnabled: renderEnabled, motionEnabled: motionEnabled, transitionEnabled: transitionEnabled, flowSpeed: flowSpeed)
     }
     static func dismantleUIView(_ view: ArtworkMetalView, coordinator: LyricsSceneCoordinator) { coordinator.stop() }
 }
@@ -94,7 +98,7 @@ extension LyricsMetalSurface: NSViewRepresentable {
     func makeNSView(context: Context) -> ArtworkMetalView { makeSurface(coordinator: context.coordinator) }
     func updateNSView(_ view: ArtworkMetalView, context: Context) {
         view.preferredFramesPerSecond = framesPerSecond
-        context.coordinator.update(image: image, renderEnabled: renderEnabled, motionEnabled: motionEnabled, transitionEnabled: transitionEnabled)
+        context.coordinator.update(image: image, renderEnabled: renderEnabled, motionEnabled: motionEnabled, transitionEnabled: transitionEnabled, flowSpeed: flowSpeed)
     }
     static func dismantleNSView(_ view: ArtworkMetalView, coordinator: LyricsSceneCoordinator) { coordinator.stop() }
 }
@@ -120,6 +124,7 @@ private final class LyricsSceneCoordinator: NSObject, MTKViewDelegate {
     private var submittedImageID: ObjectIdentifier?
     private var renderEnabled = false
     private var motionEnabled = false
+    private var flowSpeed = AMLLArtworkMotion.defaultFlowSpeed
     private var clock = ArtworkSceneClock()
     private var fadeClock = ArtworkSceneClock()
     private var transitionEnabled = false
@@ -148,12 +153,13 @@ private final class LyricsSceneCoordinator: NSObject, MTKViewDelegate {
         }
     }
 
-    func update(image: PlatformImage?, renderEnabled: Bool, motionEnabled: Bool, transitionEnabled: Bool) {
+    func update(image: PlatformImage?, renderEnabled: Bool, motionEnabled: Bool, transitionEnabled: Bool, flowSpeed: Double) {
         let wasEnabled = self.renderEnabled
         let wasMoving = self.motionEnabled
         self.renderEnabled = renderEnabled
         self.motionEnabled = renderEnabled && motionEnabled
         self.transitionEnabled = transitionEnabled
+        self.flowSpeed = AMLLArtworkMotion.speed(flowSpeed)
         requestedImage = image
         let now = CACurrentMediaTime()
         clock.setRunning(self.motionEnabled, now: now)
@@ -216,7 +222,8 @@ private final class LyricsSceneCoordinator: NSObject, MTKViewDelegate {
         let now = CACurrentMediaTime()
         let time = clock.sample(now: now)
         let progress = transitionStartedAt.map { ArtworkSceneMotion.crossfadeProgress(elapsed: fadeClock.sample(now: now) - $0) } ?? 1
-        guard let frame = gpu.render(size: view.bounds.size, elapsed: Float(time), transition: progress, drawable: drawable) else {
+        guard let frame = gpu.render(size: view.bounds.size, elapsed: Float(time), transition: progress,
+                                     flowSpeed: flowSpeed, drawable: drawable) else {
             inFlight.signal()
             return
         }

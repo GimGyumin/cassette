@@ -18,16 +18,6 @@ struct CurrentPlaybackSettingsView: View {
 
     var body: some View {
         Form {
-            if let settings = container?.streamingSettings {
-                Section {
-                    SettingsNavigationRow("Server Playback Method", value: settings.jellyfinRoute.choiceTitle) {
-                        ServerPlaybackMethodSelectionView(selection: Binding(
-                            get: { settings.jellyfinRoute },
-                            set: { settings.jellyfinRoute = $0 }
-                        ))
-                    }
-                }
-            }
             if let state = container?.playerState, state.currentTrack != nil || state.currentRadio != nil {
                 Section {
                     if let song = state.currentTrack {

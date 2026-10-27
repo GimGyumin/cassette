@@ -51,7 +51,7 @@ extension PlayerService {
     func resolveArtworkURL(for song: DisplayableSong) async -> URL? {
         guard let client = try? await serverService.makeSwiftSonicClient() else { return nil }
         let artId = song.effectiveCoverArtId
-        return client.coverArtURL(id: artId, size: 600)
+        return client.coverArtURL(id: artId, size: ArtworkTier.hero.decodePixels)
     }
 
     /// ISRC for system Music Haptics (Settings → Accessibility → Music Haptics).

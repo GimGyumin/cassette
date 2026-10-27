@@ -22,6 +22,8 @@ struct ScrubberView: View {
     let contentColor: Color
     let secondaryContentColor: Color
     var isExpensiveNetwork: Bool = false
+    var phoneLandscape: Bool = false
+    var immersivePortrait: Bool = false
 
     @State private var isDragging = false
     @State private var isSeeking = false
@@ -51,7 +53,7 @@ struct ScrubberView: View {
     }
 
     var body: some View {
-        VStack(spacing: CassetteSpacing.xs) {
+        VStack(spacing: 0) {
             ProgressSlider(
                 value: positionBinding,
                 total: effectiveDuration,
@@ -78,6 +80,7 @@ struct ScrubberView: View {
                 },
                 trackColor: contentColor.opacity(0.22),
                 fillColor: contentColor.opacity(0.95),
+                height: phoneLandscape || immersivePortrait ? 18 : 24,
                 trackHeight: 7,
                 isInteracting: isDragging || isSeeking
             )
@@ -87,7 +90,10 @@ struct ScrubberView: View {
                 effectiveDuration: effectiveDuration,
                 overridePosition: (isDragging || isSeeking) ? displayPosition : nil,
                 color: secondaryContentColor,
-                quality: playbackQuality
+                qualityColor: immersivePortrait ? ImmersivePlayerInk.quality : contentColor,
+                quality: playbackQuality,
+                showsRemainingMinus: true,
+                compactQualityChip: immersivePortrait
             )
         }
         .onChange(of: playerState.currentTrack?.id) { _, _ in
@@ -101,12 +107,15 @@ struct ScrubberView: View {
     }
 }
 
-private struct ScrubberTimeLabels: View {
+struct ScrubberTimeLabels: View {
     let playerState: PlayerState
     let effectiveDuration: TimeInterval
     let overridePosition: TimeInterval?
     let color: Color
+    let qualityColor: Color
     var quality: AudioQualityKind? = nil
+    var showsRemainingMinus: Bool = false
+    var compactQualityChip: Bool = false
 
     private var hasPlayableDuration: Bool {
         playerState.currentTrack != nil && effectiveDuration > 0 && !playerState.isLiveStream
@@ -123,12 +132,11 @@ private struct ScrubberTimeLabels: View {
                 .monospacedDigit()
             Spacer(minLength: 8)
             if let quality {
-                AudioQualityLabelView(quality: quality, foreground: color, usesGlass: false)
-                    .offset(y: -3)
+                AudioQualityLabelView(quality: quality, foreground: qualityColor, usesGlass: false, compact: compactQualityChip)
             }
             Spacer(minLength: 8)
             Text(hasPlayableDuration
-                 ? Duration.seconds(max(effectiveDuration - shown, 0)).formatted(.time(pattern: .minuteSecond))
+                 ? (showsRemainingMinus ? "−" : "") + Duration.seconds(max(effectiveDuration - shown, 0)).formatted(.time(pattern: .minuteSecond))
                  : "--:--")
                 .font(.cassetteCaption)
                 .foregroundStyle(color)
@@ -244,9 +252,31 @@ struct PlaybackControlsView: View {
     let contentColor: Color
     let secondaryContentColor: Color
     var showsShuffleRepeat: Bool = false
+    var compactLayout: Bool = false
+    var spreadsTransport: Bool = false
+    /// Phone portrait Music.app rhythm: tighter row, slightly smaller glyphs,
+    /// while keeping the 64/88pt hit targets.
+    var phonePortraitControls: Bool = false
+
+    private var previousNextIconSize: CGFloat {
+        if compactLayout { return 32 }
+        if phonePortraitControls && spreadsTransport { return ImmersivePlayerMetrics.transportSkipGlyph }
+        return phonePortraitControls ? 30 : 36
+    }
+
+    private var playIconSize: CGFloat {
+        if compactLayout { return 40 }
+        return phonePortraitControls ? 38 : 44
+    }
+
+    private var controlsSpacing: CGFloat {
+        if compactLayout { return 12 }
+        if showsShuffleRepeat { return CassetteSpacing.xl }
+        return phonePortraitControls ? CassetteSpacing.xxl : CassetteSpacing.xxxxl
+    }
 
     var body: some View {
-        HStack(spacing: showsShuffleRepeat ? CassetteSpacing.xl : CassetteSpacing.xxxxl) {
+        HStack(spacing: controlsSpacing) {
             if showsShuffleRepeat, !playerState.isLiveStream {
                 Button {
                     HapticFeedback.light.trigger()
@@ -268,12 +298,13 @@ struct PlaybackControlsView: View {
                     Task { try? await playerService?.skipToPrevious() }
                 } label: {
                     Image(systemName: "backward.fill")
-                        .font(.system(size: 36, weight: .semibold, design: .default))
+                        .font(.system(size: previousNextIconSize, weight: .semibold, design: .default))
                         .foregroundStyle(Color.white)
-                        .frame(width: 64, height: 64)
+                        .frame(width: compactLayout ? 44 : 64, height: compactLayout ? 44 : 64)
                 }
                 .disabled(!isPlaybackAvailable)
                 .accessibilityLabel("Skip to previous")
+                .frame(maxWidth: spreadsTransport ? .infinity : nil)
             }
 
             Button {
@@ -281,13 +312,14 @@ struct PlaybackControlsView: View {
                 Task { await playerService?.togglePlayPause() }
             } label: {
                 Image(systemName: playerState.playbackState.controlAppearance.systemImage)
-                    .font(.system(size: 44, weight: .semibold, design: .default))
+                    .font(.system(size: playIconSize, weight: .semibold, design: .default))
                     .foregroundStyle(Color.white)
-                    .frame(minWidth: showsShuffleRepeat ? 72 : 88, minHeight: showsShuffleRepeat ? 72 : 88)
+                    .frame(minWidth: compactLayout ? 64 : (showsShuffleRepeat ? 72 : 88), minHeight: compactLayout ? 64 : (showsShuffleRepeat ? 72 : 88))
                     .contentShape(Rectangle())
             }
             .disabled(playerState.currentTrack == nil)
             .accessibilityLabel(playerState.playbackState.controlAppearance == .play ? "Play" : "Pause")
+            .frame(maxWidth: spreadsTransport ? .infinity : nil)
 
             if !playerState.isLiveStream {
                 Button {
@@ -295,12 +327,13 @@ struct PlaybackControlsView: View {
                     Task { try? await playerService?.skipToNext() }
                 } label: {
                     Image(systemName: "forward.fill")
-                        .font(.system(size: 36, weight: .semibold, design: .default))
+                        .font(.system(size: previousNextIconSize, weight: .semibold, design: .default))
                         .foregroundStyle(Color.white)
-                        .frame(width: 64, height: 64)
+                        .frame(width: compactLayout ? 44 : 64, height: compactLayout ? 44 : 64)
                 }
                 .disabled(!isPlaybackAvailable)
                 .accessibilityLabel("Skip to next")
+                .frame(maxWidth: spreadsTransport ? .infinity : nil)
             }
 
             if showsShuffleRepeat, !playerState.isLiveStream {

@@ -14,9 +14,12 @@
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
       <Testables>
+         <!-- These hosted suites share MPNowPlayingInfoCenter, audio output, the
+              performance governor and UserDefaults. Serialize across suites;
+              suite-local .serialized does not isolate those process-wide resources. -->
          <TestableReference
             skipped = "NO"
-            parallelizable = "YES">
+            parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "DBA4A75D2F9BBFCC008BC5A9"

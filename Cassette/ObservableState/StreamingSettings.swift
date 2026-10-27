@@ -19,7 +19,37 @@ final class StreamingSettings {
     @ObservationIgnored private var _wifiFormat: CacheFormat
     @ObservationIgnored private var _cellularFormat: CacheFormat
     @ObservationIgnored private var _downloadFormat: CacheFormat
+    @ObservationIgnored private var _allowDolbyAtmosOverCellular: Bool
     @ObservationIgnored private var _preferDolbyAtmos: Bool
+    @ObservationIgnored private var _preferDolbyAtmosDownload: Bool
+    @ObservationIgnored private var _losslessAudioEnabled: Bool
+
+    nonisolated static let losslessAudioKey = "cassette.streaming.losslessAudioEnabled"
+
+    /// Keep each network's saved quality when temporarily disabling lossless delivery.
+    var losslessAudioEnabled: Bool {
+        get { access(keyPath: \.losslessAudioEnabled); return _losslessAudioEnabled }
+        set {
+            guard _losslessAudioEnabled != newValue else { return }
+            withMutation(keyPath: \.losslessAudioEnabled) { _losslessAudioEnabled = newValue }
+            adaptiveCeiling = nil
+            defaults.set(newValue, forKey: Self.losslessAudioKey)
+        }
+    }
+
+    nonisolated static func effectiveFormat(_ format: CacheFormat, losslessEnabled: Bool) -> CacheFormat {
+        if !losslessEnabled, format == .matchStream || format == .flacOriginal { return .aac256 }
+        return format
+    }
+
+    var effectiveDownloadFormat: CacheFormat {
+        Self.effectiveFormat(downloadFormat, losslessEnabled: losslessAudioEnabled)
+    }
+
+    var allowsWiFiLosslessUpgrade: Bool {
+        let format = formatForCurrentNetwork(isLimited: false)
+        return format == .matchStream || format == .flacOriginal
+    }
 
     /// Opt-in alternative file selection; takes effect for the next resolved song.
     var preferDolbyAtmos: Bool {
@@ -29,7 +59,34 @@ final class StreamingSettings {
             defaults.set(newValue, forKey: Self.atmosKey)
         }
     }
+    /// Local Dolby files remain playable; this controls remote Dolby audio only.
+    var allowDolbyAtmosOverCellular: Bool {
+        get { access(keyPath: \.allowDolbyAtmosOverCellular); return _allowDolbyAtmosOverCellular }
+        set {
+            guard _allowDolbyAtmosOverCellular != newValue else { return }
+            withMutation(keyPath: \.allowDolbyAtmosOverCellular) { _allowDolbyAtmosOverCellular = newValue }
+            defaults.set(newValue, forKey: Self.atmosCellularKey)
+        }
+    }
+    private static let atmosCellularKey = "cassette.streaming.allowDolbyAtmosOverCellular"
+
+    func allowsRemoteDolbyAtmos(isCellular: Bool) -> Bool {
+        !isCellular || allowDolbyAtmosOverCellular
+    }
+
     private static let atmosKey = "cassette.streaming.preferDolbyAtmos"
+
+    /// When enabled, automatic downloads and the "Download" action in the Now Playing
+    /// menu prefer the Dolby Atmos variant of the current track when one is available.
+    var preferDolbyAtmosDownload: Bool {
+        get { access(keyPath: \.preferDolbyAtmosDownload); return _preferDolbyAtmosDownload }
+        set {
+            guard _preferDolbyAtmosDownload != newValue else { return }
+            withMutation(keyPath: \.preferDolbyAtmosDownload) { _preferDolbyAtmosDownload = newValue }
+            defaults.set(newValue, forKey: Self.atmosDownloadKey)
+        }
+    }
+    private static let atmosDownloadKey = "cassette.streaming.preferDolbyAtmosDownload"
 
     /// Session-only, never persisted: the quality ceiling the app fell back to after the engine
     /// re-buffered on a link that could not sustain the Automatic pick. Cleared when a fresh
@@ -109,7 +166,10 @@ final class StreamingSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        _losslessAudioEnabled = defaults.object(forKey: Self.losslessAudioKey) as? Bool ?? true
+        _allowDolbyAtmosOverCellular = defaults.object(forKey: Self.atmosCellularKey) as? Bool ?? true
         _preferDolbyAtmos = defaults.bool(forKey: Self.atmosKey)
+        _preferDolbyAtmosDownload = defaults.bool(forKey: Self.atmosDownloadKey)
         CacheFormat.migrateLegacyStoredValues(in: defaults)
         _jellyfinRoute = JellyfinPlaybackRoute(rawValue: defaults.string(forKey: Self.routeKey) ?? "") ?? .automatic
         let wifiRaw = defaults.string(forKey: Self.wifiKey)
@@ -122,14 +182,17 @@ final class StreamingSettings {
 
     /// Stream format for the active network. A limited (metered or constrained) link uses the
     /// cellular quality so a throttled Wi-Fi connection is not silently handed the original
-    /// bitstream. An explicit lossless ("Original / FLAC") selection is always honored —
-    /// availability depends on the server's files.
+    /// bitstream. Lossless choices remain saved while the master switch temporarily caps
+    /// automatic/original delivery at AAC 256. Availability depends on the server's files.
     func formatForCurrentNetwork(isLimited: Bool) -> CacheFormat {
-        isLimited ? cellularFormat : wifiFormat
+        Self.effectiveFormat(isLimited ? cellularFormat : wifiFormat, losslessEnabled: losslessAudioEnabled)
     }
 
     func reloadFromDefaults() {
+        losslessAudioEnabled = defaults.object(forKey: Self.losslessAudioKey) as? Bool ?? true
+        allowDolbyAtmosOverCellular = defaults.object(forKey: Self.atmosCellularKey) as? Bool ?? true
         preferDolbyAtmos = defaults.bool(forKey: Self.atmosKey)
+        preferDolbyAtmosDownload = defaults.bool(forKey: Self.atmosDownloadKey)
         CacheFormat.migrateLegacyStoredValues(in: defaults)
         jellyfinRoute = JellyfinPlaybackRoute(rawValue: defaults.string(forKey: Self.routeKey) ?? "") ?? .automatic
         let wifiRaw = defaults.string(forKey: Self.wifiKey)

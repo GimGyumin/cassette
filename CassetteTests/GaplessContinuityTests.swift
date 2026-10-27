@@ -6,6 +6,51 @@ import AudioStreaming
 
 @Suite("Prepared gapless transport", .serialized) @MainActor
 struct GaplessContinuityTests {
+    @Test func idleFallbackDoesNotCreateAnAudioGraph() {
+        let engine = AudioStreamingPlayerEngine()
+        let eq = AVAudioUnitEQ()
+        eq.globalGain = -6
+        engine.attach(node: eq)
+        engine.volume = 0.25
+        engine.addFrameFilter(named: "unused") { _, _ in }
+        engine.removeFrameFilter(named: "unused")
+        for _ in 0..<1000 {
+            #expect(engine.progress == 0)
+            #expect(engine.duration == 0)
+            #expect(!engine.isSeekable)
+        }
+        engine.pause()
+        engine.resume()
+        engine.seek(to: 1)
+        engine.stop()
+        #expect(engine.state == .stopped)
+        #expect(engine.volume == 0.25)
+        #expect(engine.playerIdentity == nil)
+        #expect(eq.engine == nil)
+        engine.resetAfterMediaServicesReset()
+        #expect(engine.playerIdentity == nil)
+    }
+
+    @Test func deferredGraphPreservesGainAndOnlyInstallsOnce() async throws {
+        let url = try fixture()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let engine = AudioStreamingPlayerEngine()
+        let eq = AVAudioUnitEQ()
+        eq.globalGain = -6
+        engine.attach(node: eq)
+        engine.attach(node: eq)
+        engine.volume = 0
+        #expect(engine.playerIdentity == nil)
+        engine.play(url: url, headers: [:])
+        defer { engine.stop() }
+        let identity = try #require(engine.playerIdentity)
+        #expect(eq.engine != nil)
+        #expect(eq.globalGain == -6)
+        #expect(engine.volume == 0)
+        engine.queue(url: url, headers: [:])
+        #expect(engine.playerIdentity == identity)
+    }
+
     @Test func stoppedAndFailedStreamingEnginesCannotPoisonFollowingTracks() async throws {
         let url = try fixture()
         defer { try? FileManager.default.removeItem(at: url) }

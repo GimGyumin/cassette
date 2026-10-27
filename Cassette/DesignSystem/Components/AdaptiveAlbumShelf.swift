@@ -14,6 +14,7 @@ struct AdaptiveAlbumShelf: View {
     var prominent = false
     var showsSeeAll = false
     var destination: (AlbumID3) -> HomeDestination = { .album($0) }
+    @Namespace private var albumNamespace
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @ScaledMetric(relativeTo: .body) private var prominentTextHeight: CGFloat = 56
@@ -47,8 +48,8 @@ struct AdaptiveAlbumShelf: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: CassetteSpacing.m) {
                     ForEach(albums) { album in
-                        NavigationLink(value: destination(album)) {
-                            albumCard(album)
+                        AlbumNavigationLink(album: album, namespace: albumNamespace, destination: destination(album)) { sourceID, namespace in
+                            albumCard(album, sourceID: sourceID, namespace: namespace)
                         }
                         .buttonStyle(.plain)
                         .albumLongPressMenu(album)
@@ -63,11 +64,12 @@ struct AdaptiveAlbumShelf: View {
         }
     }
 
-    private func albumCard(_ album: AlbumID3) -> some View {
+    private func albumCard(_ album: AlbumID3, sourceID: String, namespace: Namespace.ID) -> some View {
         VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
             CoverArtView(id: album.coverArt ?? album.id, size: Int(itemSize + 30))
                 .frame(width: itemSize, height: itemSize)
                 .cassetteCoverStyle(cornerRadius: CassetteCornerRadius.large)
+                .cassetteMatchedTransitionSource(id: sourceID, in: namespace)
             Text(album.name)
                 .foregroundStyle(.primary)
                 .font(prominent ? .body.weight(.semibold) : .cassetteCellTitle)
@@ -84,16 +86,18 @@ struct AdaptiveAlbumShelf: View {
 }
 
 struct AlbumShelfCollectionView: View {
+    @Namespace private var albumNamespace
     let collection: AlbumShelfCollection
     var body: some View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 200), spacing: 16)], spacing: 20) {
                 ForEach(collection.items) { item in
                     let album = item.album
-                    NavigationLink(value: item.destination) {
+                    AlbumNavigationLink(album: album, namespace: albumNamespace, destination: item.destination) { sourceID, namespace in
                         VStack(alignment: .leading, spacing: 8) {
                             CoverArtView(id: album.coverArt ?? album.id, size: 360)
-                                .aspectRatio(1, contentMode: .fit).cassetteCoverStyle(cornerRadius: 12)
+                                .aspectRatio(1, contentMode: .fit).cassetteCoverStyle(cornerRadius: CassetteCornerRadius.large)
+                                .cassetteMatchedTransitionSource(id: sourceID, in: namespace)
                             Text(album.name).font(.body.weight(.semibold)).lineLimit(1)
                             if let artist = album.artist { Text(artist).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
                         }.foregroundStyle(.primary)

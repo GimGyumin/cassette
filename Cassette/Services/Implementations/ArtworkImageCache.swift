@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 import Foundation
+import CryptoKit
 import ImageIO
 import OSLog
 #if canImport(UIKit)
@@ -66,11 +67,13 @@ final class ArtworkImageCache {
     @ObservationIgnored
     private var cacheGeneration = 0
     @ObservationIgnored private var accountScope: ServerRequestIdentity?
-    @ObservationIgnored private var localImageSources: [String: String] = [:]
+    @ObservationIgnored private var localImageSources = CostBoundedCache<String, String>(countLimit: 110, costLimit: 110)
     /// Coalesces concurrent `load` calls for the same tier key (Home + Discover often
     /// request the same album thumb twice → duplicate network + flaky ImageIO decode).
     @ObservationIgnored
     private var inFlight: [String: Task<PlatformImage?, Never>] = [:]
+    @ObservationIgnored private var paletteRevisions: [String: UInt64] = [:]
+    @ObservationIgnored private var presentationPreferences: [String: AlbumArtworkPreference] = [:]
     private struct OriginalFlight {
         let id: UUID
         let task: Task<Bool, Never>
@@ -78,7 +81,7 @@ final class ArtworkImageCache {
     }
     @ObservationIgnored private var originalFlights: [String: OriginalFlight] = [:]
     @ObservationIgnored
-    private var failedNetworkLoadUntil: [String: Date] = [:]
+    private var failedNetworkLoadUntil = CostBoundedCache<String, Date>(countLimit: 256, costLimit: 256)
     nonisolated private static let networkFailureCooldown: TimeInterval = 60
 
     private let downloadService: any DownloadServiceProtocol
@@ -86,16 +89,18 @@ final class ArtworkImageCache {
     private let serverService: (any ServerServiceProtocol)?
     private let serverState: ServerState?
     private let session: URLSession
+    private let presentationDefaults: UserDefaults
     // Caps in-flight server cover fetches to prevent saturating the TCP connection pool.
     private let fetchGate = CoverFetchGate(limit: 2)
     private let preparationFetchGate = CoverFetchGate(limit: 4)
     private let decodeGate = CoverDecodeGate(limit: 2)
 
-    init(downloadService: any DownloadServiceProtocol, libraryService: any LibraryServiceProtocol, serverService: (any ServerServiceProtocol)? = nil, session: URLSession? = nil, serverState: ServerState? = nil) {
+    init(downloadService: any DownloadServiceProtocol, libraryService: any LibraryServiceProtocol, serverService: (any ServerServiceProtocol)? = nil, session: URLSession? = nil, serverState: ServerState? = nil, presentationDefaults: UserDefaults = .standard) {
         self.downloadService = downloadService
         self.libraryService = libraryService
         self.serverService = serverService
         self.serverState = serverState ?? serverService?.state
+        self.presentationDefaults = presentationDefaults
         let config = URLSessionConfiguration.default
         ArtworkNetworkPolicy.configure(config)
         config.timeoutIntervalForRequest = 30
@@ -110,6 +115,55 @@ final class ArtworkImageCache {
     }
 
     // MARK: - Public API
+
+    /// Account-scoped, persisted layout facts. A cache lookup never decodes an image.
+    func preparedPalette(for coverArtId: String) -> ArtworkPalette? {
+        ColorCache.palette(for: presentationKey(coverArtId))
+    }
+
+    func storePreparedPalette(_ palette: ArtworkPalette, for coverArtId: String) {
+        ColorCache.store(palette, for: presentationKey(coverArtId))
+        ColorCache.store(palette, for: coverArtId)
+    }
+
+    func artworkPreference(for albumId: String) -> AlbumArtworkPreference {
+        let key = presentationKey(albumId) + ":preference"
+        if let preference = presentationPreferences[key] { return preference }
+        let preference = AlbumArtworkPreference(rawValue: presentationDefaults.string(forKey: key) ?? "") ?? .automatic
+        presentationPreferences[key] = preference
+        return preference
+    }
+
+    func setArtworkPreference(_ preference: AlbumArtworkPreference, for albumId: String) {
+        let key = presentationKey(albumId) + ":preference"
+        presentationPreferences[key] = preference
+        presentationDefaults.set(preference.rawValue, forKey: key)
+    }
+
+    func resetArtworkPreferences() {
+        presentationPreferences.removeAll()
+        for key in presentationDefaults.dictionaryRepresentation().keys
+            where key.hasPrefix("cassette.albumArtwork.") && key.hasSuffix(":preference") {
+            presentationDefaults.removeObject(forKey: key)
+        }
+    }
+
+    /// Fences a preparation result against account changes, replacement artwork, and eviction.
+    func palettePreparationToken(for coverArtId: String) -> String {
+        let key = presentationKey(coverArtId)
+        return "\(cacheGeneration)#\(paletteRevisions[key, default: 0])#\(key)"
+    }
+
+    private func presentationKey(_ id: String) -> String {
+        synchronizeAccount()
+        let account = serverService?.state.activeServer ?? serverState?.activeServer
+        let identity = account.map {
+            SHA256.hash(data: Data(($0.baseURL + "|" + $0.username).utf8))
+                .map { String(format: "%02x", $0) }.joined()
+        } ?? "anonymous"
+        let scope = (accountScope?.serverID.uuidString ?? account?.id.uuidString ?? "unscoped") + ":" + identity
+        return "cassette.albumArtwork.\(scope).\(ArtworkIdentity.key(id))"
+    }
 
     /// Returns the cached image for the given tier synchronously, or nil if not yet loaded.
     /// Does not trigger a fetch — call load(coverArtId:tier:) for that.
@@ -341,11 +395,12 @@ final class ArtworkImageCache {
         for tier in [ArtworkTier.thumb, .hero] {
             let oldKey = cacheKey(id: coverArtId, tier: tier)
             cache.removeValue(forKey: oldKey)
-            localImageSources[oldKey] = nil
+            localImageSources.removeValue(forKey: oldKey)
         }
-        failedNetworkLoadUntil[key] = nil
-        store(image: image, forKey: key, generation: generation)
-        localImageSources[key] = originalURL.path
+        failedNetworkLoadUntil.removeValue(forKey: key)
+        invalidatePreparedPalette(for: coverArtId)
+        store(image: image, forKey: key, generation: generation, coverArtId: coverArtId)
+        localImageSources.insert(originalURL.path, forKey: key, cost: 1)
         NotificationCenter.default.post(name: OriginalArtwork.didInstall, object: coverArtId)
         Logger.artworkCache.debug(
             "[NET-COVER] original done id=\(coverArtId, privacy: .public) bytes=\(data.count, privacy: .public)"
@@ -354,11 +409,12 @@ final class ArtworkImageCache {
     }
 
     private func originalWasInstalled(_ coverArtId: String) {
+        invalidatePreparedPalette(for: coverArtId)
         for tier in [ArtworkTier.thumb, .hero] {
             let key = cacheKey(id: coverArtId, tier: tier)
             cache.removeValue(forKey: key)
-            localImageSources[key] = nil
-            failedNetworkLoadUntil[key] = nil
+            localImageSources.removeValue(forKey: key)
+            failedNetworkLoadUntil.removeValue(forKey: key)
         }
         NotificationCenter.default.post(name: OriginalArtwork.didInstall, object: coverArtId)
     }
@@ -405,7 +461,7 @@ final class ArtworkImageCache {
         if let originalURL { localURL = originalURL }
         else if let legacy = await diskURL(coverArtId, generation: generation) { localURL = legacy }
         else { return nil }
-        if localImageSources[key] == localURL.path, let hit = cache[key] {
+        if localImageSources.value(forKey: key) == localURL.path, let hit = cache[key] {
             touch(key)
             return hit
         }
@@ -424,8 +480,8 @@ final class ArtworkImageCache {
             await self.decodeGate.release()
             guard self.isCurrent(generation), !Task.isCancelled else { return nil }
             if let image {
-                self.localImageSources[key] = localURL.path
-                self.store(image: image, forKey: key, generation: generation)
+                self.localImageSources.insert(localURL.path, forKey: key, cost: 1)
+                self.store(image: image, forKey: key, generation: generation, coverArtId: coverArtId)
             }
             return image
         }
@@ -503,7 +559,7 @@ final class ArtworkImageCache {
                 await decodeGate.release()
                 if let image = diskResult.0 {
                     guard isCurrent(generation), !Task.isCancelled else { return nil }
-                    store(image: image, forKey: key, generation: generation)
+                    store(image: image, forKey: key, generation: generation, coverArtId: coverArtId)
                     // Migrate non-JPEG / slow-to-decode covers to opaque downscaled JPEG once.
                     if diskResult.3 {
                         Task { [weak self] in
@@ -541,7 +597,7 @@ final class ArtworkImageCache {
             if let image = result.0 {
                 guard isCurrent(generation), !Task.isCancelled else { return nil }
                 if let data = result.1 { await persistDisk(data, id: tieredDiskId, generation: generation) }
-                store(image: image, forKey: key, generation: generation)
+                store(image: image, forKey: key, generation: generation, coverArtId: coverArtId)
                 return image
             }
         }
@@ -646,8 +702,8 @@ final class ArtworkImageCache {
         Logger.artworkCache.debug(
             "[NET-COVER] done id=\(coverArtId, privacy: .public) tier=\(tier.rawValue, privacy: .public) duration=\(Int(Date().timeIntervalSince(t0) * 1000))ms bytes=\(persistData?.count ?? 0, privacy: .public)"
         )
-        failedNetworkLoadUntil[key] = nil
-        store(image: image, forKey: key, generation: generation)
+        failedNetworkLoadUntil.removeValue(forKey: key)
+        store(image: image, forKey: key, generation: generation, coverArtId: coverArtId)
         if let persistData {
             await persistDisk(persistData, id: "\(coverArtId)@\(tier.rawValue)", generation: generation)
         }
@@ -688,6 +744,7 @@ final class ArtworkImageCache {
     }
 
     func invalidate(for coverArtId: String) async {
+        invalidatePreparedPalette(for: coverArtId)
         let originalKey = "original:\(cacheKey(id: coverArtId, tier: .hero))"
         if let flight = originalFlights[originalKey] {
             flight.task.cancel()
@@ -697,8 +754,8 @@ final class ArtworkImageCache {
         let generation = cacheGeneration
         for key in keys {
             cache.removeValue(forKey: key)
-            localImageSources[key] = nil
-            failedNetworkLoadUntil[key] = nil
+            localImageSources.removeValue(forKey: key)
+            failedNetworkLoadUntil.removeValue(forKey: key)
         }
         for id in ["\(coverArtId)@thumb", "\(coverArtId)@hero", coverArtId, OriginalArtwork.storageID(coverArtId)] {
             await removeDisk(id, generation: generation)
@@ -706,6 +763,8 @@ final class ArtworkImageCache {
     }
 
     func clearCache() {
+        paletteRevisions.removeAll()
+        presentationPreferences.removeAll()
         for flight in originalFlights.values { flight.task.cancel() }
         originalFlights.removeAll()
         for task in inFlight.values { task.cancel() }
@@ -740,9 +799,16 @@ final class ArtworkImageCache {
         return "\(scope):\(ArtworkIdentity.key(id))@\(tier.rawValue)"
     }
 
-    private func store(image: PlatformImage, forKey key: String, generation: Int) {
+    private func store(image: PlatformImage, forKey key: String, generation: Int, coverArtId: String) {
         guard isCurrent(generation), !Task.isCancelled else { return }
         cache.insert(image, forKey: key, cost: image.decodedMemoryCost)
+    }
+
+    private func invalidatePreparedPalette(for coverArtId: String) {
+        let key = presentationKey(coverArtId)
+        paletteRevisions[key, default: 0] &+= 1
+        ColorCache.remove(for: key)
+        ColorCache.remove(for: coverArtId)
     }
 
     private func shouldSkipNetworkFetch(forKey key: String) -> Bool {
@@ -751,12 +817,12 @@ final class ArtworkImageCache {
             Logger.artworkCache.debug("[NET-COVER] skipped recent failure key=\(key, privacy: .public)")
             return true
         }
-        failedNetworkLoadUntil[key] = nil
+        failedNetworkLoadUntil.removeValue(forKey: key)
         return false
     }
 
     private func rememberNetworkFailure(forKey key: String) {
-        failedNetworkLoadUntil[key] = Date().addingTimeInterval(Self.networkFailureCooldown)
+        failedNetworkLoadUntil.insert(Date().addingTimeInterval(Self.networkFailureCooldown), forKey: key, cost: 1)
     }
 
     private func touch(_ key: String) {

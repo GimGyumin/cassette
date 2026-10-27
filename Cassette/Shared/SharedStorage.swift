@@ -51,6 +51,7 @@ nonisolated enum SharedStorage {
         // One-shot cfprefsd "kCFPreferencesAnyUser" warnings when first touching the suite are
         // expected on Simulator; the suite still works when the container URL exists.
         _sharedSuite = suite
+        log.notice("[SHARED-STORAGE] container_available=true suite_available=true")
         return suite
     }
 

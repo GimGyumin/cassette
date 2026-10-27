@@ -96,10 +96,17 @@ actor LibraryService: LibraryServiceProtocol {
         var entries = base.song ?? []
         let originals = entries.map { DisplayableSong(from: $0) }
         var versions = [base]
-        for variant in catalog where pairs[variant.id] == baseID {
+        for variant in catalog where variant.id != baseID {
+            let isPairedAlbum = pairs[variant.id] == baseID
+            // A same-artist Atmos collection can supply audio without becoming
+            // part of this album's displayed metadata or track list.
+            let isAudioCollection = libraryIndex != nil && AtmosAlbumPolicy.isAtmos(variant.name)
+                && AtmosAlbumPolicy.hasSameArtist(base, variant)
+            guard isPairedAlbum || isAudioCollection else { continue }
             let detail = try? await album(id: variant.id)
             try await requireCurrent(token)
             if let detail { versions.append(detail) }
+            guard isPairedAlbum else { continue }
             for song in detail?.song ?? [] {
                 let candidate = DisplayableSong(from: song)
                 // Retain every original occurrence; only append variant-exclusive songs.

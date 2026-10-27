@@ -97,6 +97,7 @@ private struct MacAudioQualitySettingsSection: View {
 
     var body: some View {
         Section {
+            Toggle("Lossless Audio", isOn: $settings.losslessAudioEnabled)
             qualityPicker(
                 "Cellular Streaming",
                 systemImage: "antenna.radiowaves.left.and.right",
@@ -130,8 +131,11 @@ private struct MacAudioQualitySettingsSection: View {
         systemImage: String,
         selection: Binding<CacheFormat>
     ) -> some View {
-        Picker(selection: selection) {
-            ForEach(CacheFormat.allCases) { format in
+        Picker(selection: Binding(
+            get: { StreamingSettings.effectiveFormat(selection.wrappedValue, losslessEnabled: settings.losslessAudioEnabled) },
+            set: { selection.wrappedValue = $0 }
+        )) {
+            ForEach(settings.losslessAudioEnabled ? CacheFormat.selectableCases : [.aac256, .aac128, .opus_128]) { format in
                 Text(format.displayName).tag(format)
             }
         } label: {

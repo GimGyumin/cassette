@@ -27,13 +27,22 @@ struct BottomToolbar: View {
     let secondaryContentColor: Color
     let playerState: PlayerState
     var spreadToEdges: Bool = false
+    var showsRouteName: Bool = true
+    var phoneLandscape: Bool = false
+    var phonePortrait: Bool = false
 
     private var glyphColor: Color { secondaryContentColor }
 
     var body: some View {
         HStack(spacing: spreadToEdges ? CassetteSpacing.m : 0) {
-            if spreadToEdges {
-                AudioOutputRouteButton(tintColor: glyphColor)
+            if phoneLandscape {
+                lyricsButton
+                Spacer(minLength: 0)
+                AudioOutputRouteButton(tintColor: glyphColor, showsRouteName: showsRouteName, showsHeadphones: true)
+                Spacer(minLength: 0)
+                queueButton
+            } else if spreadToEdges {
+                AudioOutputRouteButton(tintColor: glyphColor, showsRouteName: showsRouteName)
                     .accessibilityLabel(String(localized: "Audio output", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                 Spacer(minLength: 0)
                 lyricsButton
@@ -46,7 +55,7 @@ struct BottomToolbar: View {
                     translateButton
                         .frame(maxWidth: .infinity)
                 }
-                AudioOutputRouteButton(tintColor: glyphColor)
+                AudioOutputRouteButton(tintColor: glyphColor, showsRouteName: showsRouteName)
                     .accessibilityLabel(String(localized: "Audio output", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
                     .frame(maxWidth: .infinity)
                 queueButton
@@ -65,7 +74,7 @@ struct BottomToolbar: View {
                 }
             } label: {
                 toolbarGlyph(
-                    "quote.bubble",
+                    surface == .lyrics ? "quote.bubble.fill" : "quote.bubble",
                     isActive: surface == .lyrics
                 )
                 .opacity(lyricsEnabled ? 1 : 0.35)
@@ -123,17 +132,18 @@ struct BottomToolbar: View {
 
     private func toolbarGlyph(_ systemName: String, isActive: Bool) -> some View {
         Image(systemName: systemName)
-            .font(.title3)
+            .font(phonePortrait ? .system(size: ImmersivePlayerMetrics.footerGlyph) : .title3)
             .foregroundStyle(isActive ? Color.black.opacity(0.72) : glyphColor)
-            .padding(CassetteSpacing.m)
+            .frame(width: phoneLandscape ? 44 : ImmersivePlayerMetrics.footerHeight,
+                   height: phoneLandscape ? 44 : ImmersivePlayerMetrics.footerHeight)
             .background {
                 if isActive {
                     Circle()
                         .fill(Color.white.opacity(0.68))
-                        .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5))
+                        .frame(width: phonePortrait ? ImmersivePlayerMetrics.footerSelectionDiameter : (phoneLandscape ? 38 : 44),
+                               height: phonePortrait ? ImmersivePlayerMetrics.footerSelectionDiameter : (phoneLandscape ? 38 : 44))
                 }
             }
-            .frame(width: 54, height: 54)
             .contentShape(Circle())
             .animation(reduceMotion ? nil : CassetteAnimation.interactive, value: isActive)
     }
@@ -142,31 +152,41 @@ struct BottomToolbar: View {
 #if canImport(UIKit)
 private struct AudioOutputRouteButton: View {
     var tintColor: Color = Color.white.opacity(0.7)
+    var showsRouteName: Bool = true
+    var showsHeadphones: Bool = false
     @State private var routeName = ""
+    @State private var routeSymbol = "airplayaudio"
 
     private var visibleRouteName: String {
-        let lowercased = routeName.lowercased()
-        if lowercased.contains("airpods")
-            || lowercased.contains("homepod")
-            || lowercased.contains("beats") {
-            return " \(routeName)"
-        }
-        return routeName
+        routeName
+    }
+
+    private var deviceSymbol: String {
+        // Always reflect the connected AirPods/headphones/speaker route.
+        routeSymbol
     }
 
     var body: some View {
-        NativeRoutePicker(tintColor: tintColor)
+        NativeRoutePicker(tintColor: .clear)
         .frame(width: 44, height: 44)
+        .overlay {
+            Image(systemName: deviceSymbol)
+                .font(.system(size: 20))
+                .foregroundStyle(tintColor)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .overlay(alignment: .bottom) {
-            if !routeName.isEmpty {
+            if showsRouteName, !routeName.isEmpty {
                 Text(verbatim: visibleRouteName)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(tintColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
                     .frame(width: 116)
-                    .offset(y: 20)
+                    .offset(y: 10)
                     .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
         }
         .onAppear { refreshRoutePresentation() }
@@ -180,12 +200,17 @@ private struct AudioOutputRouteButton: View {
         .onReceive(NotificationCenter.default.publisher(for: .cassetteRoutePickerDidDismiss)) { _ in
             refreshRoutePresentation()
         }
-        .accessibilityLabel(routeName)
+        .accessibilityLabel(
+            routeName.isEmpty
+                ? String(localized: "Audio output", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                : routeName
+        )
     }
 
     private func refreshRoutePresentation() {
         let route = AVAudioSession.sharedInstance().currentRoute
         routeName = RouteSymbol.displayName(for: route)
+        routeSymbol = RouteSymbol.symbolName(for: route)
     }
 }
 
@@ -241,6 +266,44 @@ private enum RouteSymbol {
         }
     }
 
+    static func symbolName(for route: AVAudioSessionRouteDescription) -> String {
+        guard let output = preferredOutput(for: route) else { return "airplayaudio" }
+        let name = output.portName.lowercased()
+
+        switch output.portType {
+        case .builtInSpeaker, .builtInReceiver:
+            return UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
+        case .headphones:
+            return "headphones"
+        case .bluetoothA2DP, .bluetoothLE, .bluetoothHFP:
+            if name.contains("airpods max") { return "airpodsmax" }
+            if name.contains("airpods pro") { return "airpodspro" }
+            if name.contains("airpods 4") { return "airpods.gen4" }
+            if name.contains("airpods 3") || name.contains("airpods (3rd") { return "airpods.gen3" }
+            if name.contains("airpods") { return "airpods" }
+            if name.contains("beats") { return "headphones" }
+            return "headphones"
+        case .airPlay:
+            if name.contains("homepod mini") { return "homepodmini" }
+            if name.contains("homepod") { return "homepod" }
+            if name.contains("apple tv") || name.contains("appletv") { return "appletv" }
+            return "airplayaudio"
+        case .carAudio:
+            return "car.fill"
+        case .usbAudio:
+            return "hifispeaker"
+        default:
+            if name.contains("airpods max") { return "airpodsmax" }
+            if name.contains("airpods pro") { return "airpodspro" }
+            if name.contains("airpods 4") { return "airpods.gen4" }
+            if name.contains("airpods 3") || name.contains("airpods (3rd") { return "airpods.gen3" }
+            if name.contains("airpods") { return "airpods" }
+            if name.contains("homepod") { return "homepod" }
+            if name.contains("beats") || name.contains("headphone") { return "headphones" }
+            return "airplayaudio"
+        }
+    }
+
     private static func preferredOutput(
         for route: AVAudioSessionRouteDescription
     ) -> AVAudioSessionPortDescription? {
@@ -252,6 +315,8 @@ private enum RouteSymbol {
 #elseif os(macOS)
 private struct AudioOutputRouteButton: View {
     var tintColor: Color = Color.white.opacity(0.7)
+    var showsRouteName: Bool = true
+    var showsHeadphones: Bool = false
 
     var body: some View {
         AirPlayButton()
@@ -263,6 +328,8 @@ private struct AudioOutputRouteButton: View {
 #else
 private struct AudioOutputRouteButton: View {
     var tintColor: Color = Color.white.opacity(0.7)
+    var showsRouteName: Bool = true
+    var showsHeadphones: Bool = false
 
     var body: some View {
         Image(systemName: "airplayaudio")

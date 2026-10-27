@@ -95,7 +95,6 @@ struct SearchView: View {
     /// `SearchTabContent` so typing/focus never rebuilds this view’s destinations.
     private var externalSearchQuery: Binding<String>?
 
-    @Namespace private var albumZoomNamespace
     @Environment(\.registersHomeDestinations) private var registersHomeDestinations
 
     init(path: Binding<NavigationPath>) {
@@ -142,8 +141,7 @@ struct SearchView: View {
                 }
             }
             .modifier(SearchHomeDestinationRegistrar(
-                enabled: registersHomeDestinations,
-                albumZoomNamespace: albumZoomNamespace
+                enabled: registersHomeDestinations
             ))
             .navigationDestination(for: SearchHistoryNavTarget.self) { entry in
                 HistoryRecordingView(
@@ -199,7 +197,6 @@ private struct HistoryRecordingView<Content: View>: View {
 /// Registers `HomeDestination` for Search only when the parent stack does not already own it.
 private struct SearchHomeDestinationRegistrar: ViewModifier {
     let enabled: Bool
-    let albumZoomNamespace: Namespace.ID
 
     func body(content: Content) -> some View {
         if enabled {
@@ -212,16 +209,12 @@ private struct SearchHomeDestinationRegistrar: ViewModifier {
                 case .album(let album):
                     AlbumDetailView(
                         album: album,
-                        zoomSourceId: album.id,
-                        zoomNamespace: albumZoomNamespace,
                         coverArtId: album.coverArt
                     )
                 case .albumById(let id, let name, _, let coverArtId):
                     AlbumDetailView(
                         albumId: id,
                         albumName: name,
-                        zoomSourceId: id,
-                        zoomNamespace: albumZoomNamespace,
                         coverArtId: coverArtId
                     )
                 case .artist(let artist):

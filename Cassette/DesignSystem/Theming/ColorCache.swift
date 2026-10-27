@@ -21,6 +21,8 @@ nonisolated enum ColorCache {
         let packedText2: Int
         let packedText3: Int
         let packedText4: Int
+        var edgeAnalysis: ArtworkEdgeAnalysis? = nil
+        var isProvisional: Bool? = nil
 
         func asArtworkPalette() -> ArtworkPalette {
             ArtworkPalette(
@@ -29,7 +31,9 @@ nonisolated enum ColorCache {
                 text2: unpack(packedText2),
                 text3: unpack(packedText3),
                 text4: unpack(packedText4),
-                packedBackground: packedBackground
+                packedBackground: packedBackground,
+                edgeAnalysis: edgeAnalysis,
+                isProvisional: isProvisional
             )
         }
 
@@ -43,7 +47,9 @@ nonisolated enum ColorCache {
                 packedText1: t1,
                 packedText2: t2,
                 packedText3: t3,
-                packedText4: t4
+                packedText4: t4,
+                edgeAnalysis: palette.edgeAnalysis,
+                isProvisional: palette.isProvisional
             )
         }
     }
@@ -58,6 +64,7 @@ nonisolated enum ColorCache {
     }
 
     static func clear() { cache.clear() }
+    static func remove(for id: String) { cache.remove(for: id) }
 
     static func persistPreparedPalettes() async { await cache.flush() }
 
@@ -149,6 +156,16 @@ nonisolated final class ArtworkPaletteCache: @unchecked Sendable {
         lock.withLock {
             memory.removeAll()
             stored = [:]
+            revision &+= 1
+            schedulePersistenceLocked()
+        }
+    }
+
+    func remove(for id: String) {
+        hydrate()
+        lock.withLock {
+            memory[id] = nil
+            guard stored?.removeValue(forKey: id) != nil else { return }
             revision &+= 1
             schedulePersistenceLocked()
         }

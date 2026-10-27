@@ -52,7 +52,10 @@ struct ReleaseCandidateCacheTests {
             for index in 1...60 {
                 group.addTask {
                     if index.isMultiple(of: 7) { await cache.clearAudioTracksOnly() }
-                    _ = try await cache.store(data: Data(repeating: UInt8(index), count: index),
+                    // A raw counter reaches '<' at 60 and correctly trips HTML-response rejection.
+                    // Keep varied payload sizes under an audio signature instead.
+                    let payload = Data("fLaC".utf8) + Data(repeating: UInt8(index), count: index)
+                    _ = try await cache.store(data: payload,
                         forSongId: "track-\(index % 4)", serverId: server, mimeType: "audio/flac")
                 }
             }

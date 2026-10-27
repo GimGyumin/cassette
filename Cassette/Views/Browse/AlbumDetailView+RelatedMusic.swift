@@ -256,16 +256,47 @@ extension AlbumDetailContentView {
 
     func moreByArtistSection(vm: AlbumDetailViewModel) -> some View {
         VStack(alignment: .leading, spacing: CassetteSpacing.m) {
-            HStack(spacing: 4) {
-                Text(moreByTitle(vm: vm))
-                    .font(.system(size: 20, weight: .bold))
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(headerSecondaryColor.opacity(0.72))
+            if let artistId = vm.artistId, !artistId.isEmpty {
+                DetailNavigationLink(destination: HomeDestination.artistPush(
+                    id: artistId, name: vm.artistName ?? "", coverArtId: nil, token: artistRouteToken
+                )) {
+                    moreByArtistHeading(vm: vm)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(String(localized: "Show More", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+            } else {
+                moreByArtistHeading(vm: vm)
             }
-                .foregroundStyle(headerTextColor)
-                .padding(.horizontal, CassetteSpacing.l)
 
+            moreByArtistAlbums(vm: vm)
+        }
+        .padding(.top, CassetteSpacing.xxxl)
+        .padding(.bottom, CassetteSpacing.l)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            // Keep the album's own hue; lower this shelf by roughly one tone.
+            AlbumRelatedShelfFill(baseColor: relatedShelfBaseColor)
+        }
+        .anchorPreference(key: AlbumRelatedShelfBoundsKey.self, value: .bounds) { $0 }
+    }
+
+    private func moreByArtistHeading(vm: AlbumDetailViewModel) -> some View {
+        HStack(spacing: 4) {
+            Text(moreByTitle(vm: vm))
+                .font(.system(size: 20, weight: .bold))
+            Image(systemName: "chevron.right")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(headerSecondaryColor.opacity(0.72))
+        }
+            .foregroundStyle(headerTextColor)
+            .padding(.horizontal, CassetteSpacing.l)
+            .frame(minHeight: 44, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func moreByArtistAlbums(vm: AlbumDetailViewModel) -> some View {
+        VStack(spacing: 0) {
             if vm.isLoadingMoreAlbums && vm.moreAlbumsByArtist.isEmpty {
                 ProgressView()
                     .tint(headerSecondaryColor)
@@ -306,13 +337,11 @@ extension AlbumDetailContentView {
                 }
             }
 
-            // Reserve scroll room while the page backdrop extends this shelf's tone below it.
+            // Keep the mini-player scroll room within this shelf's darker background.
             Color.clear
                 .frame(height: CassetteSpacing.miniPlayerBottomMargin)
                 .accessibilityHidden(true)
         }
-        .padding(.top, CassetteSpacing.xxxl)
-        .padding(.bottom, CassetteSpacing.l)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

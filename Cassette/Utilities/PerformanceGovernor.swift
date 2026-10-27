@@ -121,6 +121,11 @@ nonisolated struct PerformanceBudget: Equatable, Sendable {
         isLowPowerMode || thermalPressure.requiresBackOff
     }
 
+    /// Inventory polling only updates preparation progress; transfer completion stays event-driven.
+    var artworkInventoryInterval: Duration {
+        !isAppActive || isConstrained || isMemoryPressured ? .seconds(5) : .seconds(2)
+    }
+
     // MARK: Motion
 
     /// Decorative motion (animated gradients, marquees, medallions) is the first cost to go:
@@ -160,10 +165,10 @@ nonisolated struct PerformanceBudget: Equatable, Sendable {
     /// A translation explicitly requested by the listener remains available.
     var allowsAutomaticTranslation: Bool { allowsHeavyColorAnalysis }
 
-    /// Explicit downloads remain available. Opportunistic copies wait for a cooler,
-    /// foreground device so they do not compete with screen-off audio or battery saving.
+    /// User-enabled offline copies may run during screen-off playback. Playback stability,
+    /// network policy and single-transfer ownership are enforced by PlayerService.
     var allowsAutomaticMediaDownloads: Bool {
-        isAppActive && thermalPressure == .nominal && !isLowPowerMode && !isMemoryPressured
+        !thermalPressure.requiresBackOff && !isLowPowerMode && !isMemoryPressured
     }
 
     var maximumConcurrentDownloads: Int {
@@ -231,6 +236,12 @@ nonisolated struct PerformanceBudget: Equatable, Sendable {
             return karaokePlayback ? 50_000_000 : 150_000_000
         }
         return karaokePlayback ? 33_333_333 : 100_000_000
+    }
+
+    /// Only active glyph leaves run this clock; layout keeps its lower tracking rate.
+    var lyricsRenderInterval: TimeInterval {
+        if !isAppActive { return 1 }
+        return isConstrained || thermalPressure == .fair || isMemoryPressured ? 1.0 / 30 : 1.0 / 60
     }
 
     /// One-line description for device-side verification (Console.app / Xcode Instruments).

@@ -135,6 +135,10 @@ final class LibraryIndexService {
         }, uniquingKeysWith: { _, new in new })
     }
 
+    var albumArtworkSnapshot: [String: String] {
+        Dictionary(albums.map { ($0.id, $0.coverArtId ?? $0.id) }, uniquingKeysWith: { _, new in new })
+    }
+
     /// Resolve all browse cards in one background pass. View bodies must never scan the catalog.
     func browseCoverArtIDs(for genres: [String]) async -> [String: String] {
         let token = generation
@@ -422,6 +426,7 @@ final class LibraryIndexService {
         (artistTokens, albumTokens, playlistTokens, songTokens) = (tokens.0, tokens.1, tokens.2, tokens.3)
         entryCount = artists.count + albums.count + playlists.count + songs.count
         lastIndexedAt = snapshot.date
+        RuntimeDiagnostics.mark(.libraryReady)
         return true
     }
 

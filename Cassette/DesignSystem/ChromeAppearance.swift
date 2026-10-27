@@ -47,6 +47,21 @@ extension View {
     }
 }
 
+/// Observe chrome below the navigation owner. A pop restores the previous scheme;
+/// that update must not re-evaluate every NavigationStack destination mid-transition.
+struct TabBarChromeAppearance: ViewModifier {
+    @Environment(ChromeAppearance.self) private var appearance
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content.toolbarColorScheme(appearance.overrideColorScheme ?? colorScheme, for: .tabBar)
+        #else
+        content
+        #endif
+    }
+}
+
 private struct ThemedChromeSchemeModifier: ViewModifier {
     let scheme: ColorScheme?
     @Environment(ChromeAppearance.self) private var chromeAppearance
@@ -98,12 +113,16 @@ private struct ChromeAppearanceLifecycle: UIViewControllerRepresentable {
     }
 }
 
-private final class ChromeAppearanceController: UIViewController {
+final class ChromeAppearanceController: UIViewController {
     private let appearance: ChromeAppearance
     private let ownerID: UUID
     private var scheme: ColorScheme?
     private var isVisible = false
     private var isLeaving = false
+    private var visibilityRevision = 0
+    private var departureCompletionPending = false
+    private weak var navigationPage: UIViewController?
+    private weak var navigationStack: UINavigationController?
 
     init(appearance: ChromeAppearance, ownerID: UUID, scheme: ColorScheme?) {
         self.appearance = appearance
@@ -121,15 +140,45 @@ private final class ChromeAppearanceController: UIViewController {
     }
 
     override func viewWillDisappear(_ animated: Bool) {
+        captureNavigationPage()
         isLeaving = true
+        visibilityRevision &+= 1
         super.viewWillDisappear(animated)
+        let revision = visibilityRevision
+        if let coordinator = transitionCoordinator ?? navigationController?.transitionCoordinator {
+            let appearance = appearance, ownerID = ownerID
+            // didDisappear can be too late to find/register the interactive coordinator.
+            // Register now, before the gesture's finish/cancel animation begins.
+            departureCompletionPending = coordinator.animate(alongsideTransition: nil) { [weak self] context in
+                guard let self else {
+                    guard !context.isCancelled else { return }
+                    DispatchQueue.main.async {
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { appearance.disappear(id: ownerID) }
+                    }
+                    return
+                }
+                guard visibilityRevision == revision else { return }
+                departureCompletionPending = false
+                guard !context.isCancelled else { return }
+                releaseAppearance()
+            }
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        captureNavigationPage()
+        guard isCurrentNavigationPage else { return }
         isVisible = true
         isLeaving = false
-        appearance.appear(id: ownerID, scheme: scheme)
+        departureCompletionPending = false
+        visibilityRevision &+= 1
+        publishAfterTransition { controller in
+            guard controller.isVisible, !controller.isLeaving, controller.isCurrentNavigationPage else { return }
+            controller.appearance.appear(id: controller.ownerID, scheme: controller.scheme)
+        }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -141,17 +190,67 @@ private final class ChromeAppearanceController: UIViewController {
         guard self.scheme != scheme else { return }
         self.scheme = scheme
         guard isVisible, !isLeaving else { return }
-        // updateUIViewController runs inside SwiftUI's update transaction. Publish later,
-        // and recheck visibility in case an interactive transition started meanwhile.
-        Task { @MainActor [weak self] in
-            guard let self, isVisible, !isLeaving else { return }
-            appearance.update(id: ownerID, scheme: self.scheme)
+        // A palette can arrive during an interactive pop. Use the same completion
+        // boundary as appearance changes, then recheck whether this page still owns it.
+        publishAfterTransition { controller in
+            guard controller.isVisible, !controller.isLeaving, controller.isCurrentNavigationPage else { return }
+            controller.appearance.update(id: controller.ownerID, scheme: controller.scheme)
         }
+    }
+
+    private func captureNavigationPage() {
+        var candidate = parent
+        while let controller = candidate {
+            if let stack = controller.navigationController,
+               controller.parent === stack || stack.viewControllers.contains(where: { $0 === controller }) {
+                navigationPage = controller
+                navigationStack = stack
+                return
+            }
+            candidate = controller.parent
+        }
+    }
+
+    private var isCurrentNavigationPage: Bool {
+        guard let navigationPage, let navigationStack else { return parent != nil }
+        return navigationStack.topViewController === navigationPage
     }
 
     func releaseAppearance() {
         isVisible = false
-        appearance.disappear(id: ownerID)
+        guard !departureCompletionPending else { return }
+        visibilityRevision &+= 1
+        // UIKit has called didDisappear, but the zoom transition can still own its
+        // snapshot until the coordinator completes. Publishing into TabView in this
+        // callback can invalidate that snapshot's removal transaction.
+        let appearance = appearance, ownerID = ownerID
+        let revision = visibilityRevision
+        let release: @MainActor () -> Void = { [weak self] in
+            guard self == nil || (self?.visibilityRevision == revision && self?.isVisible == false) else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { appearance.disappear(id: ownerID) }
+        }
+        DispatchQueue.main.async(execute: release)
+    }
+
+    private func publishAfterTransition(_ change: @escaping @MainActor (ChromeAppearanceController) -> Void) {
+        let revision = visibilityRevision
+        let publish: @MainActor () -> Void = { [weak self] in
+            guard let self, visibilityRevision == revision else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { change(self) }
+        }
+        if let coordinator = transitionCoordinator {
+            let scheduled = coordinator.animate(alongsideTransition: nil) { context in
+                guard !context.isCancelled else { return }
+                DispatchQueue.main.async(execute: publish)
+            }
+            if !scheduled { DispatchQueue.main.async(execute: publish) }
+        } else {
+            DispatchQueue.main.async(execute: publish)
+        }
     }
 }
 #endif

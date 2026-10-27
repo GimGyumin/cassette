@@ -20,6 +20,7 @@ struct AudioQualityLabelView: View {
     /// Player scrubber: flat fill only — never Liquid Glass.
     var usesGlass: Bool = false
     var style: Style = .pill
+    var compact: Bool = false
 
     @State private var showDetail = false
 
@@ -41,11 +42,11 @@ struct AudioQualityLabelView: View {
                 } label: {
                     pillContent
                         .foregroundStyle(foreground)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, compact ? 7 : 10)
+                        .padding(.vertical, compact ? 4 : 6)
                         .background {
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(foreground.opacity(usesGlass ? 0.18 : 0.22))
+                                .fill(foreground.opacity(compact ? 0.16 : (usesGlass ? 0.18 : 0.22)))
                         }
                         .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
@@ -72,8 +73,7 @@ struct AudioQualityLabelView: View {
         switch quality {
         case .dolbyAtmos, .dolby, .multichannel:
             HStack(spacing: 6) {
-                Image(systemName: "speaker.wave.3.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                AudioFormatSymbol(quality: quality, height: 10)
                 Text(quality.title)
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
@@ -95,8 +95,7 @@ struct AudioQualityLabelView: View {
         switch quality {
         case .dolbyAtmos, .dolby, .multichannel:
             HStack(spacing: 4) {
-                Image(systemName: "speaker.wave.3.fill")
-                    .font(.system(size: 10, weight: .semibold))
+                AudioFormatSymbol(quality: quality, height: 9)
                 Text(quality.title)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
@@ -132,8 +131,7 @@ private struct MacAudioQualityPopover: View {
         VStack(spacing: CassetteSpacing.m) {
             switch quality {
             case .dolbyAtmos, .dolby, .multichannel:
-                Image(systemName: "speaker.wave.3.fill")
-                    .font(.system(size: 30, weight: .regular))
+                AudioFormatSymbol(quality: quality, height: 26)
             case .hiResLossless, .lossless:
                 Image("AppleLosslessMark")
                     .renderingMode(.template)
@@ -196,9 +194,7 @@ private struct AudioQualityDetailOverlay: View {
                 Group {
                     switch quality {
                     case .dolbyAtmos, .dolby, .multichannel:
-                        Image(systemName: "speaker.wave.3.fill")
-                            .font(.system(size: 52, weight: .regular))
-                            .frame(height: 44)
+                        AudioFormatSymbol(quality: quality, height: 42)
                     case .hiResLossless, .lossless:
                         Image("AppleLosslessMark")
                             .renderingMode(.template)

@@ -52,8 +52,31 @@ struct ArtworkSceneTests {
         #expect(ArtworkSceneMotion.crossfadeProgress(elapsed: 10) == 1)
     }
 
-    @Test("Real Metal rendering evolves without audio and is deterministic at a fixed time")
-    func gpuMotion() throws {
+    @Test("AMLL sprite sampling uses seconds and preserves square layers in either orientation")
+    func amllSpriteMotion() {
+        let size = CGSize(width: 192, height: 384)
+        let layers = AMLLArtworkMotion.layers(size: size, elapsed: 10)
+        #expect(layers.count == 4)
+        // Independent values from Pixi onTick after 600 nominal ticker units.
+        #expect(abs(layers[0].x - 0.25) < 0.00001 && abs(layers[0].y - 0.5) < 0.00001)
+        #expect(abs(layers[0].z - sqrt(2)) < 0.00001)
+        #expect(abs(layers[0].w - 0.85) < 0.00001)
+        #expect(abs(layers[1].w - 0.9) < 0.00001)
+        #expect(abs(layers[2].x - Float((96 + 48 * cos(0.45)) / 384)) < 0.00001)
+        #expect(abs(layers[3].x - Float((96 + 4.8 + cos(2.7)) / 384)) < 0.00001)
+        #expect(layers == AMLLArtworkMotion.layers(size: size, elapsed: 20, flowSpeed: 0.5))
+        #expect(AMLLArtworkMotion.layers(size: size, elapsed: 0)
+            == AMLLArtworkMotion.layers(size: size, elapsed: 100, flowSpeed: 0))
+        let wide = AMLLArtworkMotion.layers(size: CGSize(width: 384, height: 192), elapsed: 10)
+        #expect(wide[0].x == 0.5 && wide[0].y == 0.25)
+        #expect(wide.map(\.z) == layers.map(\.z))
+        #expect(AMLLArtworkMotion.layers(size: .zero, elapsed: .nan, flowSpeed: .infinity)
+            .allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite && $0.w.isFinite })
+    }
+
+    @Test("Real Metal rendering evolves within seconds without audio and freezes at zero flow", arguments: [false, true])
+    func gpuMotion(landscape: Bool) throws {
+        let size = landscape ? CGSize(width: 384, height: 192) : CGSize(width: 192, height: 384)
         let device = try #require(MTLCreateSystemDefaultDevice())
         let gpu = try LyricsArtworkGPU(device: device)
         let texture = try artwork(device: device, colors: [
@@ -61,14 +84,19 @@ struct ArtworkSceneTests {
             SIMD4<UInt8>(235, 180, 20, 255), SIMD4<UInt8>(100, 35, 200, 255)
         ])
         gpu.replaceArtwork(texture, crossfade: false)
-        let first = try pixels(gpu: gpu, time: 0)
-        let repeated = try pixels(gpu: gpu, time: 0)
-        let later = try pixels(gpu: gpu, time: 90)
+        let first = try pixels(gpu: gpu, time: 0, size: size)
+        let repeated = try pixels(gpu: gpu, time: 0, size: size)
+        let soon = try pixels(gpu: gpu, time: 6, size: size)
+        let later = try pixels(gpu: gpu, time: 90, size: size)
         #expect(distance(first, repeated) < 0.0001)
+        #expect(distance(first, soon) > 0.001)
         #expect(distance(first, later) > 0.003)
+        #expect(distance(first, try pixels(gpu: gpu, time: 90, size: size, flowSpeed: 0)) < 0.0001)
         #expect(first.allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 1 })
-        try writePreview(first, name: "cassette-lyrics-scene-0.png")
-        try writePreview(later, name: "cassette-lyrics-scene-90.png")
+        let label = landscape ? "landscape" : "portrait"
+        try writePreview(first, name: "cassette-amll-\(label)-0.png", size: size)
+        try writePreview(soon, name: "cassette-amll-\(label)-6.png", size: size)
+        try writePreview(later, name: "cassette-amll-\(label)-90.png", size: size)
     }
 
     @Test("Rapid artwork changes fade from the visible composite, including an unfinished fade")
@@ -208,8 +236,9 @@ struct ArtworkSceneTests {
         return texture
     }
 
-    private func pixels(gpu: LyricsArtworkGPU, time: Float, fade: Float = 1) throws -> [Float] {
-        let frame = try #require(gpu.render(size: CGSize(width: 192, height: 384), elapsed: time, transition: fade))
+    private func pixels(gpu: LyricsArtworkGPU, time: Float, fade: Float = 1,
+                        size: CGSize = CGSize(width: 192, height: 384), flowSpeed: Double = 1) throws -> [Float] {
+        let frame = try #require(gpu.render(size: size, elapsed: time, transition: fade, flowSpeed: flowSpeed))
         let row = frame.texture.width * 8
         let buffer = try #require(gpu.device.makeBuffer(length: row * frame.texture.height, options: .storageModeShared))
         let blit = try #require(frame.commandBuffer.makeBlitCommandEncoder())
@@ -229,14 +258,14 @@ struct ArtworkSceneTests {
         zip(first, second).reduce(0) { $0 + abs($1.0 - $1.1) } / Float(first.count)
     }
 
-    private func writePreview(_ values: [Float], name: String) throws {
+    private func writePreview(_ values: [Float], name: String, size: CGSize = CGSize(width: 192, height: 384)) throws {
         var bytes = values.enumerated().map { index, value in
             let encoded = index % 4 == 3 ? value : (value <= 0.0031308 ? value * 12.92 : 1.055 * pow(value, 1 / 2.4) - 0.055)
             return UInt8(min(255, max(0, (encoded * 255).rounded())))
         }
         try bytes.withUnsafeMutableBytes {
-            let context = try #require(CGContext(data: $0.baseAddress, width: 192, height: 384,
-                bitsPerComponent: 8, bytesPerRow: 192 * 4, space: CGColorSpace(name: CGColorSpace.displayP3)!,
+            let context = try #require(CGContext(data: $0.baseAddress, width: Int(size.width), height: Int(size.height),
+                bitsPerComponent: 8, bytesPerRow: Int(size.width) * 4, space: CGColorSpace(name: CGColorSpace.displayP3)!,
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
             let image = try #require(context.makeImage())
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)

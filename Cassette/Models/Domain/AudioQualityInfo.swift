@@ -147,6 +147,10 @@ nonisolated enum AudioQualityClassifier {
         return ["mp3", "opus", "aac", "m4a"].contains(format)
     }
 
+    static func isDolbyAudio(_ song: DisplayableSong) -> Bool {
+        isDolbyAtmos(song) || dolbyCodecName(song) != nil
+    }
+
     /// Preserve spatial/multichannel bitstreams and ambiguous MP4 audio. Missing FLAC channel
     /// metadata is common in Navidrome's Jellyfin items and must not force a requested AAC raw.
     static func shouldSkipTranscoding(_ song: DisplayableSong) -> Bool {
@@ -196,7 +200,8 @@ nonisolated enum AudioQualityClassifier {
 
     /// True when a previously cached/transcoded file must not be reused for playback.
     static func shouldBypassEphemeralCache(_ song: DisplayableSong) -> Bool {
-        requiresSystemPlayer(song)
+        // Native sample-rate playback does not make a stereo file unsafe to cache.
+        shouldSkipTranscoding(song)
     }
 
     static func bestQuality(in songs: [DisplayableSong]) -> AudioQualityKind? {

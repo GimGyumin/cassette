@@ -12,10 +12,14 @@ import SwiftSonic
 protocol MediaResolverProtocol: AnyObject, Sendable {
     func resolve(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource
     func resolveOriginal(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource
+    func resolveLosslessUpgrade(song: DisplayableSong, serverId: UUID) async throws -> MediaSource?
+    func preferredAtmosDownloadSong(for song: DisplayableSong, serverId: UUID) async -> DisplayableSong?
     func resolveRadio(_ station: InternetRadioStation) async throws -> MediaSource
 }
 
 extension MediaResolverProtocol {
+    func preferredAtmosDownloadSong(for song: DisplayableSong, serverId: UUID) async -> DisplayableSong? { nil }
+    func resolveLosslessUpgrade(song: DisplayableSong, serverId: UUID) async throws -> MediaSource? { nil }
     func resolveOriginal(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource {
         try await resolve(songId: songId, serverId: serverId, song: song)
     }

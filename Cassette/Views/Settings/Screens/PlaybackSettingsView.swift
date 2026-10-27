@@ -5,18 +5,15 @@
 
 import SwiftUI
 
-/// Playback preferences, grouped the way Apple Music groups them: one card of
-/// plain rows plus a single short footer — never a paragraph per setting.
+/// Song transitions and optional playback feedback.
 struct PlaybackSettingsView: View {
     @Environment(\.appContainer) private var container
-    @AppStorage("cassette.history.enabled") private var listeningHistoryEnabled = true
     @ObservedObject private var appleMusic = AppleMusicSettings.shared
 
     #if os(iOS)
     @State private var musicHapticsActive = false
     #endif
 
-    private var replayGain: ReplayGainSettings? { container?.replayGainSettings }
     private var crossfade: CrossfadeSettings? { container?.crossfadeSettings }
     private var gapless: GaplessSettings? { container?.gaplessSettings }
 
@@ -30,7 +27,7 @@ struct PlaybackSettingsView: View {
         }
         .formStyle(.grouped)
         .modifier(SettingsSubpageStyle())
-        .navigationTitle(Text("Playback"))
+        .navigationTitle(Text("Song Transitions"))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -52,26 +49,6 @@ struct PlaybackSettingsView: View {
 
     private var playbackSection: some View {
         Section {
-            Toggle(isOn: $listeningHistoryEnabled) {
-                SettingsRowTitle("Listening History")
-            }
-
-            Toggle(isOn: Binding(
-                get: { replayGain?.enabled ?? false },
-                set: { newValue in
-                    replayGain?.enabled = newValue
-                    Task { await container?.playerService.replayGainSettingsDidChange() }
-                }
-            )) {
-                SettingsRowTitle("Volume Leveling")
-            }
-
-            if replayGain?.enabled == true {
-                SettingsNavigationRow("Volume Leveling Options", value: replayGainModeValue) {
-                    ReplayGainDetailSettingsView()
-                }
-            }
-
             Toggle(isOn: Binding(
                 get: { gapless?.isEnabled ?? GaplessSettings.defaultEnabled },
                 set: { newValue in
@@ -86,16 +63,10 @@ struct PlaybackSettingsView: View {
                 CrossfadeSettingsView()
             }
         } header: {
-            SettingsSectionHeader("Playback")
+            SettingsSectionHeader("Song Transitions")
         } footer: {
-            SettingsSectionFooter("Removes the silence between consecutive tracks. Volume leveling evens out loudness differences between tracks.")
+            SettingsSectionFooter("Gapless playback removes silence between consecutive tracks. Crossfade fades out one track and fades in the next.")
         }
-    }
-
-    private var replayGainModeValue: String {
-        (replayGain?.mode ?? .track) == .track
-            ? String(localized: "Track", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
-            : String(localized: "Album", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
     }
 
     private var crossfadeValue: String {

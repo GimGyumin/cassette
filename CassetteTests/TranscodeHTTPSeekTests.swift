@@ -1,8 +1,10 @@
 import Foundation
 import Network
 import Testing
+import Synchronization
 import SwiftSonic
 import AudioStreaming
+import AVFoundation
 @testable import Cassette
 
 /// Real loopback HTTP responses and AVPlayer decoding, without credentials or external servers.
@@ -30,16 +32,18 @@ nonisolated private final class SeekHTTPFixtureServer: @unchecked Sendable {
     private let advertisesOffset: Bool
     private let rejectsStreams: Bool
     private let mediaDuration: Double
+    private let losslessData: Data?
 
     var requests: [Request] { lock.withLock { recorded } }
 
     init(codec: String, delay: Double = 0, advertisesOffset: Bool = true, rejectsStreams: Bool = false,
-         mediaDuration: Double = 180) throws {
+         mediaDuration: Double = 180, losslessData: Data? = nil) throws {
         self.codec = codec
         self.delay = delay
         self.advertisesOffset = advertisesOffset
         self.rejectsStreams = rejectsStreams
         self.mediaDuration = mediaDuration
+        self.losslessData = losslessData
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent(codec == "aac" ? "Fixtures/SilentAAC.adts" : "Fixtures/SilentMP3.mp3")
         let bytes = [UInt8](try Data(contentsOf: fixture))
@@ -127,6 +131,7 @@ nonisolated private final class SeekHTTPFixtureServer: @unchecked Sendable {
         let body: Data
         let mime: String
         var status = 200
+        var rangeHeader = ""
         if ["ping", "getOpenSubsonicExtensions"].contains(url.deletingPathExtension().lastPathComponent) {
             let extensions: [[String: Any]] = advertisesOffset ? [["name": "transcodeOffset", "versions": [1]]] : []
             body = (try? JSONSerialization.data(withJSONObject: ["subsonic-response": [
@@ -134,6 +139,18 @@ nonisolated private final class SeekHTTPFixtureServer: @unchecked Sendable {
                 "openSubsonicExtensions": extensions
             ]])) ?? Data()
             mime = "application/json"
+        } else if request.query["format"] == "raw", let losslessData {
+            mime = "audio/wav"
+            if let range = headers["range"], range.hasPrefix("bytes="),
+               let start = Int(range.dropFirst(6).split(separator: "-", omittingEmptySubsequences: false).first ?? ""),
+               start >= 0, start < losslessData.count {
+                let parts = range.dropFirst(6).split(separator: "-", omittingEmptySubsequences: false)
+                let end = min(parts.count > 1 ? (Int(parts[1]) ?? losslessData.count - 1) : losslessData.count - 1,
+                              losslessData.count - 1)
+                body = losslessData.subdata(in: start..<(max(start, end) + 1))
+                status = 206
+                rangeHeader = "Content-Range: bytes \(start)-\(max(start, end))/\(losslessData.count)\r\n"
+            } else { body = losslessData }
         } else if rejectsStreams {
             status = 503
             body = Data("unavailable".utf8)
@@ -149,7 +166,7 @@ nonisolated private final class SeekHTTPFixtureServer: @unchecked Sendable {
             body = result
             mime = codec == "aac" ? "audio/aac" : "audio/mpeg"
         }
-        let header = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Unavailable")\r\nContent-Type: \(mime)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+        let header = "HTTP/1.1 \(status) \(status == 206 ? "Partial Content" : status == 200 ? "OK" : "Unavailable")\r\nContent-Type: \(mime)\r\nContent-Length: \(body.count)\r\n\(rangeHeader)Connection: close\r\n\r\n"
         var response = Data(header.utf8)
         if first[0] != "HEAD" { response.append(body) }
         let responseBytes = response
@@ -162,6 +179,199 @@ nonisolated private final class SeekHTTPFixtureServer: @unchecked Sendable {
 @Suite("Time-offset HTTP × AVPlayer", .serialized)
 @MainActor
 struct TranscodeHTTPSeekTests {
+    private func losslessFixture() throws -> Data {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("quality-\(UUID()).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let pcm = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100 * 40))
+        pcm.frameLength = pcm.frameCapacity
+        let channels = try #require(pcm.floatChannelData)
+        for channel in 0..<2 { channels[channel].update(repeating: 0, count: Int(pcm.frameLength)) }
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try file.write(from: pcm)
+        }
+        return try Data(contentsOf: url)
+    }
+
+    @Test func losslessHTTPHandoffKeepsClockMovingAndPreservesServerOffset() async throws {
+        let server = try SeekHTTPFixtureServer(codec: "aac", delay: 0.2, mediaDuration: 40,
+                                              losslessData: losslessFixture())
+        defer { server.stop() }
+        let base = try await server.baseURL()
+        let oldURL = try #require(URL(string: base.absoluteString + "/stream?format=aac&timeOffset=7"))
+        let newURL = try #require(URL(string: base.absoluteString + "/stream?format=raw"))
+        let engine = AVPlayerPlaybackEngine()
+        engine.volume = 0
+        defer { engine.stop() }
+        engine.start(url: oldURL, headers: [:], generation: 1, allowsAudioAnalysis: true, promptStartupBuffer: 1)
+        try await waitUntil { engine.state == .playing && engine.progress > 0.1 }
+        let oldID = engine.playerIdentity
+        let initial = engine.progress + 7
+        let started = ContinuousClock.now
+        let prepared = await engine.prepareLosslessReplacement(
+            url: newURL, headers: ["X-Test-Auth": "fixture"], timelineOffset: 7)
+        let token = try #require(prepared, "Preparation failed: \(engine.qualityPreparationDiagnostic)")
+        #expect(engine.playerIdentity == oldID)
+        #expect(engine.state == .playing)
+        let before = engine.progress + 7
+        #expect(before > initial + 0.1)
+        #expect(engine.commitLosslessReplacement(token))
+        #expect(engine.playerIdentity != oldID)
+        #expect(abs(engine.progress - before) < 0.05)
+        for _ in 0..<20 {
+            #expect(engine.state == .playing)
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let elapsed = Double(RuntimeDiagnostics.milliseconds(started.duration(to: .now))) / 1_000
+        #expect(abs((engine.progress - initial) - elapsed) < 0.08)
+        #expect(engine.actualCodec == "PCM")
+        #expect(server.requests.contains { $0.query["format"] == "raw" && $0.headers["x-test-auth"] == "fixture" })
+    }
+
+    @Test(arguments: ["upgrade", "lossyPreference", "losslessOff", "disableLosslessDuringPreparation", "meteredWiFi", "networkReversal", "pause", "accountChange"])
+    func networkChangeUpgradesOnlyTheCurrentAuthorizedPlayback(_ scenario: String) async throws {
+        let server = try SeekHTTPFixtureServer(codec: "aac", mediaDuration: 40, losslessData: losslessFixture())
+        defer { server.stop() }
+        let base = try await server.baseURL()
+        let oldURL = try #require(URL(string: base.absoluteString + "/stream?format=aac&timeOffset=7"))
+        let newURL = try #require(URL(string: base.absoluteString + "/stream?format=raw"))
+        let resolver = QualityUpgradeResolver(source: .stream(newURL, customHeaders: [:]))
+        let container = try AppContainer(inMemory: true, engine: FakePlaybackEngine())
+        let suite = "QualityHandoffTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = StreamingSettings(defaults: defaults)
+        settings.wifiFormat = scenario == "lossyPreference" ? .aac256 : .flacOriginal
+        settings.losslessAudioEnabled = scenario != "losslessOff"
+        container.serverState.activeServer = ServerSnapshot(from: ServerConfig(
+            displayName: "Test", baseURL: base.absoluteString, username: "fixture"))
+        let song = DisplayableSong(id: "same-recording", title: "Keep metadata", artist: "Artist",
+                                  albumId: "album", albumName: "Original album", duration: 40,
+                                  coverArtId: "cover", audioFormat: "flac", bitDepth: 16, samplingRate: 44_100)
+        container.playerState.queue = [song]
+        container.playerState.currentIndex = 0
+        container.playerState.currentTrack = song
+        container.playerState.duration = 40
+        container.playerState.position = 7
+        container.playerState.playbackState = .playing
+        container.playerState.isDeliveringTranscodedAudio = true
+        let player = PlayerService(state: container.playerState, mediaResolver: resolver,
+            serverService: container.serverService, sessionService: container.sessionService,
+            artworkImageCache: container.artworkImageCache, lyricsService: container.lyricsService,
+            libraryService: container.libraryService, cacheService: container.cacheService,
+            downloadService: container.downloadService, cacheSettings: container.cacheSettings,
+            streamingSettings: settings, replayGainSettings: container.replayGainSettings,
+            crossfadeSettings: container.crossfadeSettings, gaplessSettings: container.gaplessSettings,
+            toastService: container.toastService, statsService: container.statsService,
+            listenBrainzService: container.listenBrainzService, engine: FakePlaybackEngine())
+        await player.installQualityUpgradeFixture(.stream(oldURL, customHeaders: [:]))
+        player.systemEngine.volume = 0
+        try await waitUntil { player.systemEngine.state == .playing && player.systemEngine.progress > 0.1 }
+        let identity = player.systemEngine.playerIdentity
+        let cell = PlaybackNetworkPath(online: true, wifi: false, cellular: true, expensive: true, constrained: false)
+        let wifi = PlaybackNetworkPath(online: true, wifi: true, cellular: false,
+                                       expensive: scenario == "meteredWiFi", constrained: false)
+        container.serverState.playbackNetworkPath = cell
+        await player.handleNetworkPathChange(cell)
+        // A brief offline interval must not lose the pending cellular → Wi-Fi transition.
+        let offline = PlaybackNetworkPath(online: false, wifi: false, cellular: false, expensive: false, constrained: false)
+        container.serverState.playbackNetworkPath = offline
+        await player.handleNetworkPathChange(offline)
+        container.serverState.playbackNetworkPath = wifi
+        await player.handleNetworkPathChange(wifi)
+        if ["lossyPreference", "losslessOff", "meteredWiFi"].contains(scenario) {
+            try await Task.sleep(for: .milliseconds(1_500))
+            #expect(resolver.calls == 0)
+        } else {
+            try await waitUntil { resolver.calls == 1 }
+            switch scenario {
+            case "disableLosslessDuringPreparation": settings.losslessAudioEnabled = false
+            case "networkReversal":
+                container.serverState.playbackNetworkPath = cell
+                await player.handleNetworkPathChange(cell)
+            case "pause": await player.pause()
+            case "accountChange": container.serverState.activeServer = nil
+            default: break
+            }
+            // The resolver deliberately ignores cancellation so stale-result fencing is exercised.
+            resolver.pending?.resume(returning: resolver.source)
+            resolver.pending = nil
+            let deadline = Date().addingTimeInterval(15)
+            while await player.qualityUpgradeTask != nil, Date() < deadline {
+                try await Task.sleep(for: .milliseconds(30))
+            }
+            #expect(await player.qualityUpgradeTask == nil)
+        }
+        #expect(container.playerState.currentTrack == song)
+        #expect(container.playerState.queue == [song])
+        if scenario == "upgrade" {
+            #expect(player.systemEngine.playerIdentity != identity)
+            #expect(!container.playerState.isDeliveringTranscodedAudio)
+            #expect(player.systemEngine.progress >= 7)
+            #expect(await player.streamTimeOffset == 0)
+        } else {
+            #expect(player.systemEngine.playerIdentity == identity)
+            #expect(container.playerState.isDeliveringTranscodedAudio)
+        }
+        #expect(player.systemEngine.state == (scenario == "pause" ? .paused : .playing))
+        await player.stop()
+    }
+
+    @Test(arguments: ["failed", "cancelled", "paused", "seek", "replaced", "wrongCodec"])
+    func abandonedQualityPreparationNeverReplacesCurrentPlayback(_ action: String) async throws {
+        let oldServer = try SeekHTTPFixtureServer(codec: "aac", mediaDuration: 40)
+        let newServer = try SeekHTTPFixtureServer(codec: "aac", delay: 0.3,
+            rejectsStreams: action == "failed", mediaDuration: 40,
+            losslessData: action == "wrongCodec" || action == "failed" ? nil : losslessFixture())
+        defer { oldServer.stop(); newServer.stop() }
+        let oldURL = try await oldServer.baseURL().appendingPathComponent("stream.aac")
+        let newURL = try #require(URL(string: try await newServer.baseURL().absoluteString + "/stream?format=raw"))
+        let engine = AVPlayerPlaybackEngine()
+        engine.volume = 0
+        defer { engine.stop() }
+        engine.start(url: oldURL, headers: [:], generation: 1, promptStartupBuffer: 1)
+        try await waitUntil { engine.state == .playing && engine.progress > 0.1 }
+        let identity = engine.playerIdentity
+        let task = Task { await engine.prepareLosslessReplacement(url: newURL, headers: [:], timelineOffset: 0) }
+        try await Task.sleep(for: .milliseconds(100))
+        switch action {
+        case "cancelled": task.cancel()
+        case "paused": engine.pause()
+        case "seek": engine.seek(to: 5)
+        case "replaced": engine.start(url: oldURL, headers: [:], generation: 2, promptStartupBuffer: 1)
+        default: break
+        }
+        #expect(await task.value == nil)
+        if action != "replaced" { #expect(engine.playerIdentity == identity) }
+        if action == "paused" { #expect(engine.state == .paused) }
+        else { try await waitUntil { engine.state == .playing } }
+    }
+
+    @Test func swiftSonicTaskDelegateStillDeliversSessionMetrics() async throws {
+        let server = try SeekHTTPFixtureServer(codec: "aac", mediaDuration: 1)
+        defer { server.stop() }
+        let base = try await server.baseURL()
+        let snapshots = Mutex<[NetworkTaskMetricsSnapshot]>([])
+        let delegate = NetworkTaskDiagnostics { snapshot in snapshots.withLock { $0.append(snapshot) } }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let transport = URLSessionTransport(session: session)
+        let (_, response) = try await transport.data(for: URLRequest(url: base.appendingPathComponent("stream.aac")))
+        #expect(response.statusCode == 200)
+        for _ in 0..<50 {
+            if !snapshots.withLock({ $0.isEmpty }) { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let metrics = try #require(snapshots.withLock { $0.first })
+        #expect(metrics.taskID > 0)
+        #expect(metrics.durationMS >= 0)
+        #expect(metrics.transactions >= 1)
+        #expect(metrics.protocolName == "http/1.1")
+    }
+
     @Test func promptStartupIgnoresReplacedItemsAndRespectsPauseIntent() async throws {
         let http = try SeekHTTPFixtureServer(codec: "aac", delay: 0.15, mediaDuration: 10)
         defer { http.stop() }
@@ -324,7 +534,29 @@ struct TranscodeHTTPSeekTests {
 }
 
 private extension PlayerService {
+    func installQualityUpgradeFixture(_ source: MediaSource) {
+        currentSource = source
+        gaplessEnabled = false
+        transport.intent = .play
+        systemPlayback.isActive = true
+        streamTimeOffset = 7
+        systemEngine.start(url: source.url, headers: [:], generation: systemPlayback.generation, promptStartupBuffer: 1)
+    }
     func installHTTPSeekSource(_ source: MediaSource) { currentSource = source; gaplessEnabled = false }
+}
+
+@MainActor
+private final class QualityUpgradeResolver: MediaResolverProtocol {
+    let source: MediaSource
+    var calls = 0
+    var pending: CheckedContinuation<MediaSource?, any Error>?
+    init(source: MediaSource) { self.source = source }
+    func resolve(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource { source }
+    func resolveRadio(_ station: InternetRadioStation) async throws -> MediaSource { throw URLError(.unsupportedURL) }
+    func resolveLosslessUpgrade(song: DisplayableSong, serverId: UUID) async throws -> MediaSource? {
+        calls += 1
+        return try await withCheckedThrowingContinuation { pending = $0 }
+    }
 }
 
 @MainActor

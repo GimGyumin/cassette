@@ -35,6 +35,7 @@ struct CassetteApp: App {
     #endif
 
     init() {
+        RuntimeDiagnostics.mark(.appInit)
         // Start the battery / thermal policy before the first view body runs, so no frame is ever
         // rendered with the placeholder budget.
         PerformanceGovernor.shared.start()
@@ -120,6 +121,7 @@ struct CassetteApp: App {
             Group {
                 if let container {
                     RootView()
+                        .onAppear { RuntimeDiagnostics.mark(.rootAppeared) }
                         .modifier(AccountVerificationLaunchPrompt())
                         .accessibilityIdentifier("cassette.content")
                         // .toastOverlay() must be the INNERMOST modifier: a toast pill now renders a
@@ -230,7 +232,9 @@ struct CassetteApp: App {
 
                 Logger.boot.notice("🟡 setup() start")
                 async let playerWiring: Void = newContainer.setup()
-                newContainer.networkMonitor.start(serverState: newContainer.serverState)
+                newContainer.networkMonitor.start(serverState: newContainer.serverState) { [player = newContainer.playerService] path in
+                    await player.handleNetworkPathChange(path)
+                }
                 newContainer.serverReachabilityMonitor.start()
                 Logger.boot.notice("🟡 loadPersistedState() start")
                 await newContainer.serverService.loadPersistedState()
@@ -292,6 +296,12 @@ struct CassetteApp: App {
                     await AppBootGate.waitForHome()
                     guard newContainer.serverState.activeServer != nil else { return }
                     // Detect album-cover changes since the last launch and re-download any that moved.
+                    _ = await newContainer.libraryIndexService.ensureIndexedAndWait(using: newContainer.libraryService)
+                    // Upgrade old presentation facts even if the library count did not
+                    // change. An offline launch can still repair existing local covers.
+                    await newContainer.albumCoverPreloadService.prepareCachedThemes(
+                        albumCovers: newContainer.libraryIndexService.albumArtworkSnapshot,
+                        fillMissing: true)
                     newContainer.albumCoverPreloadService.reconcileChangedCovers()
                 }
                 Task(priority: .background) {
@@ -361,7 +371,11 @@ struct CassetteApp: App {
             if allowed != true { c.albumCoverPreloadService.pauseAutomaticDownloads() }
             else { c.albumCoverPreloadService.resumeArtworkAfterNetworkChange() }
         }
-        .onChange(of: scenePhase) { _, newPhase in
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            let playing = container?.playerState.playbackState == .playing
+            let intent = container?.playerState.playbackState.hasPlaybackIntent ?? false
+            let position = container?.playerState.position ?? 0
+            Logger.boot.notice("[SCENE] run=\(RuntimeDiagnostics.sessionID, privacy: .public) phase=\(String(describing: oldPhase), privacy: .public)->\(String(describing: newPhase), privacy: .public) playing=\(playing, privacy: .public) playback_intent=\(intent, privacy: .public) position_s=\(position, format: .fixed(precision: 2), privacy: .public)")
             // Foreground/background drives most of the budget (animated chrome, beat visuals,
             // prefetch). Only `.background` counts as "not active": on macOS a momentarily
             // unfocused window (or a focused mini player next to a hidden main window) must not

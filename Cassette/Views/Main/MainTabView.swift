@@ -12,8 +12,6 @@ import UIKit
 
 struct MainTabView: View {
     @Environment(\.appContainer) private var container
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(ChromeAppearance.self) private var chromeAppearance
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
@@ -47,7 +45,9 @@ struct MainTabView: View {
 
     #if os(iOS)
     private var showsSidebarLibrarySections: Bool {
-        horizontalSizeClass == .regular
+        // Large iPhones can become regular-width in landscape. Keep their tab
+        // destinations mounted while rotating instead of swapping in iPad tabs.
+        horizontalSizeClass == .regular && UIDevice.current.userInterfaceIdiom == .pad
     }
     #endif
 
@@ -62,12 +62,6 @@ struct MainTabView: View {
         case replace
         /// Push the destination on top of what the user was looking at, so Back returns there.
         case append
-    }
-
-    /// Follows the frontmost themed detail page (album/playlist/artist) so the tab bar and
-    /// mini player glyphs flip white/black to match its cover-derived background.
-    private var resolvedColorScheme: ColorScheme {
-        chromeAppearance.overrideColorScheme ?? colorScheme
     }
 
     /// Intercepts tab selection so re-tapping Search focuses the field.
@@ -372,10 +366,16 @@ struct MainTabView: View {
         }
         .fullScreenCover(isPresented: $showingFullPlayer, onDismiss: fullPlayerDidDismiss) {
             FullPlayerView(openWithLyrics: openPlayerWithLyrics, openWithQueue: openPlayerWithQueue)
-                .presentationBackground(.clear)
+                .presentationBackground(.black)
                 .cassetteZoomTransition(sourceID: fullPlayerZoomID, in: playerZoom)
         }
-        .toolbarColorScheme(resolvedColorScheme, for: .tabBar)
+        .onChange(of: showingFullPlayer) { _, presented in
+            if presented {
+                NotificationCenter.default.post(name: .cassetteFullPlayerPresentationChanged,
+                    object: nil, userInfo: ["isPresented": true])
+            }
+        }
+        .modifier(TabBarChromeAppearance())
         .onChange(of: selectedTab) { _, tab in mountedTabs.insert(tab) }
         .sheet(isPresented: $showAccountSheet) {
             AccountSheetView()
@@ -437,6 +437,7 @@ struct MainTabView: View {
             onOpenLyrics: { presentFullPlayer(lyrics: true, queue: false) },
             onOpenQueue: { presentFullPlayer(lyrics: false, queue: true) },
             usesSystemAccessory: usesSystemAccessory)
+            .environment(\.marqueePaused, showingFullPlayer)
             .cassetteMatchedTransitionSource(id: fullPlayerZoomID, in: playerZoom)
     }
 
@@ -452,6 +453,10 @@ struct MainTabView: View {
     }
 
     private func fullPlayerDidDismiss() {
+        #if os(iOS)
+        NotificationCenter.default.post(name: .cassetteFullPlayerPresentationChanged,
+            object: nil, userInfo: ["isPresented": false])
+        #endif
         resetFullPlayerLaunchFlags()
         guard let request = pendingNavigation else { return }
         pendingNavigation = nil

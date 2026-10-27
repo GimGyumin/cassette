@@ -186,7 +186,7 @@ extension PlayerService {
         finishedProgress: Double? = nil
     ) async {
         guard expectedContext == nil || expectedContext == playbackContext else { return }
-        guard seekState == .idle, Date() >= systemPlayback.seekSettleDeadline,
+        guard !hasPendingSelection, seekState == .idle, Date() >= systemPlayback.seekSettleDeadline,
               !isTrackTransitionPending else { return }
         guard finishedEntryIdentifier == nil || !systemPlayback.isActive else { return }
         // AVQueuePlayer owns the armed transition; its currentItem observer confirms the swap.
@@ -212,12 +212,12 @@ extension PlayerService {
         let context = playbackContext
         let epochAtEntry = playbackEpoch
         let eofSnapshot = await MainActor.run { (state.duration, state.position, state.playbackState) }
-        guard contextIsCurrent(context), eofSnapshot.2.hasPlaybackIntent,
+        guard contextIsCurrent(context), !hasPendingSelection, eofSnapshot.2.hasPlaybackIntent,
               !isTrackTransitionPending else { return }
         let eofPosition = max(engineProgress(), eofSnapshot.1, finishedProgress ?? 0, lastObservedEngineProgress)
-        if currentSource.map(AudioQualityClassifier.isLossyTranscodeStream) == true,
+        if currentSource?.isLocal == false, currentSource?.isLiveStream == false,
            Self.isPrematureTranscodeEnd(duration: eofSnapshot.0, offset: streamTimeOffset, position: eofPosition) {
-            // A truncated encoder response is a transport failure, never a completed listen
+            // A truncated original/encoder response is a transport failure, never a completed listen
             // or a repeat-one request. Retry at the retained position once, then expose failure.
             await recoverUnexpectedStreamReset(position: eofPosition)
             return
@@ -373,7 +373,7 @@ extension PlayerService {
     /// handles recovery only if this selected entry remains stalled.
     func handleEngineStartedEntry(entryIdentifier: String, expectedContext: PlaybackContext? = nil) async {
         guard expectedContext == nil || expectedContext == playbackContext else { return }
-        guard !gaplessBridge.wasSelected, let armed = gaplessBridge.source else { return }
+        guard !hasPendingSelection, !gaplessBridge.wasSelected, let armed = gaplessBridge.source else { return }
         guard entryIdentifier == armed.url.absoluteString else { return }
         gaplessBridge.wasSelected = true
         // Some engine handoffs do not emit an EOF stop reason. Start the same progress
@@ -422,7 +422,7 @@ extension PlayerService {
     /// in place — the engine must NOT be restarted.
     func finalizeGaplessBridge(epoch: UInt64, completedNaturally: Bool = true) async -> Bool {
         let context = playbackContext
-        guard transport.permitsAudio else { return false }
+        guard transport.permitsAudio, !completedNaturally || !hasPendingSelection else { return false }
         guard let next = gaplessBridge.next, let nextSource = gaplessBridge.source else {
             return false
         }
@@ -530,6 +530,10 @@ extension PlayerService {
         ))
         guard contextIsCurrent(bridgedContext), transport.permitsAudio else { return true }
 
+        if let serverID = await MainActor.run(body: { serverService.state.activeServer?.id }),
+           contextIsCurrent(bridgedContext) {
+            schedulePlaybackAcquisitionRecovery(song: next, serverId: serverID, epoch: bridgedEpoch)
+        }
         nextGaplessPreparationAttempt = .distantPast
         // Release the handover/EOF guard now. Artwork, session persistence and recommendations
         // must not prevent the progress loop from prebuffering the following track.
@@ -552,6 +556,8 @@ extension PlayerService {
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
         if let serverId = await MainActor.run(body: { serverService.state.activeServer?.id }) {
             await scheduleAutomaticDownload(song: source.playbackSong ?? next, serverId: serverId)
+            guard epoch == playbackEpoch, !Task.isCancelled else { return }
+            scheduleEphemeralCache(song: next, source: source, serverId: serverId)
         }
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
 
@@ -627,7 +633,9 @@ extension PlayerService {
         #if os(iOS)
         sessionActivationRetryTask?.cancel()
         sessionActivationRetryTask = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // Do NOT call setActive(false) here. Deactivating the session — even without
+        // .notifyOthersOnDeactivation — can signal other audio apps to resume playback.
+        // The session is retained by the running process and released naturally.
         #endif
         pendingRestoreInfo = nil
         stoppedAtEndOfQueue = true

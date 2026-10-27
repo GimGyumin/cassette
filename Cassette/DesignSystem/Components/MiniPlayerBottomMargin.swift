@@ -12,14 +12,16 @@ private struct MiniPlayerBottomMargin: ViewModifier {
         #if os(macOS)
         content
             .contentMargins(.bottom, CassetteMacOSLayout.playerBarReservedHeight, for: .scrollContent)
+            .cassetteSoftBottomScrollEdge()
         #else
         content
+            .cassetteSoftBottomScrollEdge()
         #endif
     }
 }
 
 extension View {
-    /// Adds bottom scroll margin matching the mini player accessory (iOS) or BottomPlayerBar (macOS).
+    /// Blends content into the mini player and reserves its macOS scroll margin.
     func miniPlayerBottomMargin() -> some View {
         modifier(MiniPlayerBottomMargin())
     }

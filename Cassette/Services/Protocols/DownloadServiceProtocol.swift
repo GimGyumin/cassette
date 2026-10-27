@@ -67,6 +67,8 @@ protocol DownloadServiceProtocol: AnyObject, Sendable {
     func backfillPlaylistSongIds(playlistId: String, serverId: UUID, orderedSongIds: [String]) async
 
     func download(song: Song, serverId: UUID) async throws
+    /// Explicit spatial downloads must retain the original bitstream.
+    func downloadOriginal(song: Song, serverId: UUID) async throws
     func download(album: AlbumID3, serverId: UUID) async throws
     func download(playlist: PlaylistWithSongs, serverId: UUID) async throws
 
@@ -84,6 +86,9 @@ protocol DownloadServiceProtocol: AnyObject, Sendable {
 
 // Alternate implementations can retain per-song cancellation as the fallback.
 extension DownloadServiceProtocol {
+    func downloadOriginal(song: Song, serverId: UUID) async throws {
+        try await download(song: song, serverId: serverId)
+    }
     func downloadedOriginalURL(forSongId songId: String, serverId: UUID) async -> URL? { nil }
     func localCoverArtURL(forId coverArtId: String, serverId: UUID) async -> URL? {
         await localCoverArtURL(forId: coverArtId)

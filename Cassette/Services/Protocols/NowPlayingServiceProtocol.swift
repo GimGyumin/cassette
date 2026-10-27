@@ -19,6 +19,9 @@ protocol NowPlayingServiceProtocol: AnyObject, Sendable {
     /// Releases reusable artwork without removing the currently displayed Now Playing item.
     func clearArtworkCache() async
 
+    /// Reapply the user’s artwork presentation preference to the current track.
+    func refreshArtworkPresentation() async
+
     /// Pushes a full metadata + artwork update (called from PlayerService on track change or seek).
     func update(with snapshot: NowPlayingSnapshot) async
 
@@ -46,6 +49,7 @@ protocol NowPlayingServiceProtocol: AnyObject, Sendable {
 }
 
 extension NowPlayingServiceProtocol {
+    func refreshArtworkPresentation() async {}
     func stop(publication: PlaybackPublication?) async {
         guard publication?.isCurrent != false else { return }
         await stop()

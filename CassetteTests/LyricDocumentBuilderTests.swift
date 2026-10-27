@@ -56,6 +56,44 @@ struct LyricDocumentBuilderTests {
         #expect(rows[0].backgroundWords.count == 1)
     }
 
+    @Test func vocalPartTextRepairsMixedMissingSpacesBeforeBackgroundMerge() throws {
+        let cases: [(String, [String])] = [
+            ("If you want to know why", ["If you want to ", "know", "why"]),
+            ("There’s a love that cannot lie", ["There's a love that ", "cannot", "lie"]),
+            ("Love is strong", ["Love ", "is", "strong"])
+        ]
+        for (source, tokens) in cases {
+            let cue = tokens.enumerated().map {
+                LyricCue(start: $0.offset * 1000, end: ($0.offset + 1) * 1000,
+                         value: $0.element, byteStart: 0, byteEnd: 0)
+            }
+            let structured = StructuredLyrics(lang: "en", synced: true,
+                line: [Line(value: source + " (echo)", start: 0)],
+                agents: [LyricsAgent(id: "v1", role: "main"), LyricsAgent(id: "bg", role: "bg")],
+                cueLine: [CueLine(index: 0, start: 0, end: 3000, value: source, agentId: "v1", cue: cue),
+                    CueLine(index: 0, start: 2000, end: 3000, value: "(echo)", agentId: "bg",
+                        cue: [LyricCue(start: 2000, end: 3000, value: "(echo)", byteStart: 0, byteEnd: 5)])])
+            let line = try #require(LyricDocumentBuilder.fromStructured(structured).allLines.first)
+            #expect(line.displayText == source)
+            #expect(line.mainWords.map(\.text).joined() == source)
+            #expect(line.mainWords.map(\.begin) == [0, 1, 2])
+            #expect(line.backgroundWords.map(\.text) == ["(echo)"])
+            #expect(line.preservesSourceSpacing)
+        }
+    }
+
+    @Test func vocalPartSpacingKeepsGluedSyllablesAndRejectsDifferentText() throws {
+        let structured = StructuredLyrics(lang: "en", synced: true,
+            line: [Line(value: "a different line (echo)", start: 0)],
+            cueLine: [CueLine(index: 0, value: "heartbreaker", cue: [
+                LyricCue(start: 0, end: 1000, value: "heart", byteStart: 0, byteEnd: 4),
+                LyricCue(start: 1000, end: 2000, value: "break", byteStart: 5, byteEnd: 9),
+                LyricCue(start: 2000, end: 3000, value: "er", byteStart: 10, byteEnd: 11)])])
+        let row = try #require(LyricDisplayBuilder.rows(from: structured).first)
+        #expect(row.text == "heartbreaker")
+        #expect(LyricKaraokeSpacing.sourceTexts(row.words, secondary: false).joined() == "heartbreaker")
+    }
+
     @Test func duetAgentsStaySeparateFullSizeRows() {
         let structured = StructuredLyrics(
             lang: "en",

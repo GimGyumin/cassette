@@ -51,6 +51,15 @@ actor MediaResolver: MediaResolverProtocol {
         self.libraryIndex = libraryIndex
     }
 
+    func preferredAtmosDownloadSong(for song: DisplayableSong, serverId: UUID) async -> DisplayableSong? {
+        await MainActor.run {
+            guard streamingSettings.preferDolbyAtmosDownload,
+                  (try? serverState.requestIdentity(for: serverId)) != nil else { return nil }
+            if AtmosVariantCatalogue.isAtmos(song) { return song }
+            return libraryIndex?.preferredAtmosSong(for: song, serverId: serverId)
+        }
+    }
+
     func resolve(songId: String, serverId: UUID, song: DisplayableSong?) async throws -> MediaSource {
         try Task.checkCancellation()
         let choice = await MainActor.run { () -> (DisplayableSong, ServerRequestIdentity)? in
@@ -101,7 +110,33 @@ actor MediaResolver: MediaResolverProtocol {
         return source
     }
 
+    /// Upgrade the same recording only. A lossy offline/cache copy must not mask the original,
+    /// and a new Atmos preference must not substitute a different master halfway through a song.
+    func resolveLosslessUpgrade(song: DisplayableSong, serverId: UUID) async throws -> MediaSource? {
+        guard PlaybackDecisionPolicy.preservesLosslessOriginal(song: song) else { return nil }
+        let identity = try await MainActor.run { try serverState.requestIdentity(for: serverId) }
+        let permitted = await MainActor.run {
+            serverState.playbackNetworkPath?.allowsLosslessUpgrade == true
+                && streamingSettings.allowsWiFiLosslessUpgrade
+        }
+        guard permitted else { return nil }
+        if let local = await downloadService.downloadedOriginalURL(forSongId: song.id, serverId: serverId) {
+            try Task.checkCancellation()
+            guard await MainActor.run(body: { serverState.requestIsCurrent(identity) }) else { throw CancellationError() }
+            return .downloaded(local)
+        }
+        let source = try await resolveRemote(songId: song.id, serverId: serverId, song: song, identity: identity)
+        try Task.checkCancellation()
+        guard await MainActor.run(body: { serverState.requestIsCurrent(identity) }) else { throw CancellationError() }
+        guard !AudioQualityClassifier.isLossyTranscodeStream(source), !source.isLiveStream else { return nil }
+        return source
+    }
+
     private func resolveRemote(songId: String, serverId: UUID, song: DisplayableSong?, identity: ServerRequestIdentity) async throws -> MediaSource {
+        if song.map(AudioQualityClassifier.isDolbyAudio) == true {
+            let allowed = await MainActor.run { streamingSettings.allowsRemoteDolbyAtmos(isCellular: serverState.isCellularConnection) }
+            guard allowed else { throw CassetteError.dolbyAtmosCellularRestricted }
+        }
         let currentSongID = await MainActor.run {
             mediaIdentityService?.resolveCurrentID(songId, serverId: serverId, entityType: .song) ?? songId
         }

@@ -1,8 +1,49 @@
+import Foundation
 import Testing
 @testable import Cassette
 
 @Suite("Cached lyric playback timeline")
 struct LyricPlaybackTimelineTests {
+    @Test func indexedLookupMatchesDisplayOrderScanAcrossSeeksAndOverlaps() {
+        var seed: UInt64 = 42
+        func random(_ limit: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1
+            return Int((seed >> 32) % UInt64(limit))
+        }
+        let rows = (0..<2000).map { index in
+            let start = random(200_000) - 1000
+            return row(index % 31 == 0 ? nil : start,
+                       end: index % 19 == 0 ? nil : start + random(8000) - 200,
+                       secondary: index % 3 == 0, text: index % 37 == 0 ? " \n" : "Verse")
+        }
+        let timeline = LyricPlaybackTimeline(rows: rows)
+        for time in [Int.min, Int.max] + (0..<500).map({ _ in random(220_000) - 2000 }) {
+            let expected = reference(rows, time: time)
+            let actual = timeline.activeRows(for: time)
+            #expect(actual.primary == expected.primary)
+            #expect(actual.indices == expected.indices)
+        }
+    }
+
+    /// Keep the pre-optimization algorithm as an independent semantic oracle.
+    private func reference(_ rows: [LyricDisplayRow], time: Int) -> (primary: Int?, indices: Set<Int>) {
+        var active: Set<Int> = []
+        var primary: Int?, any: Int?, upcoming: Int?
+        for (index, row) in rows.enumerated() {
+            guard let start = row.startMs, !row.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            if start > time {
+                if upcoming == nil, !row.isSecondaryAgent { upcoming = index }
+                continue
+            }
+            if let end = row.endMs, time >= end { continue }
+            active.insert(index)
+            if any == nil || start > rows[any!].startMs! { any = index }
+            if !row.isSecondaryAgent, primary == nil || start > rows[primary!].startMs! { primary = index }
+        }
+        if active.isEmpty { return (upcoming, upcoming.map { [$0] } ?? []) }
+        return (primary ?? any, active)
+    }
+
     private func row(_ start: Int?, end: Int? = nil, secondary: Bool = false,
                      text: String = "Verse") -> LyricDisplayRow {
         LyricDisplayRow(sourceLineIndex: 0, text: text, startMs: start,

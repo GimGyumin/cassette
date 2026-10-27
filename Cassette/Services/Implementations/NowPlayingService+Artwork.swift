@@ -11,20 +11,26 @@ import UIKit
 #endif
 
 extension NowPlayingService {
+    func refreshArtworkPresentation() async {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            await MainActor.run {
+                guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
+                info.removeValue(forKey: MPNowPlayingInfoProperty3x4AnimatedArtwork)
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            }
+            if let currentSong { await displayArtwork(currentSong) }
+        }
+        #endif
+    }
+
     func refreshDownloadedArtwork(coverID: String) async {
         guard let snapshot = currentSong else { return }
         let prepared = await preparedCoverIdProvider?(snapshot.albumId)
         guard coverID == snapshot.effectiveCoverArtId || coverID == prepared else { return }
         guard isCurrent(snapshot) else { return }
         await displayArtwork(snapshot)
-        #if os(iOS)
-        if #available(iOS 27.0, *), let controller = modernMediaSession as? CassetteMediaSessionController {
-            await controller.invalidateArtwork()
-            guard isCurrent(snapshot), let latest = currentSong?.projectingPlayback(),
-                  let revision = beginPublication(latest.publication) else { return }
-            await updateModernMediaSession(with: latest, revision: revision)
-        }
-        #endif
+
     }
 
     #if os(iOS)
@@ -66,7 +72,6 @@ extension NowPlayingService {
             return downloaded
         }
         if let image = await artworkImageCache.load(coverArtId: coverArtId, tier: .hero, allowNetwork: false) { return image }
-        if let image = await artworkImageCache.load(coverArtId: coverArtId, tier: .thumb, allowNetwork: false) { return image }
         return nil
     }
 
@@ -85,6 +90,20 @@ extension NowPlayingService {
             for: snapshot,
             generation: generation
         )
+        #if os(iOS)
+        if installed, #available(iOS 26.0, *),
+           UserDefaults.standard.object(forKey: "cassette.visuals.immersiveAlbums") as? Bool != false,
+           MPNowPlayingInfoCenter.supportedAnimatedArtworkKeys.contains(MPNowPlayingInfoProperty3x4AnimatedArtwork),
+           let tall = await LockScreenImmersiveArtwork.make(image) {
+            await MainActor.run {
+                guard artworkRevision.matches(generation),
+                      UserDefaults.standard.object(forKey: "cassette.visuals.immersiveAlbums") as? Bool != false,
+                      var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
+                info[MPNowPlayingInfoProperty3x4AnimatedArtwork] = tall
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+            }
+        }
+        #endif
         if installed, generation == artworkGeneration {
             pendingArtwork = nil
             hasArtwork = true
@@ -102,6 +121,9 @@ extension NowPlayingService {
     func displayArtwork(_ snapshot: NowPlayingSnapshot) async {
         guard isCurrent(snapshot) else { return }
         let generation = artworkGeneration
+        guard artworkLoadGeneration != generation else { return }
+        artworkLoadGeneration = generation
+        defer { if artworkLoadGeneration == generation { artworkLoadGeneration = nil } }
 
         // A prepared album image must never replace a track's distinct artwork.
         var candidateIds: [String] = []
@@ -133,6 +155,22 @@ extension NowPlayingService {
                 guard generation == artworkGeneration, isCurrent(snapshot) else { return }
                 _ = await finishArtwork(cachedImage, snapshot: snapshot, generation: generation)
                 return
+            }
+        }
+
+        // Paint a small cached sleeve immediately, but keep resolving the hero tier.
+        // A thumbnail is a useful first frame, not the final full-screen artwork.
+        for coverArtId in candidateIds {
+            if let thumbnail = await artworkImageCache.load(coverArtId: coverArtId, tier: .thumb, allowNetwork: false) {
+                guard generation == artworkGeneration, isCurrent(snapshot) else { return }
+                let installed = await installArtwork(ArtworkLoader.makeArtwork(thumbnail), for: snapshot,
+                                                     generation: generation, isPreview: true)
+                guard generation == artworkGeneration, isCurrent(snapshot) else { return }
+                if installed { hasArtwork = true }
+                // Keep upgrade retries bounded; preview publication must not reset
+                // the failure count each time the same thumbnail is found again.
+                pendingArtwork = (snapshot, snapshot.artworkHeaders)
+                break
             }
         }
 
@@ -174,6 +212,12 @@ extension NowPlayingService {
             scheduleArtworkRetry(snapshot, generation: generation)
             return
         }
+        // The URL fallback follows the same cellular/offline policy as the shared cache.
+        let allowsNetwork = await artworkImageCache.allowsNetworkDownloads
+        guard artworkURL.isFileURL || allowsNetwork else {
+            scheduleArtworkRetry(snapshot, generation: generation)
+            return
+        }
         guard let artwork = await artworkLoader.artwork(for: artworkURL, headers: snapshot.artworkHeaders) else {
             scheduleArtworkRetry(snapshot, generation: generation)
             return
@@ -203,7 +247,8 @@ extension NowPlayingService {
     func installArtwork(
         _ artwork: MPMediaItemArtwork,
         for snapshot: NowPlayingSnapshot,
-        generation: Int
+        generation: Int,
+        isPreview: Bool = false
     ) async -> Bool {
         await MainActor.run {
             guard artworkRevision.matches(generation),
@@ -220,6 +265,10 @@ extension NowPlayingService {
                     "[NOWPLAYING-ARTWORK] dropped for '\(snapshot.title, privacy: .public)' — the Now Playing slot belongs to another item"
                 )
                 return false
+            }
+            if isPreview, let current = info[MPMediaItemPropertyArtwork] as? MPMediaItemArtwork,
+               max(current.bounds.width, current.bounds.height) > max(artwork.bounds.width, artwork.bounds.height) {
+                return true
             }
             info[MPMediaItemPropertyArtwork] = artwork
             MPNowPlayingInfoCenter.default().nowPlayingInfo = info

@@ -53,6 +53,8 @@ final class ServerState {
     /// link the user marked as metered even though it is Wi-Fi. Unlike `isExpensive` this also
     /// covers throttled Wi-Fi, which is why background transfers key off it.
     var isNetworkConstrained: Bool = false
+    /// One coherent path snapshot, including changes that leave `isOnline` true.
+    var playbackNetworkPath: PlaybackNetworkPath?
     /// Last measured throughput (bytes/s), published by `MediaResolver` after `NetworkSpeedProbe`
     /// samples the link. Lets a *throttled* Wi-Fi link — which iOS reports as unlimited — stop
     /// background transfers and adapt Automatic quality, the way cellular already does.

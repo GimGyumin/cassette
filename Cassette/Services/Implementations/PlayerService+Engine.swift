@@ -122,7 +122,7 @@ extension PlayerService {
 
     func handleSystemPlayerItemChanged(generation: UInt64) async {
         guard generation == systemPlayback.generation, systemPlayback.isActive,
-              !isHandlingEndOfTrack, systemEngine.consumeQueuedTransition() else { return }
+              !hasPendingSelection, !isHandlingEndOfTrack, systemEngine.consumeQueuedTransition() else { return }
         isHandlingEndOfTrack = true
         defer { isHandlingEndOfTrack = false }
         stopSystemPlayerProgressWatchdog()
@@ -803,7 +803,9 @@ extension PlayerService {
     func publishEnginePlaybackConfirmation(settledPosition: TimeInterval? = nil, confirmsPlayback: Bool = true) async {
         // A pre-seek .playing callback is not proof that the requested clock has landed.
         // The settlement monitor promotes playback after confirming the latest target.
-        guard seekState == .idle, transport.permitsAudio else { return }
+        guard seekState == .idle, transport.permitsAudio, !isTrackTransitionPending else { return }
+        // A seek or buffered clock jump while waiting is not audible playback.
+        let confirmsPlayback = confirmsPlayback && activeEngine.state == .playing
         let context = playbackContext
         let restoringIntoPause = pendingRestoreInfo?.pause == true
         let confirmed = await commitPresentation(context) { state in
@@ -823,6 +825,8 @@ extension PlayerService {
             return true
         }
         guard confirmed, context == playbackContext, transport.permitsAudio else { return }
+        RuntimeDiagnostics.mark(.playbackReady)
+        Logger.player.notice("[PLAYBACK] run=\(RuntimeDiagnostics.sessionID, privacy: .public) event=confirmed epoch=\(self.playbackEpoch, privacy: .public) engine=\(self.systemPlayback.isActive ? "AVPlayer" : "AudioStreaming", privacy: .public) position_s=\(self.engineProgress(), format: .fixed(precision: 2), privacy: .public)")
         // Buffer acquisition is not audible time: start the ramp only after confirmation.
         if let duration = pendingFadeInDuration {
             pendingFadeInDuration = nil
@@ -840,8 +844,13 @@ extension PlayerService {
     func publishEngineWaiting() async {
         guard transport.permitsAudio else { return }
         let context = playbackContext
+        let epoch = playbackEpoch
+        let buffered = systemPlayback.isActive ? systemEngine.bufferedDuration : -1
         let waiting = await commitPresentation(context) { state in
             guard let pending = state.playbackState.waitingForAudio() else { return false }
+            if state.playbackState == .playing {
+                Logger.player.notice("[PLAYBACK] run=\(RuntimeDiagnostics.sessionID, privacy: .public) event=waiting epoch=\(epoch, privacy: .public) position_s=\(state.position, format: .fixed(precision: 2), privacy: .public) avplayer_buffered_s=\(buffered, format: .fixed(precision: 2), privacy: .public)")
+            }
             state.playbackState = pending
             return true
         }

@@ -11,11 +11,11 @@
 
 ## 자동 매칭과 비용
 
-`AtmosVariantCatalogue`는 앨범명 끝의 `(Dolby Atmos)`만 형식 표기로 제거한다. 곡 제목·아티스트는 공백과 대소문자만 정규화한다. Live / Remix / Edit 등의 제목을 제거하지 않는다. 라이브 앨범·리믹스 앨범의 문맥 충돌도 거부한다.
+`AtmosVariantCatalogue`는 앨범명에서 독립된 `Dolby Atmos` 표기를 인식한다. `Michael Jackson's The Dolby Atmos`, `Michael Jackson's The Dolby Atmos Collection`, 대괄호·하이픈 표기도 음원 후보에 포함한다. 앨범 카드 통합을 위한 이름 정리는 기존처럼 끝의 `(Dolby Atmos)`만 제거한다. 별도 모음집의 이름을 원본 앨범명으로 바꾸거나 모음집 수록곡을 원본 앨범에 추가하지 않는다. 곡 제목·아티스트는 공백과 대소문자만 정규화한다. Live / Remix / Edit 등의 제목을 제거하지 않는다. 라이브 앨범·리믹스 앨범의 문맥 충돌도 거부한다.
 
 아티스트와 제목이 같고, 서로 다른 아티스트 ID 또는 MusicBrainz ID가 충돌하지 않으며, 알려진 재생 시간의 차이가 2초 이내일 때 후보로 인정한다. 명시적인 clean/explicit 정보가 충돌하는 후보도 제외한다. 같은 앨범의 Atmos 버전을 우선하고, 그다음 MusicBrainz ID 일치를 우선한다. 동일한 근거의 후보가 여러 개면 자동 대체하지 않는다. MusicBrainz ID가 같아도 버전·길이 조건은 완화하지 않는다.
 
-라이브러리 인덱스를 설치할 때 제목·아티스트별 후보 버킷과 ID별 결과를 UI executor 밖에서 계산한다. 결과와 매칭 알고리즘 버전을 기존 계정별 JSON 인덱스에 저장한다. 재생 시 전체 라이브러리 스캔이나 서버 검색은 하지 않는다. 첫 앨범 상세는 해당 아티스트의 앨범 목록과 두 앨범을 이용해 매칭을 준비하므로 전체 라이브러리 인덱스 완료를 기다리지 않는다. 라이브러리 전체의 컴필레이션 매칭은 인덱스 준비 후 사용할 수 있다.
+라이브러리 인덱스를 설치할 때 제목·아티스트별 후보 버킷과 ID별 결과를 UI executor 밖에서 계산한다. 결과와 매칭 알고리즘 버전을 기존 계정별 인덱스에 저장한다. 매칭 버전은 2이며, 이전 버전에서 놓친 모음집은 저장된 곡 정보로 다시 매칭한다. 재생 시 전체 라이브러리 스캔이나 서버 검색은 하지 않는다. 첫 앨범 상세는 해당 아티스트의 앨범 목록에서 짝이 되는 발매본과 Atmos 모음집을 불러와 매칭을 준비하므로 전체 라이브러리 인덱스 완료를 기다리지 않는다. 다른 앨범 아티스트 아래의 컴필레이션은 전체 인덱스 준비 후 매칭할 수 있다. 네트워크 요청은 기존 SwiftSonic 앨범 조회와 캐시를 사용한다.
 
 OpenSubsonic의 [Child 메타데이터](https://opensubsonic.netlify.app/docs/responses/child/)와 [AlbumID3의 앨범 아티스트 목록](https://opensubsonic.netlify.app/docs/responses/albumid3/)을 사용하며, 네트워크 요청은 기존 SwiftSonic 경로를 유지한다.
 
@@ -43,3 +43,14 @@ Atmos로 지정된 파일은 원본 스트림을 요청하고 lossy 임시 캐�
 - 이후 재생 시간 보존, 개별 곡 삭제 시 통합 앨범 유지, 로컬 대체 파일 실패 복구를 보완한 최종 코드에서 관련 **67개 / 4개 suite 통과**, 3.982초. `.derivedData-20261013-atmos/focused-final-2.log`.
 - 최종 iOS 앱·UI 테스트 대상 `build-for-testing` 성공. `.derivedData-20261013-atmos/ios-build-final.log`. iOS 시뮬레이터·UI 테스트 실행은 하지 않았다.
 - `git diff --check` 통과. 새 의존성, 서버 데이터 변경, 커밋·푸시는 없다.
+
+2026-10-20 Atmos 모음집 인식 확장 검증:
+
+- `AtmosVariantTests`, `AudioQualityClassifierTests`, `PlaybackSourceQualityTests`,
+  `EngineCapabilityConsistencyTests`: 매개변수별 실행 포함 **73건 통과**.
+  `/tmp/cassette-atmos-collections-tests.log`.
+- iOS Simulator 앱 빌드 성공, 컴파일 경고·오류 없음.
+  `/tmp/cassette-atmos-collections-ios.log`.
+- 새 모음집 이름·대괄호·하이픈 표기, v1 매칭 결과 재계산, 설정 켜기/끄기,
+  원본 스트림 ID, cold 앨범 상세에서 후보 준비, 표시 곡·큐의 전체 메타데이터
+  보존을 검증했다. 실제 서버의 음원 및 기기 Atmos 출력은 별도 확인 대상이다.

@@ -155,6 +155,26 @@ struct AudioQualityClassifierTests {
         #expect(!AudioQualityClassifier.shouldSkipTranscoding(song))
     }
 
+    @Test("Native stereo lossless playback can still create an offline cache", arguments: [44_100, 48_000, 96_000])
+    func nativeStereoCanCache(_ sampleRate: Int) {
+        let song = DisplayableSong(id: "stereo-flac", title: "Music", audioFormat: "flac",
+                                   bitDepth: 24, samplingRate: sampleRate, channelCount: 2)
+        #expect(!AudioQualityClassifier.shouldBypassEphemeralCache(song))
+        #expect(!AudioQualityClassifier.isDolbyAudio(song))
+        let unknown = DisplayableSong(id: "unknown", title: "Music", audioFormat: "flac")
+        #expect(!AudioQualityClassifier.shouldBypassEphemeralCache(unknown))
+    }
+
+    @Test func cellularDolbyPolicyDoesNotClassifyAmbiguousMP4OrDTSAsDolby() {
+        let mp4 = DisplayableSong(id: "m4a", title: "Music", audioFormat: "m4a", contentType: "audio/mp4")
+        let dts = DisplayableSong(id: "dts", title: "Music", audioFormat: "dts", channelCount: 6)
+        #expect(!AudioQualityClassifier.isDolbyAudio(mp4))
+        #expect(!AudioQualityClassifier.isDolbyAudio(dts))
+        for format in ["ac3", "ec3", "thd"] {
+            #expect(AudioQualityClassifier.isDolbyAudio(DisplayableSong(id: format, title: "Music", audioFormat: format)))
+        }
+    }
+
     @Test("Multichannel FLAC bypasses stereo cache")
     func surroundFLAC() {
         let song = DisplayableSong(id: "flac", title: "Music", audioFormat: "flac", bitDepth: 24, samplingRate: 96_000, channelCount: 6)

@@ -11,15 +11,45 @@ import OSLog
 import UIKit
 #endif
 
+/// Keep the shelf's origin attached to scrolling content while its color extends
+/// through the viewport's reserved player/tab-bar area. No per-scroll page state.
+struct AlbumRelatedShelfBoundsKey: PreferenceKey {
+    nonisolated static var defaultValue: Anchor<CGRect>? { nil }
+    nonisolated static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+struct AlbumRelatedShelfFill: View {
+    let baseColor: Color
+    var body: some View { baseColor.overlay(Color.black.opacity(0.25)) }
+}
+
+struct AlbumRelatedShelfContinuation: View {
+    let anchor: Anchor<CGRect>?
+    let baseColor: Color
+
+    var body: some View {
+        GeometryReader { geometry in
+            if let anchor {
+                let bounds = geometry[anchor]
+                let top = min(geometry.size.height, max(0, bounds.minY))
+                AlbumRelatedShelfFill(baseColor: baseColor)
+                    .frame(width: bounds.width, height: max(0, geometry.size.height - top))
+                    .offset(x: bounds.minX, y: top)
+            }
+        }
+        .ignoresSafeArea(.container, edges: .bottom)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 
 struct AlbumTopBleedModifier: ViewModifier {
     let bleed: Bool
     func body(content: Content) -> some View {
-        if bleed {
-            content.ignoresSafeArea(.container, edges: .top)
-        } else {
-            content
-        }
+        content.ignoresSafeArea(.container, edges: bleed ? .top : [])
     }
 }
 
@@ -27,11 +57,13 @@ struct AlbumTopBleedModifier: ViewModifier {
 struct AlbumMiniPlayerMargin: ViewModifier {
     let enabled: Bool
     func body(content: Content) -> some View {
-        if enabled {
-            content.miniPlayerBottomMargin()
-        } else {
-            content
-        }
+        #if os(macOS)
+        content.contentMargins(.bottom, enabled ? CassetteMacOSLayout.playerBarReservedHeight : 0, for: .scrollContent)
+        #else
+        // The system accessory already reserves the margin. Keep the same content
+        // identity when the asynchronously loaded More By shelf appears.
+        content
+        #endif
     }
 }
 

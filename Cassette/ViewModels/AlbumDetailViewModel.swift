@@ -48,7 +48,25 @@ final class AlbumDetailViewModel {
     private let toastService: ToastService
     private let serverState: ServerState
     private let libraryIndex: LibraryIndexService?
-    private var loadGeneration = 0
+    @ObservationIgnored private var loadGeneration = 0
+    @ObservationIgnored private var needsPresentationReload = false
+    @ObservationIgnored private var presentationSuspended = false
+    var acceptsPresentationUpdates: Bool { !presentationSuspended }
+
+    /// Called at willDisappear, before the zoom snapshot is taken. Do not publish
+    /// loading flags here: leave the outgoing image exactly as it was.
+    func suspendPendingLoad() {
+        presentationSuspended = true
+        needsPresentationReload = needsPresentationReload || isLoading || isLoadingMoreAlbums
+        loadGeneration &+= 1
+    }
+
+    func resumePendingLoadIfNeeded() async {
+        guard !Task.isCancelled else { return }
+        presentationSuspended = false
+        guard needsPresentationReload else { return }
+        await load()
+    }
 
     init(
         albumId: String,
@@ -67,11 +85,13 @@ final class AlbumDetailViewModel {
     }
 
     func load() async {
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, !presentationSuspended else { return }
+        needsPresentationReload = false
         let generation = loadGeneration + 1
         loadGeneration = generation
         isLoading = true
-        isPrimaryContentReady = false
+        // Refreshes keep the already-published album visible. Optional enrichment or a
+        // cancelled navigation task must not turn a usable page back into a loading cover.
         error = nil
         if serverState.isOnline {
             // A local album may contain only downloaded tracks. Publish it only as an
@@ -82,20 +102,22 @@ final class AlbumDetailViewModel {
             _ = await loadFromLocal()
         }
         guard generation == loadGeneration else { return }
+        let downloading = await downloadService.isDownloadingAlbum(displayAlbumID)
+        guard generation == loadGeneration else { return }
         isLoading = false
-        isDownloadingAlbum = await downloadService.isDownloadingAlbum(displayAlbumID)
+        isDownloadingAlbum = downloading
     }
 
     private func loadFromAPI(generation: Int) async {
         do {
             let apiAlbum = try await libraryService.displayAlbum(id: albumId)
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             // Empty-success guard: behind a captive proxy / Cloudflare-WARP edge the server
             // is reachable but answers 200 with no songs. That never throws, so the catch
             // below can't help — treat an empty result exactly like a failure and prefer the
             // downloaded copy before clobbering the UI with an empty state.
             if (apiAlbum.song ?? []).isEmpty, await loadFromLocal() { return }
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             loadedAlbum = apiAlbum
             guard let serverId = serverState.activeServer?.id else { return }
             let downloadedIds = await downloadService.downloadedSongIds(serverId: serverId)
@@ -103,7 +125,7 @@ final class AlbumDetailViewModel {
                 apiAlbum.song ?? [], downloadedIDs: downloadedIds,
                 fallbackCoverArtID: apiAlbum.coverArt, sortedBy: Self.albumTrackOrder
             )
-            guard generation == loadGeneration, serverState.activeServer?.id == serverId else { return }
+            guard generation == loadGeneration, !Task.isCancelled, serverState.activeServer?.id == serverId else { return }
             albumName = apiAlbum.name
             artistName = apiAlbum.artist
             year = apiAlbum.year
@@ -135,11 +157,12 @@ final class AlbumDetailViewModel {
         } catch is CancellationError {
             return
         } catch {
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             if UserFacingError.isCancellation(error) { return }
             // Server unreachable (airplane mode with stale isOnline, VPN-satisfied path,
             // server down): fall back to the downloaded copy before surfacing an error.
             if await loadFromLocal() { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             self.error = UserFacingError.from(error)
         }
     }
@@ -286,7 +309,7 @@ final class AlbumDetailViewModel {
             albumName: name,
             artistName: artistName
         ) {
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             recordLabels = [label]
         }
     }
@@ -308,7 +331,7 @@ final class AlbumDetailViewModel {
             artist: artistName,
             musicBrainzId: musicBrainzId
         )
-        guard generation == loadGeneration else { return }
+        guard generation == loadGeneration, !Task.isCancelled else { return }
         if let cached {
             albumDescription = cached.text
             if !cached.needsRefresh { return }
@@ -319,7 +342,7 @@ final class AlbumDetailViewModel {
             albumName: name,
             artistName: artistName
         ), let plain = Self.plainTextDescription(from: apple) {
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             albumDescription = plain
             await DescriptionCache.shared.store(
                 plain,
@@ -337,7 +360,7 @@ final class AlbumDetailViewModel {
             artistName: artistName,
             musicBrainzId: musicBrainzId
         ), let plain = Self.plainTextDescription(from: external) {
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             albumDescription = plain
             await DescriptionCache.shared.store(
                 plain,
@@ -361,6 +384,7 @@ final class AlbumDetailViewModel {
     }
 
     func loadMoreAlbumsByArtist(generation: Int? = nil) async {
+        guard !presentationSuspended, !Task.isCancelled else { return }
         let generation = generation ?? loadGeneration
         guard let artistId, !artistId.isEmpty else {
             otherAlbumVersions = []
@@ -373,9 +397,10 @@ final class AlbumDetailViewModel {
         }
         do {
             let artist = try await libraryService.artist(id: artistId)
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             let siblings = await libraryService.presentedAlbums(artist.album ?? [])
                 .filter { $0.id != (loadedAlbum?.id ?? albumId) }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             let versions = AlbumVersionMatcher.otherVersions(
                 of: albumName,
                 excludingId: albumId,
@@ -389,7 +414,7 @@ final class AlbumDetailViewModel {
         } catch is CancellationError {
             return
         } catch {
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             otherAlbumVersions = []
             moreAlbumsByArtist = []
         }
@@ -474,9 +499,11 @@ final class AlbumDetailViewModel {
     /// the UI into offline mode while songs from a previous load are still shown.
     @discardableResult
     private func loadFromLocal() async -> Bool {
+        let generation = loadGeneration
         guard let serverId = serverState.activeServer?.id,
               let data = await downloadService.localAlbumData(albumId: displayAlbumID, serverId: serverId),
-              !data.songs.isEmpty else { return false }
+              generation == loadGeneration, !Task.isCancelled,
+              serverId == serverState.activeServer?.id, !data.songs.isEmpty else { return false }
         albumName = data.albumName
         artistName = data.artistName
         coverArtId = data.coverArtId

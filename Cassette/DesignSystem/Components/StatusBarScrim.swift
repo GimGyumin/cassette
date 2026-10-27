@@ -45,11 +45,13 @@ struct StatusBarScrim: View {
 extension View {
     /// Older systems need a contrast fallback. Modern scroll views use the system soft edge.
     @ViewBuilder
-    func cassetteStatusBarScrim(isLightPage: Bool = false) -> some View {
+    func cassetteStatusBarScrim(isLightPage: Bool = false, isEnabled: Bool = true) -> some View {
         if #available(iOS 26.0, macOS 26.0, *) {
             self
         } else {
-            overlay { StatusBarScrim(isLightPage: isLightPage) }
+            overlay {
+                if isEnabled { StatusBarScrim(isLightPage: isLightPage) }
+            }
         }
     }
 
@@ -60,16 +62,23 @@ extension View {
     @ViewBuilder
     func cassetteImmersiveStatusBar(
         colorScheme: ColorScheme?,
-        scrolledChromeProgress: CGFloat = 0
+        scrolledChromeProgress: CGFloat = 0,
+        floatingOverArtwork: Bool = false,
+        statusBarColorScheme: ColorScheme? = nil,
+        navigationBarColorScheme: ColorScheme? = nil
     ) -> some View {
+        let statusScheme = statusBarColorScheme ?? colorScheme
+        let navigationScheme = navigationBarColorScheme ?? statusScheme
         #if os(iOS)
         if #available(iOS 26.0, *) {
             self
-                .toolbarBackgroundVisibility(.automatic, for: .navigationBar)
-                .toolbarColorScheme(colorScheme, for: .navigationBar)
+                .toolbarBackgroundVisibility(floatingOverArtwork && scrolledChromeProgress == 0 ? .hidden : .automatic, for: .navigationBar)
+                // The navigation controller owns status-bar appearance. Match its
+                // scheme to the visible top artwork, independently of page content.
+                .toolbarColorScheme(navigationScheme, for: .navigationBar)
                 .background {
-                    if let colorScheme {
-                        StatusBarStyleBridge(style: colorScheme == .light ? .darkContent : .lightContent)
+                    if let statusScheme {
+                        StatusBarStyleBridge(style: statusScheme == .light ? .darkContent : .lightContent)
                             .frame(width: 0, height: 0)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)
@@ -92,10 +101,10 @@ extension View {
             self
                 .toolbarBackground(showBar ? .visible : .hidden, for: .navigationBar)
                 .toolbarBackground(fill, for: .navigationBar)
-                .toolbarColorScheme(colorScheme, for: .navigationBar)
+                .toolbarColorScheme(navigationScheme, for: .navigationBar)
                 .background {
-                    if let colorScheme {
-                        StatusBarStyleBridge(style: colorScheme == .light ? .darkContent : .lightContent)
+                    if let statusScheme {
+                        StatusBarStyleBridge(style: statusScheme == .light ? .darkContent : .lightContent)
                             .frame(width: 0, height: 0)
                             .allowsHitTesting(false)
                             .accessibilityHidden(true)

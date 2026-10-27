@@ -107,6 +107,10 @@ actor PlayerService: PlayerServiceProtocol {
     /// Bounded recovery for a finite track whose engine never advances beyond initial loading.
     /// Cancelled whenever the user changes transport state or selects another track.
     var playbackAcquisitionTask: Task<Void, Never>?
+    var qualityUpgradeTask: Task<Void, Never>?
+    var qualityUpgradeRevision: UInt64 = 0
+    var lastPlaybackNetworkPath: PlaybackNetworkPath?
+    var awaitingUnmeteredPlaybackPath = false
     var playbackRequestID: UInt64 = 0
     var gaplessPreparationTask: Task<Void, Never>?
     var gaplessPreparationGeneration: UInt64 = 0
@@ -143,6 +147,10 @@ actor PlayerService: PlayerServiceProtocol {
     nonisolated let authority = PlaybackAuthority()
     var transport = PlaybackTransportModel()
     var stopBarrierCount = 0
+    var playAdmissionID: UInt64 = 0
+    var pendingSelectionCommand: UInt64?
+    var hasPendingSelection: Bool { pendingSelectionCommand == transportCommandID }
+
     var transportCommandID: UInt64 {
         get { authority.snapshot.command }
         set { authority.setCommand(newValue) }
@@ -231,7 +239,9 @@ actor PlayerService: PlayerServiceProtocol {
     var musicHapticsNudgeTask: Task<Void, Never>?
     /// Warms catalog ISRC cache for the next queued track.
     var nextTrackISRCPrefetchTask: Task<Void, Never>?
-    /// Task scheduled to download and cache the current track at +30s of playback.
+    /// One cache transfer after the current media clock has stayed stable.
+    var cacheDownloadRetry = AutomaticMediaRetryPolicy()
+    var cacheDownloadID: UUID?
     var cacheDownloadTask: Task<Void, Never>?
     /// Ordered history writes survive track changes; audio never waits for their persistence.
     var historyWriteTask: Task<Void, Never>?
@@ -360,7 +370,9 @@ actor PlayerService: PlayerServiceProtocol {
 
         let cacheConfig = URLSessionConfiguration.default
         cacheConfig.timeoutIntervalForRequest = 30
-        cacheConfig.timeoutIntervalForResource = 30
+        cacheConfig.timeoutIntervalForResource = 300
+        cacheConfig.urlCache = nil
+        cacheConfig.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.cacheSession = URLSession(configuration: cacheConfig)
 
         let prefetchConfig = URLSessionConfiguration.default
@@ -402,6 +414,7 @@ actor PlayerService: PlayerServiceProtocol {
         progressTask?.cancel()
         playbackRequestTask?.cancel()
         playbackAcquisitionTask?.cancel()
+        qualityUpgradeTask?.cancel()
         engineFailureTask?.cancel()
         liveStreamStallTask?.cancel()
         seekCommitTask?.cancel()

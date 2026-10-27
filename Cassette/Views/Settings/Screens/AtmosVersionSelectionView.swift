@@ -10,6 +10,8 @@ struct AtmosVersionSelectionView: View {
     @State private var isLoading = false
     @State private var identity: ServerRequestIdentity?
     @State private var selectedID: String?
+    @State private var downloadedIDs: Set<String> = []
+    @State private var downloadingID: String?
 
     private var filteredCandidates: [DisplayableSong] {
         guard !query.isEmpty else { return candidates }
@@ -24,23 +26,29 @@ struct AtmosVersionSelectionView: View {
                     choice("Automatic Matching", id: nil)
                     choice("Use Original Song", id: "")
                 } footer: {
-                    Text("Manual choices apply when Prefer Dolby Atmos is enabled. The current album artwork and track information stay the same.")
+                    Text("Manual choices apply when Prefer Dolby Atmos is enabled. The current album artwork and track information stay the same. Use the download button to keep a version offline.")
                 }
                 Section {
                     if isLoading { ProgressView() }
                     ForEach(filteredCandidates) { candidate in
-                        Button {
-                            select(candidate.id)
-                        } label: {
-                            HStack(spacing: CassetteSpacing.m) {
-                                VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
-                                    Text(candidate.title).font(.cassetteCellTitle).foregroundStyle(.primary)
-                                    Text(candidate.albumName ?? "").font(.cassetteCaption).foregroundStyle(.secondary)
-                                    Text(durationLabel(candidate.duration)).font(.cassetteCaption).foregroundStyle(.secondary)
+                        HStack(spacing: CassetteSpacing.s) {
+                            Button {
+                                select(candidate.id)
+                            } label: {
+                                HStack(spacing: CassetteSpacing.m) {
+                                    VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
+                                        Text(candidate.title).font(.cassetteCellTitle).foregroundStyle(.primary)
+                                        Text(candidate.albumName ?? "").font(.cassetteCaption).foregroundStyle(.secondary)
+                                        Text(durationLabel(candidate.duration)).font(.cassetteCaption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if selectedID == candidate.id { Image(systemName: "checkmark").foregroundStyle(.cassetteAccent) }
                                 }
-                                Spacer()
-                                if selectedID == candidate.id { Image(systemName: "checkmark").foregroundStyle(.cassetteAccent) }
+                                .contentShape(Rectangle())
                             }
+                            .buttonStyle(.plain)
+
+                            downloadButton(for: candidate)
                         }
                     }
                     if !isLoading, candidates.isEmpty {
@@ -72,6 +80,52 @@ struct AtmosVersionSelectionView: View {
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
+    @ViewBuilder
+    private func downloadButton(for candidate: DisplayableSong) -> some View {
+        if downloadedIDs.contains(candidate.id) {
+            Image(systemName: "arrow.down.circle.fill")
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+                .accessibilityLabel(String(localized: "Downloaded", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        } else if downloadingID == candidate.id {
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 32, height: 32)
+        } else {
+            Button {
+                Task { await download(candidate) }
+            } label: {
+                Image(systemName: "arrow.down.circle")
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(String(localized: "Download Dolby Atmos Version", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        }
+    }
+
+    private func download(_ candidate: DisplayableSong) async {
+        guard downloadingID == nil,
+              !downloadedIDs.contains(candidate.id),
+              let container,
+              let identity,
+              container.serverState.requestIsCurrent(identity),
+              let serverId = container.serverState.activeServer?.id else { return }
+        let downloadService = container.downloadService
+        downloadingID = candidate.id
+        defer { downloadingID = nil }
+        do {
+            try await downloadService.downloadOriginal(song: candidate.asSong(), serverId: serverId)
+            guard !Task.isCancelled, container.serverState.requestIsCurrent(identity) else { return }
+            downloadedIDs.insert(candidate.id)
+            container.toastService.showSuccess(String(localized: "Downloaded in Dolby Atmos", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale))
+        } catch {
+            if !UserFacingError.isCancellation(error) {
+                container.toastService.showError(UserFacingError.from(error).displayMessage)
+            }
+        }
+    }
+
     private func select(_ id: String?) {
         guard let container, let identity, container.serverState.requestIsCurrent(identity) else { return }
         container.libraryIndexService.setManualAtmosSelection(id, for: song, serverId: identity.serverID)
@@ -92,5 +146,15 @@ struct AtmosVersionSelectionView: View {
         let result = await container.libraryIndexService.atmosCandidates(for: song, serverId: sid)
         guard !Task.isCancelled, container.serverState.requestIsCurrent(token) else { return }
         candidates = result; identity = token
+        let downloaded = await container.downloadService.downloadedSongIds(serverId: sid)
+        guard !Task.isCancelled, container.serverState.requestIsCurrent(token) else { return }
+        var originals: Set<String> = []
+        for candidate in result where downloaded.contains(candidate.id) {
+            if await container.downloadService.downloadedOriginalURL(forSongId: candidate.id, serverId: sid) != nil {
+                originals.insert(candidate.id)
+            }
+            guard !Task.isCancelled, container.serverState.requestIsCurrent(token) else { return }
+        }
+        downloadedIDs = originals
     }
 }

@@ -33,12 +33,57 @@ enum CassetteCornerRadius {
     static let pill: CGFloat      = 999  // capsule buttons
 }
 
+/// Settings proportions shared by the root, subpages, and choice lists.
+enum CassetteSettingsLayout {
+    static let minimumRowHeight: CGFloat = 54
+    static let rowInsets = EdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20)
+}
+
+enum CassetteAlbumLayout {
+    /// Title begins over the darkened bottom of a textured sleeve.
+    static let fadedHeadingStart: CGFloat = 1.04
+    // Window safe-area headroom belongs to the sleeve, independently of the
+    // title baseline. These offsets are proportional to the uncropped square.
+    static let fadedWindowArtworkHeadroom: CGFloat = 0.075
+    static let fadedWindowHeadingLead: CGFloat = 0.06
+    static let fadedTitleLeadIn: CGFloat = 0.30
+    static let fadedDetailsTail: CGFloat = 0.14
+    /// Extend a narrow strip of the sleeve above its square, keeping the subject
+    /// below the floating navigation controls without zooming/cropping the cover.
+    static let fadedArtworkTopInset: CGFloat = 0.22
+    static let fadedSmoothArtworkTopInset: CGFloat = 0.12
+    /// Portrait/photo compositions continue actual pixels through the title area.
+    static let photographicArtworkScale: CGFloat = 1.32
+    static let photographicHeadroom: CGFloat = 0.14
+    /// Crossfade the original lower edge into the cached edge color; never stretch lettering.
+    static let fadedBottomBlend: CGFloat = 0.08
+    static func fadedTopInset(for treatment: FadedArtworkTreatment) -> CGFloat {
+        switch treatment {
+        case .textured: return fadedArtworkTopInset
+        case .smooth: return fadedSmoothArtworkTopInset
+        case .graphic: return 0
+        case .photographic: return photographicHeadroom
+        }
+    }
+    static let fadedTopSample: CGFloat = 0.06
+    static let fadedTopBlend: CGFloat = 0.04
+    static let fadedControlSide: CGFloat = 52
+    static let fadedPlayWidth: CGFloat = 160
+    static let coverSideInset: CGFloat = 68
+    static let minimumCoverSide: CGFloat = 180
+    static let controlSide: CGFloat = 56
+    static let insetPlayWidth: CGFloat = 165
+}
+
 // MARK: - Shadow presets
 
 /// Cassette shadow values. In dark mode, shadows are invisible against black backgrounds;
 /// use `CassetteCoverModifier` (via `.cassetteCoverStyle()`) which switches to a thin
 /// border in dark mode automatically.
 enum CassetteShadow {
+    static let artworkTextRadius: CGFloat = 2
+    static let artworkTextY: CGFloat = 1
+    static let artworkTextOpacity: Double = 0.5
     static let coverRadius: CGFloat  = 8
     static let coverY: CGFloat       = 4
     static let coverOpacity: Double  = 0.15
@@ -145,18 +190,69 @@ struct ContentWidthModifier: ViewModifier {
 }
 
 extension View {
+    /// Fade transparent scrolling content into its existing backdrop. Apply before
+    /// button overlays and outside the scroll content, so only viewport edges fade.
+    /// Opaque page backgrounds should use the native soft scroll-edge helpers below.
+    func cassetteContentEdgeFade(top: CGFloat = 0, bottom: CGFloat = 0) -> some View {
+        mask {
+            GeometryReader { geometry in
+                let height = max(0, geometry.size.height)
+                let ramp = Gradient(stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.15625), location: 0.25),
+                    .init(color: .black.opacity(0.5), location: 0.5),
+                    .init(color: .black.opacity(0.84375), location: 0.75),
+                    .init(color: .black, location: 1)
+                ])
+                VStack(spacing: 0) {
+                    LinearGradient(gradient: ramp, startPoint: .top, endPoint: .bottom)
+                        .frame(height: min(max(0, top), height * 0.25))
+                    Rectangle().fill(.black)
+                    LinearGradient(gradient: ramp, startPoint: .bottom, endPoint: .top)
+                        .frame(height: min(max(0, bottom), height * 0.30))
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+
     func cassetteContentWidth(_ style: CassetteContentWidthStyle = .fill) -> some View {
         modifier(ContentWidthModifier(style: style))
     }
 
-    /// Let the system soften scrolling content under the top bar; do not replace it
-    /// with a fixed dark overlay or suppress the edge effect.
+    /// Match upstream album pages: keep the system top-edge effect out of the
+    /// cover/zoom surface, including while the navigation bar is transitioning.
     @ViewBuilder
-    func cassetteSoftTopScrollEdge() -> some View {
+    func cassetteHideTopScrollEdgeEffect() -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            scrollEdgeEffectHidden(true, for: .top)
+        } else {
+            self
+        }
+    }
+
+    /// Album artwork can remain unobscured until content scrolls under the bar.
+    /// Let the system blend content into fixed navigation chrome.
+    @ViewBuilder
+    func cassetteSoftTopScrollEdge(isVisible: Bool = true) -> some View {
         if #available(iOS 26.0, macOS 26.0, *) {
             self
-                .scrollEdgeEffectHidden(false, for: .top)
+                .scrollEdgeEffectHidden(!isVisible, for: .top)
                 .scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            self
+        }
+    }
+
+    /// Native bars own the backdrop and blend scrolling content into their material.
+    /// Avoid a black overlay here: it ends at the viewport and leaves a visible seam.
+    @ViewBuilder
+    func cassetteSoftBottomScrollEdge() -> some View {
+        if #available(iOS 26.0, macOS 26.0, *) {
+            self
+                .scrollEdgeEffectHidden(false, for: .bottom)
+                .scrollEdgeEffectStyle(.soft, for: .bottom)
         } else {
             self
         }

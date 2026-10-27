@@ -1,0 +1,745 @@
+--- a/Cassette/Services/Playback/AudioStreamingPlayerEngine.swift
++++ b/Cassette/Services/Playback/AudioStreamingPlayerEngine.swift
+@@ -25,21 +25,36 @@
+     )
+ 
+     private let playerLock = NSRecursiveLock()
+-    private var storedPlayer: AudioPlayer
+-    private var player: AudioPlayer { playerLock.withLock { storedPlayer } }
++    private var storedPlayer: AudioPlayer?
+     private let configuration: AudioPlayerConfiguration
+     private weak var callbackDelegate: AudioPlayerDelegate?
+     private var needsReplacement = false
+     private var filters: [String: FilterCallback] = [:]
++    private var pendingNodes: [AVAudioNode] = []
++    private var storedVolume: Float = 1
+ 
+-    var playerIdentity: ObjectIdentifier { playerLock.withLock { ObjectIdentifier(storedPlayer) } }
++    var playerIdentity: ObjectIdentifier? { playerLock.withLock { storedPlayer.map(ObjectIdentifier.init) } }
+ 
+     init(configuration: AudioPlayerConfiguration = AudioStreamingPlayerEngine.defaultConfiguration) {
+         self.configuration = configuration
+-        self.storedPlayer = AudioPlayer(configuration: configuration)
++    }
++
++    /// Native playback and idle browsing must not allocate the fallback engine's PCM
++    /// reservoir, audio graph and networking client. Configuration is retained until play.
++    private func playerForPlaybackLocked() -> AudioPlayer {
++        if let storedPlayer { return storedPlayer }
++        let player = AudioPlayer(configuration: configuration)
++        player.volume = storedVolume
+         player.frameFiltering.add(entry: PlaybackBeatMeter.filterName) { buffer, _ in
+             PlaybackBeatMeter.enqueue(buffer: buffer)
+         }
++        for (name, filter) in filters { player.frameFiltering.add(entry: name, filter: filter) }
++        if !pendingNodes.isEmpty { player.attach(nodes: pendingNodes) }
++        pendingNodes.removeAll()
++        player.delegate = callbackDelegate
++        storedPlayer = player
++        needsReplacement = false
++        return player
+     }
+ 
+     /// Engine callbacks (state changes, EOF, errors). Owned here, wired by `PlayerService`.
+@@ -47,7 +62,7 @@
+         get { playerLock.withLock { callbackDelegate } }
+         set { playerLock.withLock {
+             callbackDelegate = newValue
+-            if !needsReplacement { storedPlayer.delegate = newValue }
++            if !needsReplacement { storedPlayer?.delegate = newValue }
+         } }
+     }
+ 
+@@ -56,14 +71,17 @@
+     }
+ 
+     func resetAfterMediaServicesReset() {
+-        playerLock.withLock { replacePlayer(preserveNodes: false) }
++        playerLock.withLock {
++            pendingNodes.removeAll()
++            if storedPlayer != nil { replacePlayer(preserveNodes: false) }
++        }
+     }
+ 
+     /// AudioPlayer.stop() schedules source cleanup asynchronously. Reusing that instance
+     /// immediately lets its old cleanup erase the new entry, leaving every retry at zero.
+     /// A stopped/failed instance is retired; queued gapless entries keep the current one.
+     private func replacePlayer(preserveNodes: Bool) {
+-        let old = storedPlayer
++        guard let old = storedPlayer else { return }
+         old.delegate = nil
+         let volume = old.volume
+         old.stop()
+@@ -84,78 +102,82 @@
+ 
+     // MARK: - PlaybackEngine
+ 
+-    var state: AudioPlayerState { player.state }
+-    var progress: Double { player.progress }
+-    var duration: Double { player.duration }
+-    var isSeekable: Bool { player.isSeekable }
++    var state: AudioPlayerState { playerLock.withLock { storedPlayer?.state ?? (needsReplacement ? .stopped : .ready) } }
++    var progress: Double { playerLock.withLock { storedPlayer?.progress ?? 0 } }
++    var duration: Double { playerLock.withLock { storedPlayer?.duration ?? 0 } }
++    var isSeekable: Bool { playerLock.withLock { storedPlayer?.isSeekable ?? false } }
+ 
+     var volume: Float {
+-        get { player.volume }
+-        set { player.volume = newValue }
++        get { playerLock.withLock { storedPlayer?.volume ?? storedVolume } }
++        set { playerLock.withLock { storedVolume = newValue; storedPlayer?.volume = newValue } }
+     }
+ 
+     func play(url: URL, headers: [String: String]) {
+         playerLock.withLock {
+-            if needsReplacement || storedPlayer.state == .error { replacePlayer(preserveNodes: true) }
+-            storedPlayer.play(url: url, headers: headers)
++            if needsReplacement || storedPlayer?.state == .error { replacePlayer(preserveNodes: true) }
++            playerForPlaybackLocked().play(url: url, headers: headers)
+         }
+     }
+ 
+     func queue(url: URL, headers: [String: String]) {
+-        player.queue(url: url, headers: headers)
++        playerLock.withLock { playerForPlaybackLocked().queue(url: url, headers: headers) }
+     }
+ 
+     func removeFromQueue(url: URL) {
+-        player.removeFromQueue(url: url)
++        playerLock.withLock { storedPlayer?.removeFromQueue(url: url) }
+     }
+ 
+     func stop() {
+         playerLock.withLock {
+             guard !needsReplacement else { return }
+             needsReplacement = true
+-            storedPlayer.delegate = nil
+-            storedPlayer.stop()
++            storedPlayer?.delegate = nil
++            storedPlayer?.stop()
+         }
+     }
+-    func pause() { player.pause() }
+-    func resume() { player.resume() }
+-    func seek(to time: Double) { player.seek(to: time) }
++    func pause() { playerLock.withLock { storedPlayer?.pause() } }
++    func resume() { playerLock.withLock { storedPlayer?.resume() } }
++    func seek(to time: Double) { playerLock.withLock { storedPlayer?.seek(to: time) } }
+ 
+     func recoverQueuedTransitionIfNeeded() {
+-        switch player.state {
+-        case .paused:
+-            player.resume()
+-        case .bufferring:
+-            // `AudioPlayer.resume()` is deliberately a no-op unless its private state is
+-            // `.paused`. A queued hand-off can instead be left in `.waitingForData` (published as
+-            // `.bufferring`), so reproduce the transport reset that previously only happened
+-            // after the listener touched play/pause.
+-            player.pause()
+-            player.resume()
+-        default:
+-            break
++        playerLock.withLock {
++            guard let player = storedPlayer else { return }
++            switch player.state {
++            case .paused:
++                player.resume()
++            case .bufferring:
++                // `AudioPlayer.resume()` is deliberately a no-op unless its private state is
++                // `.paused`. Wake a queued hand-off without replacing its buffered entry.
++                player.pause()
++                player.resume()
++            default:
++                break
++            }
+         }
+     }
+ 
+     // MARK: - AudioGraphHosting
+ 
+     func attach(node: AVAudioNode) {
+-        playerLock.withLock { storedPlayer.attach(node: node) }
++        playerLock.withLock {
++            if let storedPlayer { storedPlayer.attach(node: node) }
++            else if !pendingNodes.contains(where: { $0 === node }) { pendingNodes.append(node) }
++        }
+     }
+ 
+     func addFrameFilter(named name: String, filter: @escaping FilterCallback) {
+         // Replacing an existing entry keeps the "install once" behaviour the beat meter relies on.
+         playerLock.withLock {
+             filters[name] = filter
+-            storedPlayer.frameFiltering.remove(entry: name)
+-            storedPlayer.frameFiltering.add(entry: name, filter: filter)
++            storedPlayer?.frameFiltering.remove(entry: name)
++            storedPlayer?.frameFiltering.add(entry: name, filter: filter)
+         }
+     }
+ 
+     func removeFrameFilter(named name: String) {
+         playerLock.withLock {
+             filters[name] = nil
+-            storedPlayer.frameFiltering.remove(entry: name)
++            storedPlayer?.frameFiltering.remove(entry: name)
+         }
+     }
+ }
+--- a/Cassette/Utilities/LyricPlaybackTimeline.swift
++++ b/Cassette/Utilities/LyricPlaybackTimeline.swift
+@@ -15,38 +15,73 @@
+     }
+ 
+     private let entries: [Entry]
++    private let leafCount: Int
++    private let maximumEnds: [Int]
++    private let upcomingLeads: [Int?]
+ 
+     init(rows: [LyricDisplayRow]) {
+-        entries = rows.enumerated().compactMap { index, row in
++        let entries = rows.enumerated().compactMap { index, row -> Entry? in
+             guard let start = row.startMs,
+                   !row.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+             return Entry(index: index, start: start, end: row.endMs, secondary: row.isSecondaryAgent)
++        }.sorted { ($0.start, $0.index) < ($1.start, $1.index) }
++        self.entries = entries
++        var leaves = 1
++        while leaves < entries.count { leaves *= 2 }
++        leafCount = leaves
++        var ends = Array(repeating: Int.min, count: leaves * 2)
++        for index in entries.indices { ends[leaves + index] = entries[index].end ?? Int.max }
++        if leaves > 1 {
++            for index in stride(from: leaves - 1, through: 1, by: -1) {
++                ends[index] = max(ends[index * 2], ends[index * 2 + 1])
++            }
+         }
++        maximumEnds = ends
++        // Preserve the original display-order fallback even for unsorted input.
++        var upcoming = [Int?](repeating: nil, count: entries.count + 1)
++        for index in entries.indices.reversed() {
++            let next = upcoming[index + 1]
++            upcoming[index] = entries[index].secondary ? next
++                : min(entries[index].index, next ?? entries[index].index)
++        }
++        upcomingLeads = upcoming
+     }
+ 
+     func activeRows(for milliseconds: Int) -> (primary: Int?, indices: Set<Int>) {
+         var indices = Set<Int>()
+         var primaryLead: Entry?
+         var primaryAny: Entry?
+-        var upcomingLead: Entry?
+-
+-        for entry in entries {
+-            if entry.start > milliseconds {
+-                if upcomingLead == nil, !entry.secondary { upcomingLead = entry }
+-                continue
++        var low = 0, high = entries.count
++        while low < high {
++            let middle = low + (high - low) / 2
++            if entries[middle].start <= milliseconds { low = middle + 1 }
++            else { high = middle }
++        }
++        let firstFuture = low
++        // Skip entire expired subtrees. Cost follows active overlap, rather than the
++        // document length, without a forward-only cursor that could break backward seeks.
++        func collect(_ node: Int, _ lower: Int, _ upper: Int) {
++            guard lower < firstFuture, maximumEnds[node] >= milliseconds else { return }
++            if upper - lower > 1 {
++                let middle = lower + (upper - lower) / 2
++                collect(node * 2, lower, middle)
++                collect(node * 2 + 1, middle, upper)
++                return
+             }
+-            if let end = entry.end, milliseconds >= end { continue }
++            let entry = entries[lower]
++            if let end = entry.end, milliseconds >= end { return }
+             indices.insert(entry.index)
+-            if primaryAny.map({ entry.start > $0.start }) ?? true { primaryAny = entry }
++            if primaryAny.map({ entry.start > $0.start || (entry.start == $0.start && entry.index < $0.index) }) ?? true { primaryAny = entry }
+             // A simultaneous lead keeps the first display row as primary.
+             if !entry.secondary,
+-               primaryLead.map({ entry.start > $0.start }) ?? true {
++               primaryLead.map({ entry.start > $0.start || (entry.start == $0.start && entry.index < $0.index) }) ?? true {
+                 primaryLead = entry
+             }
+         }
++        collect(1, 0, leafCount)
+ 
+         if indices.isEmpty {
+-            if let upcomingLead { return (upcomingLead.index, [upcomingLead.index]) }
++            if let upcomingLead = upcomingLeads[firstFuture] { return (upcomingLead, [upcomingLead]) }
+             return (nil, [])
+         }
+         return (primaryLead?.index ?? primaryAny?.index, indices)
+--- a/Cassette/Services/Implementations/ArtworkImageCache.swift
++++ b/Cassette/Services/Implementations/ArtworkImageCache.swift
+@@ -67,7 +67,7 @@
+     @ObservationIgnored
+     private var cacheGeneration = 0
+     @ObservationIgnored private var accountScope: ServerRequestIdentity?
+-    @ObservationIgnored private var localImageSources: [String: String] = [:]
++    @ObservationIgnored private var localImageSources = CostBoundedCache<String, String>(countLimit: 110, costLimit: 110)
+     /// Coalesces concurrent `load` calls for the same tier key (Home + Discover often
+     /// request the same album thumb twice → duplicate network + flaky ImageIO decode).
+     @ObservationIgnored
+@@ -81,7 +81,7 @@
+     }
+     @ObservationIgnored private var originalFlights: [String: OriginalFlight] = [:]
+     @ObservationIgnored
+-    private var failedNetworkLoadUntil: [String: Date] = [:]
++    private var failedNetworkLoadUntil = CostBoundedCache<String, Date>(countLimit: 256, costLimit: 256)
+     nonisolated private static let networkFailureCooldown: TimeInterval = 60
+ 
+     private let downloadService: any DownloadServiceProtocol
+@@ -395,12 +395,12 @@
+         for tier in [ArtworkTier.thumb, .hero] {
+             let oldKey = cacheKey(id: coverArtId, tier: tier)
+             cache.removeValue(forKey: oldKey)
+-            localImageSources[oldKey] = nil
+-        }
+-        failedNetworkLoadUntil[key] = nil
++            localImageSources.removeValue(forKey: oldKey)
++        }
++        failedNetworkLoadUntil.removeValue(forKey: key)
+         invalidatePreparedPalette(for: coverArtId)
+         store(image: image, forKey: key, generation: generation, coverArtId: coverArtId)
+-        localImageSources[key] = originalURL.path
++        localImageSources.insert(originalURL.path, forKey: key, cost: 1)
+         NotificationCenter.default.post(name: OriginalArtwork.didInstall, object: coverArtId)
+         Logger.artworkCache.debug(
+             "[NET-COVER] original done id=\(coverArtId, privacy: .public) bytes=\(data.count, privacy: .public)"
+@@ -413,8 +413,8 @@
+         for tier in [ArtworkTier.thumb, .hero] {
+             let key = cacheKey(id: coverArtId, tier: tier)
+             cache.removeValue(forKey: key)
+-            localImageSources[key] = nil
+-            failedNetworkLoadUntil[key] = nil
++            localImageSources.removeValue(forKey: key)
++            failedNetworkLoadUntil.removeValue(forKey: key)
+         }
+         NotificationCenter.default.post(name: OriginalArtwork.didInstall, object: coverArtId)
+     }
+@@ -461,7 +461,7 @@
+         if let originalURL { localURL = originalURL }
+         else if let legacy = await diskURL(coverArtId, generation: generation) { localURL = legacy }
+         else { return nil }
+-        if localImageSources[key] == localURL.path, let hit = cache[key] {
++        if localImageSources.value(forKey: key) == localURL.path, let hit = cache[key] {
+             touch(key)
+             return hit
+         }
+@@ -480,7 +480,7 @@
+             await self.decodeGate.release()
+             guard self.isCurrent(generation), !Task.isCancelled else { return nil }
+             if let image {
+-                self.localImageSources[key] = localURL.path
++                self.localImageSources.insert(localURL.path, forKey: key, cost: 1)
+                 self.store(image: image, forKey: key, generation: generation, coverArtId: coverArtId)
+             }
+             return image
+@@ -702,7 +702,7 @@
+         Logger.artworkCache.debug(
+             "[NET-COVER] done id=\(coverArtId, privacy: .public) tier=\(tier.rawValue, privacy: .public) duration=\(Int(Date().timeIntervalSince(t0) * 1000))ms bytes=\(persistData?.count ?? 0, privacy: .public)"
+         )
+-        failedNetworkLoadUntil[key] = nil
++        failedNetworkLoadUntil.removeValue(forKey: key)
+         store(image: image, forKey: key, generation: generation, coverArtId: coverArtId)
+         if let persistData {
+             await persistDisk(persistData, id: "\(coverArtId)@\(tier.rawValue)", generation: generation)
+@@ -754,8 +754,8 @@
+         let generation = cacheGeneration
+         for key in keys {
+             cache.removeValue(forKey: key)
+-            localImageSources[key] = nil
+-            failedNetworkLoadUntil[key] = nil
++            localImageSources.removeValue(forKey: key)
++            failedNetworkLoadUntil.removeValue(forKey: key)
+         }
+         for id in ["\(coverArtId)@thumb", "\(coverArtId)@hero", coverArtId, OriginalArtwork.storageID(coverArtId)] {
+             await removeDisk(id, generation: generation)
+@@ -817,12 +817,12 @@
+             Logger.artworkCache.debug("[NET-COVER] skipped recent failure key=\(key, privacy: .public)")
+             return true
+         }
+-        failedNetworkLoadUntil[key] = nil
++        failedNetworkLoadUntil.removeValue(forKey: key)
+         return false
+     }
+ 
+     private func rememberNetworkFailure(forKey key: String) {
+-        failedNetworkLoadUntil[key] = Date().addingTimeInterval(Self.networkFailureCooldown)
++        failedNetworkLoadUntil.insert(Date().addingTimeInterval(Self.networkFailureCooldown), forKey: key, cost: 1)
+     }
+ 
+     private func touch(_ key: String) {
+--- a/Cassette/Services/Implementations/PlayerService+Progress.swift
++++ b/Cassette/Services/Implementations/PlayerService+Progress.swift
+@@ -44,7 +44,7 @@
+                     && serverService.state.activeServer?.id == serverId
+             }), await cacheService.cachedURL(forSongId: songID, serverId: serverId) == nil,
+                !(await downloadService.isDownloaded(songId: songID, serverId: serverId)),
+-               await waitForEstablishedPlayback(of: songID),
++               await waitForEstablishedPlayback(of: songID, epoch: epoch),
+                epoch == playbackEpoch, !Task.isCancelled else { return }
+             let url: URL?
+             if format == .matchStream { url = streamURL }
+@@ -78,6 +78,8 @@
+     // MARK: - Progress timer
+ 
+     func scheduleAutomaticDownload(song playingSong: DisplayableSong, serverId: UUID) async {
++        guard !Task.isCancelled, CassettePerformance.budget.allowsAutomaticMediaDownloads,
++              UserDefaults.standard.bool(forKey: Self.automaticDownloadUserDefaultsKey) else { return }
+         let epoch = playbackEpoch
+         let playingSongID = playingSong.id
+         let logicalSong = await MainActor.run { state.currentTrack ?? playingSong }
+@@ -125,7 +127,7 @@
+             // foreground request, especially for lossless originals. Wait until the media clock
+             // proves that this exact track is producing audio before sharing the connection.
+             guard epoch == playbackEpoch,
+-                  await waitForEstablishedPlayback(of: playingSongID),
++                  await waitForEstablishedPlayback(of: playingSongID, epoch: epoch),
+                   epoch == playbackEpoch else { return }
+             if isLimited {
+                 // Preserve the existing 45-second limited-network grace period, counting time
+@@ -187,14 +189,14 @@
+ 
+     /// Waits for a real advancing media clock rather than trusting an optimistic `.playing`
+     /// callback. This keeps a background full-file transfer off the playback critical path.
+-    private func waitForEstablishedPlayback(of songID: String) async -> Bool {
++    private func waitForEstablishedPlayback(of songID: String, epoch: UInt64) async -> Bool {
+         var stability = PlaybackPreparationStability()
+         for _ in 0..<80 {
+-            guard !Task.isCancelled else { return false }
++            guard epoch == playbackEpoch, !Task.isCancelled else { return false }
+             let snapshot = await MainActor.run {
+                 (state.currentPlaybackTrack?.id ?? state.currentTrack?.id, state.playbackState, state.duration)
+             }
+-            guard snapshot.0 == songID else { return false }
++            guard epoch == playbackEpoch, !Task.isCancelled, snapshot.0 == songID else { return false }
+             if stability.observe(mediaTime: engineProgress(), now: ProcessInfo.processInfo.systemUptime,
+                                  isPlaying: snapshot.1 == .playing, requiredDuration: 5),
+                !systemPlayback.isActive || PlaybackBufferPolicy.canPrepareNext(
+@@ -248,7 +250,8 @@
+                 do { try await Task.sleep(for: interval, tolerance: .milliseconds(100)) } catch { return }
+                 guard !Task.isCancelled, let self else { break }
+                 await self.handleSystemPlayerItemChanged(generation: self.systemPlayback.generation)
+-                let epoch = await self.playbackEpoch
++                let context = await self.playbackContext
++                let epoch = context.epoch
+                 let trackID = await MainActor.run { self.state.currentTrack?.id }
+                 let progress = await self.engineProgress()
+                 let audioDuration = await self.engineDuration()
+@@ -273,29 +276,30 @@
+                 // before publishing zero, so neither the UI nor repeat-one treats it as EOF.
+                 if !seekState.isSettling,
+                    await self.recoverUnexpectedProgressReset(progress: progress) { continue }
+-                await MainActor.run {
+-                    guard !Task.isCancelled, !isHandingOver, self.state.currentTrack?.id == trackID else { return }
+-                    let cur = self.state.isLiveStream ? 0 : PlaybackDurationPolicy.resolve(
+-                        catalog: self.state.currentTrack?.duration ?? 0,
++                let published = await self.commitPresentation(context) { state in
++                    guard !Task.isCancelled, !isHandingOver, state.currentTrack?.id == trackID else { return false }
++                    let cur = state.isLiveStream ? 0 : PlaybackDurationPolicy.resolve(
++                        catalog: state.currentTrack?.duration ?? 0,
+                         engine: audioDuration,
+                         engineIsEstimate: engineIsEstimate,
+                         preserveCatalog: preservesCatalog
+                     )
+-                    if abs(self.state.duration - cur) > 0.5 || !self.state.duration.isFinite {
+-                        self.state.duration = cur
++                    if abs(state.duration - cur) > 0.5 || !state.duration.isFinite {
++                        state.duration = cur
+                     }
+-                    if !seekState.isSettling, self.state.pendingSeekPosition == nil {
++                    if !seekState.isSettling, state.pendingSeekPosition == nil {
+                         let clamped = cur > 0 ? min(progress, cur) : progress
+-                        if self.state.position != clamped {
+-                            self.state.position = clamped
++                        if state.position != clamped {
++                            state.position = clamped
+                         }
+                     }
+                     let canSeek = engineSeekable || (audioDuration <= 0 && cur > 0)
+-                    if self.state.isSeekable != canSeek {
+-                        self.state.isSeekable = canSeek
++                    if state.isSeekable != canSeek {
++                        state.isSeekable = canSeek
+                     }
+-                }
+-                guard epoch == (await self.playbackEpoch), !Task.isCancelled, !isHandingOver else { continue }
++                    return true
++                }
++                guard published, await self.contextIsCurrent(context), !isHandingOver else { continue }
+                 // Advancing media time confirms audio after startup, buffering or recovery.
+                 // A seek clock jump is excluded until the seek has settled.
+                 if !seekState.isSettling, progress > positionBeforeTick + 0.05 {
+--- a/Cassette/Services/Implementations/PlayerService+Crossfade.swift
++++ b/Cassette/Services/Implementations/PlayerService+Crossfade.swift
+@@ -37,7 +37,7 @@
+     }
+ 
+     func checkPrefetchThreshold() async {
+-        guard !prefetchScheduled, gaplessBridge.next == nil else { return }
++        guard crossfadeConfig.duration > 0, !prefetchScheduled, gaplessBridge.next == nil else { return }
+         #if os(iOS)
+         // Prefetch can compete with the current stream on wireless system routes.
+         guard !PlayerService.isWirelessSystemRouteActive() else { return }
+--- a/Cassette/Services/Implementations/PlayerService+Reporting.swift
++++ b/Cassette/Services/Implementations/PlayerService+Reporting.swift
+@@ -30,8 +30,10 @@
+     func checkScrobbleThreshold() async {
+         // A track change is in flight: the accumulated time still belongs to the outgoing track,
+         // so attributing it to the incoming one would scrobble the wrong song.
+-        guard !isTrackTransitionPending else { return }
++        guard !isTrackTransitionPending, !detector.fired else { return }
++        let context = playbackContext
+         guard let song = await MainActor.run(body: { state.currentTrack }) else { return }
++        guard contextIsCurrent(context), !isTrackTransitionPending else { return }
+         fireScrobbleIfThresholdMet(song: song)
+     }
+ 
+--- a/Cassette/Services/Networking/NetworkTaskDiagnostics.swift
++++ b/Cassette/Services/Networking/NetworkTaskDiagnostics.swift
+@@ -45,6 +45,9 @@
+     let protocolName: String
+     let reusedConnection: Bool
+     let proxyConnection: Bool
++    /// Encoded HTTP bytes, including redirect transactions; not radio/link-layer traffic.
++    let bytesSent: Int64
++    let bytesReceived: Int64
+ 
+     init(taskID: Int, metrics: URLSessionTaskMetrics) {
+         self.taskID = taskID
+@@ -52,6 +55,12 @@
+         durationMS = duration.isFinite && duration >= 0 && duration < Double(Int.max) ? Int(duration) : -1
+         redirects = metrics.redirectCount
+         transactions = metrics.transactionMetrics.count
++        bytesSent = metrics.transactionMetrics.reduce(0) {
++            $0 + max(0, $1.countOfRequestHeaderBytesSent) + max(0, $1.countOfRequestBodyBytesSent)
++        }
++        bytesReceived = metrics.transactionMetrics.reduce(0) {
++            $0 + max(0, $1.countOfResponseHeaderBytesReceived) + max(0, $1.countOfResponseBodyBytesReceived)
++        }
+         let last = metrics.transactionMetrics.last
+         let name = last?.networkProtocolName ?? "unknown"
+         protocolName = ["http/1.0", "http/1.1", "h2", "h3", "h3-29", "unknown"].contains(name) ? name : "other"
+@@ -70,7 +79,7 @@
+     func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+         let snapshot = NetworkTaskMetricsSnapshot(taskID: task.taskIdentifier, metrics: metrics)
+         let endpoint = NetworkRequestDiagnostics.endpoint(for: task.originalRequest?.url)
+-        Logger.httpTransport.info("[HTTP-METRICS] run=\(RuntimeDiagnostics.sessionID, privacy: .public) session=\(self.sessionID, privacy: .public) task=\(snapshot.taskID, privacy: .public) endpoint=\(endpoint, privacy: .public) duration_ms=\(snapshot.durationMS, privacy: .public) transactions=\(snapshot.transactions, privacy: .public) redirects=\(snapshot.redirects, privacy: .public) protocol=\(snapshot.protocolName, privacy: .public) reused=\(snapshot.reusedConnection, privacy: .public) proxy=\(snapshot.proxyConnection, privacy: .public)")
++        Logger.httpTransport.info("[HTTP-METRICS] run=\(RuntimeDiagnostics.sessionID, privacy: .public) session=\(self.sessionID, privacy: .public) task=\(snapshot.taskID, privacy: .public) endpoint=\(endpoint, privacy: .public) duration_ms=\(snapshot.durationMS, privacy: .public) transactions=\(snapshot.transactions, privacy: .public) redirects=\(snapshot.redirects, privacy: .public) protocol=\(snapshot.protocolName, privacy: .public) reused=\(snapshot.reusedConnection, privacy: .public) proxy=\(snapshot.proxyConnection, privacy: .public) sent_bytes=\(snapshot.bytesSent, privacy: .public) received_bytes=\(snapshot.bytesReceived, privacy: .public)")
+         observe?(snapshot)
+     }
+ }
+--- a/CassetteTests/GaplessContinuityTests.swift
++++ b/CassetteTests/GaplessContinuityTests.swift
+@@ -6,6 +6,51 @@
+ 
+ @Suite("Prepared gapless transport", .serialized) @MainActor
+ struct GaplessContinuityTests {
++    @Test func idleFallbackDoesNotCreateAnAudioGraph() {
++        let engine = AudioStreamingPlayerEngine()
++        let eq = AVAudioUnitEQ()
++        eq.globalGain = -6
++        engine.attach(node: eq)
++        engine.volume = 0.25
++        engine.addFrameFilter(named: "unused") { _, _ in }
++        engine.removeFrameFilter(named: "unused")
++        for _ in 0..<1000 {
++            #expect(engine.progress == 0)
++            #expect(engine.duration == 0)
++            #expect(!engine.isSeekable)
++        }
++        engine.pause()
++        engine.resume()
++        engine.seek(to: 1)
++        engine.stop()
++        #expect(engine.state == .stopped)
++        #expect(engine.volume == 0.25)
++        #expect(engine.playerIdentity == nil)
++        #expect(eq.engine == nil)
++        engine.resetAfterMediaServicesReset()
++        #expect(engine.playerIdentity == nil)
++    }
++
++    @Test func deferredGraphPreservesGainAndOnlyInstallsOnce() async throws {
++        let url = try fixture()
++        defer { try? FileManager.default.removeItem(at: url) }
++        let engine = AudioStreamingPlayerEngine()
++        let eq = AVAudioUnitEQ()
++        eq.globalGain = -6
++        engine.attach(node: eq)
++        engine.attach(node: eq)
++        engine.volume = 0
++        #expect(engine.playerIdentity == nil)
++        engine.play(url: url, headers: [:])
++        defer { engine.stop() }
++        let identity = try #require(engine.playerIdentity)
++        #expect(eq.engine != nil)
++        #expect(eq.globalGain == -6)
++        #expect(engine.volume == 0)
++        engine.queue(url: url, headers: [:])
++        #expect(engine.playerIdentity == identity)
++    }
++
+     @Test func stoppedAndFailedStreamingEnginesCannotPoisonFollowingTracks() async throws {
+         let url = try fixture()
+         defer { try? FileManager.default.removeItem(at: url) }
+--- a/CassetteTests/LyricPlaybackTimelineTests.swift
++++ b/CassetteTests/LyricPlaybackTimelineTests.swift
+@@ -1,8 +1,49 @@
++import Foundation
+ import Testing
+ @testable import Cassette
+ 
+ @Suite("Cached lyric playback timeline")
+ struct LyricPlaybackTimelineTests {
++    @Test func indexedLookupMatchesDisplayOrderScanAcrossSeeksAndOverlaps() {
++        var seed: UInt64 = 42
++        func random(_ limit: Int) -> Int {
++            seed = seed &* 6364136223846793005 &+ 1
++            return Int((seed >> 32) % UInt64(limit))
++        }
++        let rows = (0..<2000).map { index in
++            let start = random(200_000) - 1000
++            return row(index % 31 == 0 ? nil : start,
++                       end: index % 19 == 0 ? nil : start + random(8000) - 200,
++                       secondary: index % 3 == 0, text: index % 37 == 0 ? " \n" : "Verse")
++        }
++        let timeline = LyricPlaybackTimeline(rows: rows)
++        for time in [Int.min, Int.max] + (0..<500).map({ _ in random(220_000) - 2000 }) {
++            let expected = reference(rows, time: time)
++            let actual = timeline.activeRows(for: time)
++            #expect(actual.primary == expected.primary)
++            #expect(actual.indices == expected.indices)
++        }
++    }
++
++    /// Keep the pre-optimization algorithm as an independent semantic oracle.
++    private func reference(_ rows: [LyricDisplayRow], time: Int) -> (primary: Int?, indices: Set<Int>) {
++        var active: Set<Int> = []
++        var primary: Int?, any: Int?, upcoming: Int?
++        for (index, row) in rows.enumerated() {
++            guard let start = row.startMs, !row.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
++            if start > time {
++                if upcoming == nil, !row.isSecondaryAgent { upcoming = index }
++                continue
++            }
++            if let end = row.endMs, time >= end { continue }
++            active.insert(index)
++            if any == nil || start > rows[any!].startMs! { any = index }
++            if !row.isSecondaryAgent, primary == nil || start > rows[primary!].startMs! { primary = index }
++        }
++        if active.isEmpty { return (upcoming, upcoming.map { [$0] } ?? []) }
++        return (primary ?? any, active)
++    }
++
+     private func row(_ start: Int?, end: Int? = nil, secondary: Bool = false,
+                      text: String = "Verse") -> LyricDisplayRow {
+         LyricDisplayRow(sourceLineIndex: 0, text: text, startMs: start,
+--- a/Cassette.xcodeproj/xcshareddata/xcschemes/CassetteTests.xcscheme
++++ b/Cassette.xcodeproj/xcshareddata/xcschemes/CassetteTests.xcscheme
+@@ -14,9 +14,12 @@
+       shouldUseLaunchSchemeArgsEnv = "YES"
+       shouldAutocreateTestPlan = "YES">
+       <Testables>
++         <!-- These hosted suites share MPNowPlayingInfoCenter, audio output, the
++              performance governor and UserDefaults. Serialize across suites;
++              suite-local .serialized does not isolate those process-wide resources. -->
+          <TestableReference
+             skipped = "NO"
+-            parallelizable = "YES">
++            parallelizable = "NO">
+             <BuildableReference
+                BuildableIdentifier = "primary"
+                BlueprintIdentifier = "DBA4A75D2F9BBFCC008BC5A9"
+--- a/CassetteTests/LyricTimelinePerformanceTests.swift
++++ b/CassetteTests/LyricTimelinePerformanceTests.swift
+@@ -0,0 +1,86 @@
++import Foundation
++import XCTest
++@testable import Cassette
++
++/// In-process algorithm comparison. These numbers are not device playback/energy metrics.
++final class LyricTimelinePerformanceTests: XCTestCase {
++    private func rows() -> [LyricDisplayRow] {
++        (0..<4000).map { index in
++            LyricDisplayRow(sourceLineIndex: index, text: "Timed phrase", startMs: index * 1000,
++                            endMs: index * 1000 + 1500, cueLine: nil,
++                            isSecondaryAgent: index % 4 == 3, speakerSide: .leading)
++        }
++    }
++
++    private func run(_ lookup: (Int) -> (primary: Int?, indices: Set<Int>)) {
++        var checksum = 0
++        let options = XCTMeasureOptions()
++        options.iterationCount = 3
++        measure(metrics: [XCTClockMetric(), XCTCPUMetric()], options: options) {
++            for index in 0..<2000 {
++                // Repeatable large forward/backward seeks, including overlapping rows.
++                let result = lookup((index * 7919) % 4_000_000)
++                checksum &+= (result.primary ?? 0) + result.indices.count
++            }
++        }
++        XCTAssertGreaterThan(checksum, 0)
++    }
++
++    func testIndexedTimeline() {
++        let timeline = LyricPlaybackTimeline(rows: rows())
++        run(timeline.activeRows(for:))
++    }
++
++    func testLinearBaseline() {
++        let timeline = LinearLyricTimelineBaseline(rows: rows())
++        run(timeline.activeRows(for:))
++    }
++}
++
++// Exact cached linear algorithm from the pre-change working tree, retained for A/B measurement.
++nonisolated private struct LinearLyricTimelineBaseline: Sendable {
++    private struct Entry: Sendable {
++        let index: Int
++        let start: Int
++        let end: Int?
++        let secondary: Bool
++    }
++
++    private let entries: [Entry]
++
++    init(rows: [LyricDisplayRow]) {
++        entries = rows.enumerated().compactMap { index, row in
++            guard let start = row.startMs,
++                  !row.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
++            return Entry(index: index, start: start, end: row.endMs, secondary: row.isSecondaryAgent)
++        }
++    }
++
++    func activeRows(for milliseconds: Int) -> (primary: Int?, indices: Set<Int>) {
++        var indices = Set<Int>()
++        var primaryLead: Entry?
++        var primaryAny: Entry?
++        var upcomingLead: Entry?
++
++        for entry in entries {
++            if entry.start > milliseconds {
++                if upcomingLead == nil, !entry.secondary { upcomingLead = entry }
++                continue
++            }
++            if let end = entry.end, milliseconds >= end { continue }
++            indices.insert(entry.index)
++            if primaryAny.map({ entry.start > $0.start }) ?? true { primaryAny = entry }
++            // A simultaneous lead keeps the first display row as primary.
++            if !entry.secondary,
++               primaryLead.map({ entry.start > $0.start }) ?? true {
++                primaryLead = entry
++            }
++        }
++
++        if indices.isEmpty {
++            if let upcomingLead { return (upcomingLead.index, [upcomingLead.index]) }
++            return (nil, [])
++        }
++        return (primaryLead?.index ?? primaryAny?.index, indices)
++    }
++}

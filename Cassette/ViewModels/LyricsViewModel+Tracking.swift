@@ -58,7 +58,14 @@ extension LyricsViewModel {
         let backwardCorrectionMs = karaokePlaybackMs - requestedMs
         let baseMs = backwardCorrectionMs > 0 && backwardCorrectionMs <= 120
             ? karaokePlaybackMs : requestedMs
-        let timedLines = playbackTimeline.activeRows(for: baseMs)
+        let detectedSeek = amllSeekDetector.detect(mediaMs: Double(baseMs), wallMs: CACurrentMediaTime() * 1000, playing: isPlaying)
+        let amllSeeking = detectedSeek || amllForceSeek
+        amllForceSeek = false
+        if amllTransitionIsSeek != amllSeeking { amllTransitionIsSeek = amllSeeking }
+        if amllSeeking { amllSeekRevision &+= 1 }
+        let usesAMLL = lyricDocument?.timing == .word && !amllDisplayIndices.isEmpty
+        let timedLines = usesAMLL ? amllActiveRows(at: baseMs, seeking: amllSeeking)
+            : playbackTimeline.activeRows(for: baseMs)
         let adjustedMs = baseMs
 
         var newPrimary = timedLines.primary
@@ -68,13 +75,25 @@ extension LyricsViewModel {
         // singing" state two ways: lines without an `endMs` stay "singing" forever, and its
         // fallback auto-advances to the next line when no line is active. Long gaps therefore
         // never produced an empty `newActive`, so the "…" indicator was never shown.
-        applyInstrumentalGapIfNeeded(rows: displayRows, adjustedMs: adjustedMs)
+        if usesAMLL { applyAMLLInterlude(at: adjustedMs) }
+        else { applyInstrumentalGapIfNeeded(rows: displayRows, adjustedMs: adjustedMs) }
 
         // While a long instrumental gap is active, show dots instead of the previous line.
         if instrumentalGapProgress != nil {
             newPrimary = nil
             newActive = []
         }
+
+        let emphasis = emphasisTimeline.sync(adjustedMs, seeking: amllSeeking)
+        let newEmphasis: Set<Int> = instrumentalGapProgress != nil ? [] : Set(
+            emphasis.playing.compactMap { emphasisDisplayIndices.indices.contains($0) ? emphasisDisplayIndices[$0] : nil })
+        if instrumentalGapProgress == nil, newEmphasis.isEmpty,
+           let upcomingLead = nextEmphasisLead(after: adjustedMs) {
+            // Start scrolling in the same update that releases the outgoing highlight,
+            // rather than waiting for the next vocal's start. Vocal clocks stay exact.
+            newPrimary = upcomingLead
+        }
+        if emphasizedLineIndices != newEmphasis { emphasizedLineIndices = newEmphasis }
 
         let newKaraoke = Self.karaokeByteEnds(
             for: newActive,
@@ -83,16 +102,82 @@ extension LyricsViewModel {
         )
 
         // Line selection, instrumental gaps and word fill share the filtered clock.
-        karaokePlaybackMs = adjustedMs
+        if karaokePlaybackMs != adjustedMs {
+            karaokeSampleHostTime = CACurrentMediaTime()
+            karaokePlaybackMs = adjustedMs
+        }
 
         if newPrimary != currentLineIndex { currentLineIndex = newPrimary }
         if newActive != activeLineIndices { activeLineIndices = newActive }
         if newKaraoke != karaokeByteEnds { karaokeByteEnds = newKaraoke }
     }
 
+    func rebuildAMLLTimeline() {
+        let emphasis = LyricEmphasisTiming.entries(rows: displayRows)
+        emphasisDisplayIndices = emphasis.map(\.index)
+        emphasisLeadStarts = emphasis.compactMap {
+            displayRows[$0.index].isSecondaryAgent ? nil : ($0.index, $0.start)
+        }
+        emphasisTimeline = AMLLTimeline(bounds: emphasis.map { .init(start: $0.start, end: $0.end) })
+        let entries = displayRows.enumerated().compactMap { index, row -> (Int, AMLLTimeline.Bounds)? in
+            guard let start = row.startMs, let end = row.endMs, end > start,
+                  !row.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            let vocalEnd = max(end, row.backgroundWords.map(\.endMs).max() ?? end)
+            return (index, AMLLTimeline.Bounds(start: start, end: vocalEnd))
+        }.sorted { $0.1.start == $1.1.start ? $0.0 < $1.0 : $0.1.start < $1.1.start }
+        amllDisplayIndices = entries.map(\.0)
+        amllTimeline = AMLLTimeline(bounds: entries.map(\.1))
+        amllSeekDetector.reset()
+        amllForceSeek = true
+    }
+
+    private func nextEmphasisLead(after time: Int) -> Int? {
+        var low = 0, high = emphasisLeadStarts.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if emphasisLeadStarts[middle].startMs <= time { low = middle + 1 }
+            else { high = middle }
+        }
+        return low < emphasisLeadStarts.count ? emphasisLeadStarts[low].index : nil
+    }
+
+    private func amllActiveRows(at time: Int, seeking: Bool) -> (primary: Int?, indices: Set<Int>) {
+        let snapshot = amllTimeline.sync(time, seeking: seeking)
+        // Vocal membership expires at the source end time. AMLL's lingering highlight
+        // is useful for scroll focus, but must not keep finished vocals bright.
+        let indices = Set(snapshot.playing.compactMap { amllDisplayIndices.indices.contains($0) ? amllDisplayIndices[$0] : nil })
+        let primary = indices.contains(where: { !displayRows[$0].isSecondaryAgent })
+            ? indices.filter { !displayRows[$0].isSecondaryAgent }.min() : indices.min()
+        let focus = amllDisplayIndices.indices.contains(snapshot.scrollIndex)
+            ? amllDisplayIndices[snapshot.scrollIndex] : nil
+        return (primary ?? (snapshot.ended ? nil : focus), indices)
+    }
+
+    private func applyAMLLInterlude(at time: Int) {
+        guard let gap = amllTimeline.snapshot.interlude, amllTimeline.snapshot.focusesInterlude else {
+            clearInstrumentalGap(); return
+        }
+        instrumentalGapStartMs = gap.start
+        instrumentalGapEndMs = gap.end
+        instrumentalGapAfterIndex = gap.after >= 0 && amllDisplayIndices.indices.contains(gap.after)
+            ? amllDisplayIndices[gap.after] : nil
+        let progress = Double(time - gap.start) / Double(max(1, gap.end - gap.start))
+        if abs((instrumentalGapProgress ?? -1) - progress) > 0.005 { instrumentalGapProgress = progress }
+    }
+
+    /// Read-only frame clock. The tracking loop owns line membership; only the active
+    /// text renderer extrapolates between samples. No Observation state changes here.
+    func presentationTimeMs(at hostTime: CFTimeInterval = CACurrentMediaTime()) -> Int {
+        let advancing = isShown && isActive && isPlaying
+            && lyricSeekTargetMs == nil && playerState.pendingSeekPosition == nil
+        return LyricPresentationClock.time(sampleMs: karaokePlaybackMs,
+            sampledAt: karaokeSampleHostTime, now: hostTime, advancing: advancing)
+    }
+
     func clearLineHighlight() {
         currentLineIndex = nil
         activeLineIndices = []
+        emphasizedLineIndices = []
         karaokeByteEnds = [:]
         karaokePlaybackMs = 0
     }
@@ -228,6 +313,8 @@ extension LyricsViewModel {
             clearInstrumentalGap()
             return
         }
+        instrumentalGapStartMs = enterGapAt
+        instrumentalGapEndMs = gapEnd
         let progress = min(1, max(0, Double(adjustedMs - enterGapAt) / Double(fillLength)))
         instrumentalGapAfterIndex = afterIndex
         if abs((instrumentalGapProgress ?? -1) - progress) > 0.005 {
@@ -270,6 +357,7 @@ extension LyricsViewModel {
 
     func synchronizeSeekClock(to seconds: TimeInterval) {
         guard seconds.isFinite else { return }
+        amllForceSeek = true
         let target = Int(max(0, seconds) * 1000)
         lastPositionSampleMs = target
         lastPositionSampleAt = CACurrentMediaTime()
@@ -279,6 +367,7 @@ extension LyricsViewModel {
             let offset = lyricDocument.map { LyricTime.milliseconds(fromSeconds: $0.lyricOffset) } ?? 0
             karaokePlaybackMs = target - structured.offset + offset
         }
+        karaokeSampleHostTime = CACurrentMediaTime()
         update(elapsedMs: target)
     }
 
@@ -294,12 +383,22 @@ extension LyricsViewModel {
 
 
 
-    func setVisible(_ visible: Bool) {
-
-        isShown = visible
-
-
-        if !visible {
+    func setVisible(_ visible: Bool, owner: UUID? = nil) {
+        if let owner {
+            if visible { visibilityOwners.insert(owner) }
+            else { visibilityOwners.remove(owner) }
+        } else {
+            legacyVisibility = visible
+        }
+        let shown = legacyVisibility || !visibilityOwners.isEmpty
+        guard shown != isShown else {
+            if shown, trackingTask == nil { reconcileTracking() }
+            return
+        }
+        isShown = shown
+        amllSeekDetector.reset()
+        if shown { amllForceSeek = true }
+        if !shown {
 
             resumeTask?.cancel()
             resumeTask = nil
@@ -325,6 +424,8 @@ extension LyricsViewModel {
         let active = (phase == .active)
         guard active != isActive else { return }
         isActive = active
+        amllSeekDetector.reset()
+        if active { amllForceSeek = true }
         reconcileTracking()
     }
 
@@ -422,5 +523,13 @@ extension LyricsViewModel {
     private func stopTimer() {
         trackingTask?.cancel()
         trackingTask = nil
+    }
+}
+
+nonisolated enum LyricPresentationClock {
+    static func time(sampleMs: Int, sampledAt: Double, now: Double, advancing: Bool) -> Int {
+        guard advancing, now.isFinite, sampledAt.isFinite else { return sampleMs }
+        // Bound extrapolation if the main actor or audio sampling stalls.
+        return sampleMs + Int(min(80, max(0, (now - sampledAt) * 1000)))
     }
 }

@@ -169,6 +169,30 @@ final class SearchLibraryStub: LibraryServiceProtocol {
 @Suite("SearchViewModel — debounce & cancellation")
 @MainActor
 struct SearchViewModelDebounceTests {
+    @Test("indexed results appear while download lookup is still pending")
+    func localIndexDoesNotWaitForDownloads() async {
+        let library = SearchLibraryStub()
+        library.indexedSongs = [DisplayableSong(id: "local", title: "Instrumental").asSong()]
+        let index = LibraryIndexService()
+        #expect(await index.rebuildAndWait(using: library))
+        var pending: CheckedContinuation<[DisplayableSong], Never>?
+        let vm = SearchViewModel(libraryService: library, libraryIndex: index, downloads: { _ in
+            await withCheckedContinuation { pending = $0 }
+        })
+        let request = Task { await vm.search(query: "instrumental") }
+        while pending == nil { await Task.yield() }
+        // Bounded wait makes the old serial download→index pipeline fail without hanging.
+        let deadline = ContinuousClock.now + .seconds(2)
+        while vm.rankedItems.isEmpty, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(vm.rankedItems.map(\.id) == ["song:local"])
+        pending?.resume(returning: [DisplayableSong(id: "local", title: "Instrumental", isDownloaded: true)])
+        await request.value
+        #expect(vm.songs.first?.isDownloaded == true)
+        #expect(library.searchCalls.isEmpty)
+    }
+
     @Test func rankingPreservesRelevanceAndStableTies() {
         let items: [SearchResultItem] = [
             .song(DisplayableSong(id: "contains", title: "My café")),
@@ -318,6 +342,24 @@ struct SearchViewModelDebounceTests {
 @Suite("Search — paging and stale responses")
 @MainActor
 struct SearchPaginationTests {
+    @Test("first server page is ranked without an extra page request")
+    func firstPageDoesNotWaitForPrefetch() async {
+        let stub = SearchLibraryStub()
+        var requests: [SearchPageRequest] = []
+        stub.pageHandler = { _, page in
+            requests.append(page)
+            return self.songs(page.songOffset..<min(page.songOffset + 20, 40))
+        }
+        let vm = SearchViewModel(libraryService: stub)
+        await vm.search(query: "inst")
+        #expect(vm.rankedItems.count == 20)
+        #expect(requests.map(\.songOffset) == [0])
+        #expect(vm.canLoadMore(.songs))
+        await vm.loadMore(category: .songs)
+        #expect(requests.map(\.songOffset) == [0, 20])
+        #expect(vm.rankedItems.count == 40)
+    }
+
     private func songs(_ range: Range<Int>) -> SearchResult3 {
         SearchResult3(song: range.map { DisplayableSong(id: "song-\($0)", title: "Inst. \($0)").asSong() })
     }

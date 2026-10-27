@@ -7,6 +7,7 @@ import Foundation
 import SwiftData
 import OSLog
 import CryptoKit
+import Synchronization
 
 /// Streaming cache for recently-played tracks. FIFO eviction removes the oldest files until
 /// their total size fits the user-selected storage capacity.
@@ -53,10 +54,7 @@ actor CacheService: CacheServiceProtocol {
 
         do {
             try FileManager.default.createDirectory(at: self.cacheDirectory, withIntermediateDirectories: true)
-            var directory = self.cacheDirectory
-            var resources = URLResourceValues()
-            resources.isExcludedFromBackup = true
-            try? directory.setResourceValues(resources)
+            CacheDirectoryBackupPolicy.excludeFromBackup(self.cacheDirectory)
         } catch {
             Logger.cache.debug("CacheService: failed to create cache directory — \(error)")
         }
@@ -466,6 +464,25 @@ actor CacheService: CacheServiceProtocol {
         get async {
             prepareUnifiedAudio()
             return (try? ModelContext(modelContainer).fetchCount(FetchDescriptor<CachedTrack>())) ?? 0
+        }
+    }
+}
+
+/// Backup metadata can synchronously wait on filesystem services. Never perform
+/// it on the caller of CacheService.init (normally MainActor), or hold the cache
+/// actor while it completes. Concurrent containers share one pending operation.
+private nonisolated enum CacheDirectoryBackupPolicy {
+    private static let pending = Mutex<Set<URL>>([])
+    private static let queue = DispatchQueue(label: "app.cassette.cache-backup-metadata", qos: .utility)
+
+    static func excludeFromBackup(_ directory: URL) {
+        guard pending.withLock({ $0.insert(directory).inserted }) else { return }
+        queue.async {
+            defer { _ = pending.withLock { $0.remove(directory) } }
+            var url = directory
+            var resources = URLResourceValues()
+            resources.isExcludedFromBackup = true
+            try? url.setResourceValues(resources)
         }
     }
 }

@@ -9,6 +9,7 @@ import SwiftSonic
 @MainActor
 final class SearchViewModel {
     static let searchDebounce: Duration = .milliseconds(300)
+    static let localSearchDebounce: Duration = .milliseconds(80)
 
     var searchResults: SearchResult3?
     var isSearching = false
@@ -31,7 +32,6 @@ final class SearchViewModel {
     private var localResultLimit = 80
     private var usingRemoteSearch = false
     private var localHasMore: Set<SearchCategory> = []
-    private var prefetchedPage: SearchResult3?
 
     init(
         libraryService: any LibraryServiceProtocol,
@@ -65,7 +65,6 @@ final class SearchViewModel {
         nextPage = SearchPageRequest()
         localResultLimit = 80
         usingRemoteSearch = false
-        prefetchedPage = nil
         localHasMore = []
         localHits = .init(artists: [], albums: [], playlists: [])
         localSongs = []
@@ -78,8 +77,8 @@ final class SearchViewModel {
         defer { if token == requestID { isSearching = false } }
 
         do {
-            // Debounce local metadata work as well as network requests.
-            try await Task.sleep(for: Self.searchDebounce)
+            // Local metadata responds quickly; keep a longer quiet period for HTTP.
+            try await Task.sleep(for: Self.localSearchDebounce)
             guard token == requestID else { return }
             await refreshLocalResults()
             try Task.checkCancellation()
@@ -97,14 +96,14 @@ final class SearchViewModel {
                 }
             }
             guard !isLocalOnly else { return }
+            try await Task.sleep(for: Self.searchDebounce - Self.localSearchDebounce)
+            guard token == requestID else { return }
             usingRemoteSearch = true
             let results = try await libraryService.search(trimmed, page: nextPage)
             try Task.checkCancellation()
             guard token == requestID else { return }
             append(results, request: nextPage)
-            await prefetchNextPage(token: token)
-            guard token == requestID, !Task.isCancelled else { return }
-            await refreshLocalResults(includeDownloads: false)
+            await updateResultOrder()
         } catch where Self.isCancellation(error) {
         } catch {
             guard token == requestID else { return }
@@ -117,11 +116,9 @@ final class SearchViewModel {
         guard !activeQuery.isEmpty else { return }
         let token = requestID
         let query = activeQuery
-        let downloaded = includeDownloads ? await downloads?(query) : nil
-        guard token == requestID, !Task.isCancelled else { return }
+        async let downloaded = includeDownloads ? downloads?(query) : nil
         let hits = downloadsOnly ? nil : await libraryIndex?.searchInBackground(query: query, limit: localResultLimit + 1)
         guard token == requestID, !Task.isCancelled else { return }
-        if let downloaded { localSongs = downloaded }
         localHasMore = []
         if let hits {
             if hits.artists.count > localResultLimit { localHasMore.insert(.artists) }
@@ -133,7 +130,15 @@ final class SearchViewModel {
                               playlists: Array(hits.playlists.prefix(localResultLimit)),
                               songs: Array(hits.songs.prefix(localResultLimit)))
         } else { localHits = .init(artists: [], albums: [], playlists: []) }
+        // Publish indexed hits before a potentially large SwiftData download scan finishes.
         await updateResultOrder()
+        let downloadedSongs = await downloaded
+        guard token == requestID, !Task.isCancelled else { return }
+        if let downloadedSongs {
+            let needsRefresh = !localSongs.isEmpty || !downloadedSongs.isEmpty
+            localSongs = downloadedSongs
+            if needsRefresh { await updateResultOrder() }
+        }
     }
 
     private func updateResultOrder() async {
@@ -188,39 +193,16 @@ final class SearchViewModel {
         searchError = nil
         defer { if token == requestID { isLoadingMore = false } }
         do {
-            let page: SearchResult3
-            if let cached = prefetchedPage {
-                page = cached
-                // Other categories retain their independent offsets and are fetched again
-                // only when needed; consumed categories never advance unseen results.
-                prefetchedPage = nil
-            } else { page = try await libraryService.search(activeQuery, page: request) }
+            let page = try await libraryService.search(activeQuery, page: request)
             try Task.checkCancellation()
             guard token == requestID else { return }
             append(page, request: request)
-            await prefetchNextPage(token: token)
-            guard token == requestID, !Task.isCancelled else { return }
             await updateResultOrder()
         } catch where Self.isCancellation(error) {
         } catch {
             guard token == requestID else { return }
             searchError = UserFacingError.from(error)
         }
-    }
-
-    private func prefetchNextPage(token: UInt64) async {
-        guard nextPage.artistCount > 0 || nextPage.albumCount > 0 || nextPage.songCount > 0 else { return }
-        do {
-            let page = try await libraryService.search(activeQuery, page: nextPage)
-            guard token == requestID, !Task.isCancelled else { return }
-            let artists = Self.unique(page.artist ?? [], excluding: (searchResults?.artist ?? []).map(\.id), id: \.id)
-            let albums = Self.unique(page.album ?? [], excluding: (searchResults?.album ?? []).map(\.id), id: \.id)
-            let songs = Self.unique(page.song ?? [], excluding: (searchResults?.song ?? []).map(\.id), id: \.id)
-            if artists.isEmpty { nextPage.artistCount = 0 }
-            if albums.isEmpty { nextPage.albumCount = 0 }
-            if songs.isEmpty { nextPage.songCount = 0 }
-            prefetchedPage = page
-        } catch { /* Keep the same offset available for an explicit retry. */ }
     }
 
     private func append(_ page: SearchResult3, request: SearchPageRequest) {

@@ -47,6 +47,32 @@ nonisolated final class AVPlayerPlaybackEngine: PlaybackEngine, @unchecked Senda
     private var promptStartupBuffer: TimeInterval?
     private var promptGate = PromptPlaybackGate()
     private var hasStartedPlayback = false
+    private var qualityReplacement: QualityReplacement?
+    private var outgoingQualityPlayer: AVQueuePlayer?
+    private var qualityFadeTask: Task<Void, Never>?
+    private var qualityFadeProgress: Float = 1
+    private var qualityPreparationStage = "idle"
+    var qualityPreparationDiagnostic: String { lock.withLock { qualityPreparationStage } }
+
+    /// Accessed only under the engine lock; callbacks never invoke transport recursively.
+    private final class QualityReplacement: @unchecked Sendable {
+        let id = UUID()
+        let player: AVQueuePlayer
+        let item: AVPlayerItem
+        let url: URL
+        let outgoingID: ObjectIdentifier
+        let offset: Double
+        var seekFinished: Bool?
+        var prerollFinished: Bool?
+        var losslessCodec: String?
+        var inspectionFinished = false
+        var inspectionTask: Task<Void, Never>?
+        var meter: NativePlaybackMeterTap?
+        init(player: AVQueuePlayer, item: AVPlayerItem, url: URL, outgoingID: ObjectIdentifier, offset: Double) {
+            self.player = player; self.item = item; self.url = url
+            self.outgoingID = outgoingID; self.offset = offset
+        }
+    }
 
     var seekSequenceNumber: UInt64 { lock.withLock { seekSequence } }
     var isSeeking: Bool { lock.withLock { pendingSeek != nil || executingSeek != nil } }
@@ -88,8 +114,12 @@ nonisolated final class AVPlayerPlaybackEngine: PlaybackEngine, @unchecked Senda
     var duration: Double { lock.withLock { Self.finite(player?.currentItem?.duration.seconds) } }
     var isSeekable: Bool { lock.withLock { player?.currentItem?.duration.isNumeric == true } }
     var volume: Float {
-        get { lock.withLock { player?.volume ?? storedVolume } }
-        set { lock.withLock { storedVolume = newValue; player?.volume = newValue } }
+        get { lock.withLock { storedVolume } }
+        set { lock.withLock {
+            storedVolume = newValue
+            player?.volume = newValue * qualityFadeProgress
+            outgoingQualityPlayer?.volume = newValue * (1 - qualityFadeProgress)
+        } }
     }
     var hasCurrentItem: Bool { lock.withLock { player?.currentItem != nil } }
     var hasQueuedItem: Bool { lock.withLock { queuedItem != nil } }
@@ -137,31 +167,35 @@ nonisolated final class AVPlayerPlaybackEngine: PlaybackEngine, @unchecked Senda
             self.player = player
             currentURL = url
             observeItem(item, generation: generation)
-            let emit = handler
-            currentObservation = player.observe(\.currentItem, options: [.new]) { _, _ in emit?(.itemChanged(generation)) }
-            timeObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
-                let status = player.timeControlStatus
-                self?.observationQueue.async { [weak self] in
-                    guard let self else { return }
-                    let isCurrent = self.lock.withLock {
-                        guard self.generation == generation, self.player === player else { return false }
-                        if status == .playing {
-                            self.hasStartedPlayback = true
-                        } else if status == .waitingToPlayAtSpecifiedRate,
-                                  player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-                                  self.hasStartedPlayback, let item = player.currentItem {
-                            self.promptGate.armForRecovery(position: item.currentTime().seconds)
-                            self.armPromptPlaybackLocked(item, generation: generation)
-                        }
-                        self.attemptPromptStartupLocked()
-                        return true
-                    }
-                    if isCurrent { emit?(.timeControl(generation, status.rawValue)) }
-                }
-            }
+            observePlayerLocked(player, generation: generation)
             if position > 0 {
                 seek(to: position)
             } else if !paused { player.play() }
+        }
+    }
+
+    private func observePlayerLocked(_ player: AVQueuePlayer, generation: UInt64) {
+        let emit = handler
+        currentObservation = player.observe(\.currentItem, options: [.new]) { _, _ in emit?(.itemChanged(generation)) }
+        timeObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            let status = player.timeControlStatus
+            self?.observationQueue.async { [weak self] in
+                guard let self else { return }
+                let isCurrent = self.lock.withLock {
+                    guard self.generation == generation, self.player === player else { return false }
+                    if status == .playing {
+                        self.hasStartedPlayback = true
+                    } else if status == .waitingToPlayAtSpecifiedRate,
+                              player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+                              self.hasStartedPlayback, let item = player.currentItem {
+                        self.promptGate.armForRecovery(position: item.currentTime().seconds)
+                        self.armPromptPlaybackLocked(item, generation: generation)
+                    }
+                    self.attemptPromptStartupLocked()
+                    return true
+                }
+                if isCurrent { emit?(.timeControl(generation, status.rawValue)) }
+            }
         }
     }
 
@@ -231,11 +265,13 @@ nonisolated final class AVPlayerPlaybackEngine: PlaybackEngine, @unchecked Senda
             player?.currentItem?.preferredForwardBufferDuration = seconds
         }
     }
-    func pause() { lock.withLock { intendsToPlay = false; stopWatchdogLocked(); player?.pause() } }
+    func pause() { lock.withLock { cancelQualityReplacementLocked(); finishQualityFadeLocked(); intendsToPlay = false; stopWatchdogLocked(); player?.pause() } }
     func resume() { lock.withLock { intendsToPlay = true; if pendingSeek == nil && executingSeek == nil { player?.play() } } }
     func seek(to time: Double) {
         lock.withLock {
             guard time.isFinite, let player, let item = player.currentItem else { return }
+            cancelQualityReplacementLocked()
+            finishQualityFadeLocked()
             seekSequence &+= 1
             failedSeek = false
             executingSeek = nil
@@ -286,6 +322,8 @@ nonisolated final class AVPlayerPlaybackEngine: PlaybackEngine, @unchecked Senda
     }
     func stop() { lock.withLock { stopLocked() } }
     private func stopLocked() {
+        cancelQualityReplacementLocked()
+        finishQualityFadeLocked()
         stopWatchdogLocked()
         generation &+= 1
         seekSequence &+= 1
@@ -516,5 +554,261 @@ nonisolated final class AVPlayerPlaybackEngine: PlaybackEngine, @unchecked Senda
         item.allowedAudioSpatializationFormats = .multichannel
         return item
     }
+    /// Prepare a second, silent decoder while the current stream continues. The returned token
+    /// carries no authority to publish state: PlayerService revalidates the network and command.
+    func prepareLosslessReplacement(url: URL, headers: [String: String], timelineOffset: Double) async -> UUID? {
+        let replacement: QualityReplacement? = lock.withLock {
+            cancelQualityReplacementLocked()
+            guard intendsToPlay, !isSeeking, timelineOffset.isFinite,
+                  let player, let item = player.currentItem,
+                  player.timeControlStatus == .playing, !player.isExternalPlaybackActive else { return nil }
+            let nextItem = Self.makeItem(url: url, headers: headers)
+            nextItem.preferredForwardBufferDuration = 5
+            let next = AVQueuePlayer(playerItem: nextItem)
+            next.volume = 0
+            next.allowsExternalPlayback = false
+            #if os(iOS)
+            next.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
+            #endif
+            let prepared = QualityReplacement(player: next, item: nextItem, url: url,
+                                               outgoingID: ObjectIdentifier(item), offset: timelineOffset)
+            qualityReplacement = prepared
+            qualityPreparationStage = "loading"
+            return prepared
+        }
+        guard let replacement else { return nil }
+        let id = replacement.id
+        return await withTaskCancellationHandler {
+            var retained = false
+            defer { if !retained { cancelQualityReplacement(id: id) } }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+            do {
+                // Poll only this bounded preparation, not the normal playback loop.
+                while !lock.withLock({ replacement.player.status == .readyToPlay && replacement.item.status == .readyToPlay }) {
+                    try await waitForQualityReplacement(id, deadline: deadline)
+                }
+                // Install the analysis tap while this decoder is still silent. Attaching an
+                // audio mix after the audible handoff can rebuild its rendering pipeline.
+                await MainActor.run {
+                    self.lock.withLock {
+                        guard self.replacementIsCurrentLocked(id), self.allowsAudioAnalysis,
+                              let meter = NativePlaybackMeterTap() else { return }
+                        let trackID: CMPersistentTrackID
+                        if #available(iOS 27, macOS 27, *) {
+                            trackID = AVAudioMixInputParametersTrackID.mixID.rawValue
+                        } else if let track = replacement.item.tracks.first?.assetTrack {
+                            trackID = track.trackID
+                        } else { return }
+                        meter.setActive(false)
+                        meter.attach(to: replacement.item, trackID: trackID)
+                        replacement.meter = meter
+                    }
+                }
+                let started = lock.withLock { () -> Bool in
+                    guard replacementIsCurrentLocked(id), let outgoing = player?.currentItem else { return false }
+                    let target = outgoing.currentTime().seconds + replacement.offset
+                    guard target.isFinite, target >= 0 else { return false }
+                    qualityPreparationStage = "seeking"
+                    replacement.player.seek(to: CMTime(seconds: target, preferredTimescale: 44_100),
+                                            toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                        self?.lock.withLock {
+                            guard self?.qualityReplacement?.id == id else { return }
+                            replacement.seekFinished = finished
+                            self?.qualityPreparationStage = finished ? "seek_ready" : "seek_failed"
+                        }
+                    }
+                    return true
+                }
+                guard started else { return nil }
+                while lock.withLock({ replacement.seekFinished == nil }) {
+                    try await waitForQualityReplacement(id, deadline: deadline)
+                }
+                guard lock.withLock({ replacement.seekFinished == true && replacementIsCurrentLocked(id) }) else { return nil }
+                lock.withLock {
+                    guard replacementIsCurrentLocked(id), replacement.player.status == .readyToPlay else { return }
+                    replacement.player.preroll(atRate: 1) { [weak self] finished in
+                        self?.lock.withLock {
+                            guard self?.qualityReplacement?.id == id else { return }
+                            replacement.prerollFinished = finished
+                            self?.qualityPreparationStage = finished ? "preroll_ready" : "preroll_failed"
+                        }
+                    }
+                    replacement.inspectionTask = Task { [weak self] in
+                        let asset = await MainActor.run { replacement.item.asset }
+                        let tracks = try? await asset.loadTracks(withMediaType: .audio)
+                        let descriptions = try? await tracks?.first?.load(.formatDescriptions)
+                        let codec = descriptions?.first.flatMap { description -> String? in
+                            guard let format = CMAudioFormatDescriptionGetStreamBasicDescription(description) else { return nil }
+                            return Self.codecName(format.pointee.mFormatID)
+                        }
+                        self?.lock.withLock {
+                            guard self?.qualityReplacement?.id == id else { return }
+                            replacement.losslessCodec = codec.flatMap { ["FLAC", "ALAC", "PCM"].contains($0) ? $0 : nil }
+                            replacement.inspectionFinished = true
+                        }
+                    }
+                }
+                while lock.withLock({ replacement.prerollFinished == nil || !replacement.inspectionFinished }) {
+                    try await waitForQualityReplacement(id, deadline: deadline)
+                }
+                let warmed = lock.withLock { () -> Bool in
+                    guard replacementIsCurrentLocked(id), replacement.prerollFinished == true,
+                          replacement.losslessCodec != nil else { return false }
+                    // Preroll alone can stop filling while paused. Let the silent decoder run
+                    // until it has buffered the outgoing stream's *current* position as well.
+                    qualityPreparationStage = "buffering"
+                    replacement.player.play()
+                    return true
+                }
+                guard warmed else { return nil }
+                while !lock.withLock({
+                    guard let outgoing = player?.currentItem else { return false }
+                    return replacement.player.timeControlStatus == .playing
+                        && bufferedAhead(replacement.item, at: outgoing.currentTime().seconds + replacement.offset) >= 2
+                }) {
+                    try await waitForQualityReplacement(id, deadline: deadline)
+                }
+                let synchronized = lock.withLock { () -> Bool in
+                    qualityPreparationStage = "preroll=\(String(describing: replacement.prerollFinished)) codec=\(replacement.losslessCodec ?? "unavailable")"
+                    guard replacementIsCurrentLocked(id), replacement.prerollFinished == true,
+                          replacement.losslessCodec != nil, let outgoing = player?.currentItem else { return false }
+                    let position = outgoing.currentTime().seconds + replacement.offset
+                    qualityPreparationStage += " buffer_s=\(bufferedAhead(replacement.item, at: position))"
+                    guard bufferedAhead(replacement.item, at: position) >= 2 else { return false }
+                    // Apple's synchronized-rate API requires automatic waiting to be disabled.
+                    // Preroll and the loaded-range check above supply the data before the clock moves.
+                    replacement.player.automaticallyWaitsToMinimizeStalling = false
+                    replacement.player.setRate(1, time: CMTime(seconds: position, preferredTimescale: 44_100),
+                                               atHostTime: CMClockGetTime(CMClockGetHostTimeClock()))
+                    qualityPreparationStage = "synchronizing"
+                    return true
+                }
+                guard synchronized else { return nil }
+                var stableSamples = 0
+                while stableSamples < 4 {
+                    try await waitForQualityReplacement(id, deadline: deadline)
+                    stableSamples = lock.withLock {
+                        replacementIsAlignedLocked(id) ? stableSamples + 1 : 0
+                    }
+                }
+                retained = true
+                lock.withLock { qualityPreparationStage = "ready" }
+                return id
+            } catch { return nil }
+        } onCancel: { [weak self] in self?.cancelQualityReplacement(id: id) }
+    }
+
+    private func waitForQualityReplacement(_ id: UUID, deadline: ContinuousClock.Instant) async throws {
+        try Task.checkCancellation()
+        guard ContinuousClock.now < deadline, lock.withLock({ replacementIsCurrentLocked(id) }) else {
+            throw CancellationError()
+        }
+        try await Task.sleep(for: .milliseconds(30))
+    }
+
+    private func replacementIsCurrentLocked(_ id: UUID) -> Bool {
+        guard let replacement = qualityReplacement, replacement.id == id,
+              let item = player?.currentItem else { return false }
+        return ObjectIdentifier(item) == replacement.outgoingID && intendsToPlay && !isSeeking
+            && player?.timeControlStatus == .playing && player?.isExternalPlaybackActive == false
+            && replacement.item.status != .failed
+    }
+
+    private func bufferedAhead(_ item: AVPlayerItem, at position: Double) -> Double {
+        PlaybackBufferPolicy.bufferedAhead(position: position, ranges: item.loadedTimeRanges.map {
+            ($0.timeRangeValue.start.seconds, $0.timeRangeValue.duration.seconds)
+        })
+    }
+
+    private func replacementIsAlignedLocked(_ id: UUID) -> Bool {
+        guard replacementIsCurrentLocked(id), let replacement = qualityReplacement,
+              let outgoing = player?.currentItem, replacement.player.timeControlStatus == .playing else { return false }
+        let target = outgoing.currentTime().seconds + replacement.offset
+        return abs(replacement.item.currentTime().seconds - target) <= 0.025
+            && bufferedAhead(replacement.item, at: target) >= 1.5
+    }
+
+    /// Synchronous adoption lets PlayerService change the source and absolute-clock offset in
+    /// the same actor turn. Both decoders are already moving; an 80 ms linear blend avoids a click.
+    func commitLosslessReplacement(_ id: UUID) -> Bool {
+        lock.withLock {
+            guard replacementIsAlignedLocked(id), let replacement = qualityReplacement,
+                  let outgoing = player else { return false }
+            let retainedGeneration = generation
+            let analysis = allowsAudioAnalysis
+            qualityReplacement = nil
+            player = nil // Detach without stopping the audible outgoing decoder.
+            stopLocked()
+            generation = retainedGeneration
+            player = replacement.player
+            currentURL = replacement.url
+            intendsToPlay = true
+            allowsAudioAnalysis = analysis
+            forwardBuffer = 5
+            replacement.player.automaticallyWaitsToMinimizeStalling = true
+            replacement.player.allowsExternalPlayback = true
+            if let meter = replacement.meter { meters[ObjectIdentifier(replacement.item)] = meter }
+            observeItem(replacement.item, generation: generation)
+            observePlayerLocked(replacement.player, generation: generation)
+            decodedCodec = replacement.losslessCodec
+            hasStartedPlayback = true
+            outgoingQualityPlayer = outgoing
+            qualityFadeProgress = 0
+            qualityFadeTask = Task { [weak self] in
+                let start = ContinuousClock.now
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    let done = self.lock.withLock {
+                        guard self.outgoingQualityPlayer === outgoing else { return true }
+                        let elapsed = RuntimeDiagnostics.milliseconds(start.duration(to: .now))
+                        let fraction = min(1, Float(elapsed) / 80)
+                        self.qualityFadeProgress = fraction
+                        self.player?.volume = self.storedVolume * fraction
+                        outgoing.volume = self.storedVolume * (1 - fraction)
+                        if fraction >= 1 { self.finishQualityFadeLocked(); return true }
+                        return false
+                    }
+                    if done { return }
+                    do { try await Task.sleep(for: .milliseconds(10)) } catch { return }
+                }
+            }
+            return true
+        }
+    }
+
+    func cancelQualityReplacement(id: UUID? = nil) {
+        lock.withLock {
+            guard id == nil || qualityReplacement?.id == id else { return }
+            cancelQualityReplacementLocked()
+        }
+    }
+
+    private func cancelQualityReplacementLocked() {
+        guard let replacement = qualityReplacement else { return }
+        qualityReplacement = nil
+        replacement.meter?.setActive(false)
+        replacement.inspectionTask?.cancel()
+        replacement.player.cancelPendingPrerolls()
+        replacement.item.cancelPendingSeeks()
+        replacement.player.pause()
+        replacement.player.removeAllItems()
+        Task { @MainActor in replacement.item.asset.cancelLoading() }
+    }
+
+    private func finishQualityFadeLocked() {
+        qualityFadeTask?.cancel(); qualityFadeTask = nil
+        outgoingQualityPlayer?.pause()
+        let removedItems = outgoingQualityPlayer?.items() ?? []
+        outgoingQualityPlayer?.removeAllItems()
+        outgoingQualityPlayer = nil
+        if !removedItems.isEmpty {
+            Task { @MainActor in
+                for item in removedItems { item.asset.cancelLoading() }
+            }
+        }
+        qualityFadeProgress = 1
+        player?.volume = storedVolume
+    }
+
     deinit { stopLocked() }
 }

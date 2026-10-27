@@ -25,6 +25,7 @@ import SwiftSonic
 struct CustomHeadersTransport: HTTPTransport, Sendable {
     private let base: any HTTPTransport
     private let headers: [String: String]
+    private let diagnosticSessionID: String
 
     /// Normal use case. Creates a dedicated URLSession with snappy cold-start timeouts.
     init(headers: [String: String]) {
@@ -38,12 +39,15 @@ struct CustomHeadersTransport: HTTPTransport, Sendable {
         // request path, including any internal URLSession hop before SwiftSonic
         // intercepts the redirect.
         config.httpAdditionalHeaders = headers
-        self.base = URLSessionTransport(configuration: config)
+        let diagnostics = NetworkTaskDiagnostics()
+        self.diagnosticSessionID = diagnostics.sessionID
+        self.base = URLSessionTransport(session: URLSession(configuration: config, delegate: diagnostics, delegateQueue: nil))
         self.headers = headers
     }
 
     /// Testability / advanced use. Inject a pre-configured transport as the base.
     init(base: any HTTPTransport, headers: [String: String]) {
+        self.diagnosticSessionID = String(UUID().uuidString.prefix(8))
         self.base = base
         self.headers = headers
     }
@@ -59,6 +63,21 @@ struct CustomHeadersTransport: HTTPTransport, Sendable {
         let cfSecret = headers.first(where: { $0.key.caseInsensitiveCompare("CF-Access-Client-Secret") == .orderedSame })?.value
         Logger.httpTransport.debug("CustomHeadersTransport: injected_keys=\(Array(headers.keys).sorted(), privacy: .private) had_auth=\(hadAuthorization, privacy: .public) auth_collision=\(authCollision, privacy: .public)")
         Logger.httpTransport.debug("CustomHeadersTransport CF headers: id=\(cfId.map { $0.isEmpty ? "EMPTY" : "SET" } ?? "ABSENT", privacy: .public) secret=\(cfSecret.map { $0.isEmpty ? "EMPTY" : "SET" } ?? "ABSENT", privacy: .public)")
-        return try await base.data(for: enriched)
+        let requestID = String(UUID().uuidString.prefix(8))
+        let endpoint = NetworkRequestDiagnostics.endpoint(for: request.url)
+        let started = ContinuousClock.now
+        Logger.httpTransport.info("[HTTP] run=\(RuntimeDiagnostics.sessionID, privacy: .public) session=\(diagnosticSessionID, privacy: .public) request=\(requestID, privacy: .public) endpoint=\(endpoint, privacy: .public) event=start")
+        do {
+            let result = try await base.data(for: enriched)
+            let elapsed = RuntimeDiagnostics.milliseconds(started.duration(to: .now))
+            Logger.httpTransport.info("[HTTP] run=\(RuntimeDiagnostics.sessionID, privacy: .public) session=\(diagnosticSessionID, privacy: .public) request=\(requestID, privacy: .public) endpoint=\(endpoint, privacy: .public) event=complete status=\(result.1.statusCode, privacy: .public) duration_ms=\(elapsed, privacy: .public) bytes=\(result.0.count, privacy: .public)")
+            return result
+        } catch {
+            let elapsed = RuntimeDiagnostics.milliseconds(started.duration(to: .now))
+            let outcome = NetworkRequestDiagnostics.outcome(for: error)
+            let domain = NetworkRequestDiagnostics.domain(for: error)
+            Logger.httpTransport.notice("[HTTP] run=\(RuntimeDiagnostics.sessionID, privacy: .public) session=\(diagnosticSessionID, privacy: .public) request=\(requestID, privacy: .public) endpoint=\(endpoint, privacy: .public) event=\(outcome, privacy: .public) domain=\(domain, privacy: .public) code=\((error as NSError).code, privacy: .public) duration_ms=\(elapsed, privacy: .public)")
+            throw error
+        }
     }
 }

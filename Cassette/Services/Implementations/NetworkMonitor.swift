@@ -9,11 +9,12 @@ import OSLog
 
 /// Wraps NWPathMonitor and keeps ServerState.isOnline in sync.
 /// Start once from AppContainer; safe to call from any context.
-final class NetworkMonitor: Sendable {
+nonisolated final class NetworkMonitor: Sendable {
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "app.cassette.network", qos: .utility)
 
-    func start(serverState: ServerState) {
+    func start(serverState: ServerState,
+               onChange: @escaping @Sendable (PlaybackNetworkPath) async -> Void = { _ in }) {
         monitor.pathUpdateHandler = { path in
             let online = path.status == .satisfied
             let expensive = path.isExpensive
@@ -22,11 +23,19 @@ final class NetworkMonitor: Sendable {
             // metered). It is not covered by `isExpensive`, so a throttled Wi-Fi link would
             // otherwise inherit every unmetered path and compete with the live stream.
             let constrained = path.isConstrained
+            let wifi = path.usesInterfaceType(.wifi)
+            Logger.network.notice("[PATH] run=\(RuntimeDiagnostics.sessionID, privacy: .public) online=\(online, privacy: .public) wifi=\(wifi, privacy: .public) cellular=\(cellular, privacy: .public) expensive=\(expensive, privacy: .public) constrained=\(constrained, privacy: .public)")
+            let snapshot = PlaybackNetworkPath(online: online, wifi: wifi, cellular: cellular,
+                                               expensive: expensive, constrained: constrained)
             Task { @MainActor in
+                guard serverState.playbackNetworkPath != snapshot else { return }
+                serverState.playbackNetworkPath = snapshot
+                serverState.measuredBytesPerSecond = nil
                 serverState.isOnline = online
                 serverState.isExpensive = expensive
                 serverState.isCellularConnection = cellular
                 serverState.isNetworkConstrained = constrained
+                await onChange(snapshot)
             }
         }
         monitor.start(queue: queue)

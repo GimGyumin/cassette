@@ -16,13 +16,89 @@ import UIKit
 
 // Actor-isolated implementation; PlayerService remains the single playback owner.
 extension PlayerService {
+    /// Shared by explicit selections, native gapless handoffs and post-stall retries.
+    /// A permanent transfer owns the copy only while it is actually scheduled/running.
+    func scheduleEphemeralCache(song: DisplayableSong, source: MediaSource, serverId: UUID) {
+        guard cacheDownloadTask == nil,
+              CassettePerformance.budget.allowsAutomaticMediaDownloads,
+              !AudioQualityClassifier.shouldBypassEphemeralCache(source.playbackSong ?? song),
+              case .stream(let streamURL, let headers, _, _, _) = source,
+              !source.isJellyfinUniversal, streamURL.pathExtension.lowercased() != "m3u8" else { return }
+        let songID = source.playbackSong?.id ?? song.id
+        let key = "\(serverId.uuidString):\(songID)"
+        guard !automaticDownloadTasks.contains(key) else { return }
+        let epoch = playbackEpoch
+        let id = UUID()
+        cacheDownloadID = id
+        cacheDownloadTask = Task {
+            defer {
+                if cacheDownloadID == id { cacheDownloadTask = nil; cacheDownloadID = nil }
+            }
+            let (format, revision) = await MainActor.run {
+                (cacheSettings.cacheFormat, (try? serverService.state.requestIdentity(for: serverId).revision) ?? 0)
+            }
+            let requestKey = "\(key):\(revision):\(format.rawValue)"
+            guard cacheDownloadRetry.permits(requestKey), await MainActor.run(body: {
+                serverService.state.isOnline
+                    && (!serverService.state.isLimitedNetwork || cacheSettings.cacheOverCellular)
+                    && serverService.state.activeServer?.id == serverId
+            }), await cacheService.cachedURL(forSongId: songID, serverId: serverId) == nil,
+               !(await downloadService.isDownloaded(songId: songID, serverId: serverId)),
+               await waitForEstablishedPlayback(of: songID, epoch: epoch),
+               epoch == playbackEpoch, !Task.isCancelled else { return }
+            let url: URL?
+            if format == .matchStream { url = streamURL }
+            else {
+                let client = try? await serverService.makeSwiftSonicClient()
+                url = client?.streamURL(id: songID, maxBitRate: format.subsonicMaxBitRate,
+                                        format: format == .flacOriginal ? "raw" : format.subsonicFormat)
+            }
+            guard let url, epoch == playbackEpoch, !Task.isCancelled,
+                  CassettePerformance.budget.allowsAutomaticMediaDownloads,
+                  !automaticDownloadTasks.contains(key),
+                  !(await downloadService.isDownloading(songId: songID, serverId: serverId)),
+                  await MainActor.run(body: {
+                    serverService.state.isOnline
+                    && (!serverService.state.isLimitedNetwork || cacheSettings.cacheOverCellular)
+                        && serverService.state.activeServer?.id == serverId
+                  }) else { return }
+            do {
+                try await downloadAndCache(songId: songID, serverId: serverId, streamURL: url,
+                                           customHeaders: headers, using: cacheSession)
+                cacheDownloadRetry.succeeded(requestKey)
+            } catch {
+                if !Task.isCancelled {
+                    cacheDownloadRetry.failed(requestKey, error: error)
+                    Logger.player.debug("Cache download failed for '\(songID, privacy: .public)': \(error, privacy: .public)")
+                }
+            }
+        }
+    }
+
     // MARK: - Progress timer
 
-    func scheduleAutomaticDownload(song: DisplayableSong, serverId: UUID) async {
-        if AtmosVariantCatalogue.isAtmos(song),
-           await MainActor.run(body: { streamingSettings.downloadFormat.subsonicMaxBitRate != nil }) { return }
+    func scheduleAutomaticDownload(song playingSong: DisplayableSong, serverId: UUID) async {
+        guard !Task.isCancelled, CassettePerformance.budget.allowsAutomaticMediaDownloads,
+              UserDefaults.standard.bool(forKey: Self.automaticDownloadUserDefaultsKey) else { return }
+        let epoch = playbackEpoch
+        let playingSongID = playingSong.id
+        let logicalSong = await MainActor.run { state.currentTrack ?? playingSong }
+        let atmosSong = await mediaResolver.preferredAtmosDownloadSong(for: logicalSong, serverId: serverId)
+        let song = atmosSong ?? logicalSong
+        let preservesOriginal = atmosSong != nil
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
         guard CassettePerformance.budget.allowsAutomaticMediaDownloads else { return }
         guard UserDefaults.standard.bool(forKey: Self.automaticDownloadUserDefaultsKey) else { return }
+        let alreadyDownloaded = preservesOriginal
+            ? await downloadService.downloadedOriginalURL(forSongId: song.id, serverId: serverId) != nil
+            : await downloadService.isDownloaded(songId: song.id, serverId: serverId)
+        guard !alreadyDownloaded,
+              !(await downloadService.isDownloading(songId: song.id, serverId: serverId)) else { return }
+        if AudioQualityClassifier.isDolbyAudio(song) {
+            guard await MainActor.run(body: {
+                streamingSettings.allowsRemoteDolbyAtmos(isCellular: serverService.state.isCellularConnection)
+            }) else { return }
+        }
         let (isLimited, allowCellular) = await MainActor.run {
             (
                 serverService.state.isLimitedNetwork,
@@ -39,17 +115,20 @@ extension PlayerService {
         let key = "\(serverId.uuidString):\(song.id)"
         let requestKey = await MainActor.run {
             let revision = (try? serverService.state.requestIdentity(for: serverId).revision) ?? 0
-            return "\(key):\(revision):\(streamingSettings.downloadFormat.rawValue)"
+            return "\(key):\(revision):\(preservesOriginal ? CacheFormat.flacOriginal.rawValue : streamingSettings.effectiveDownloadFormat.rawValue)"
         }
         guard automaticDownloadRetry.permits(requestKey) else { return }
-        guard automaticDownloadTasks.insert(key).inserted else { return }
+        guard epoch == playbackEpoch, !Task.isCancelled,
+              automaticDownloadTasks.insert(key).inserted else { return }
         Task {
             defer { automaticDownloadTasks.remove(key) }
             let scheduledAt = Date()
             // A second full-file request beside a stream that is still opening can starve the
             // foreground request, especially for lossless originals. Wait until the media clock
             // proves that this exact track is producing audio before sharing the connection.
-            guard await waitForEstablishedPlayback(of: song.id) else { return }
+            guard epoch == playbackEpoch,
+                  await waitForEstablishedPlayback(of: playingSongID, epoch: epoch),
+                  epoch == playbackEpoch else { return }
             if isLimited {
                 // Preserve the existing 45-second limited-network grace period, counting time
                 // already spent establishing playback.
@@ -57,7 +136,7 @@ extension PlayerService {
                 try? await Task.sleep(for: .seconds(remaining))
                 guard !Task.isCancelled else { return }
                 let stillPlayingThisTrack = await MainActor.run {
-                    state.playbackState == .playing && (state.currentPlaybackTrack?.id ?? state.currentTrack?.id) == song.id
+                    state.playbackState == .playing && (state.currentPlaybackTrack?.id ?? state.currentTrack?.id) == playingSongID
                 }
                 guard stillPlayingThisTrack else { return }
             }
@@ -72,14 +151,21 @@ extension PlayerService {
                 return automaticDownloadsEnabled
                     && serverService.state.isOnline
                     && serverService.state.activeServer?.id == serverId
+                    && (!AudioQualityClassifier.isDolbyAudio(song)
+                        || streamingSettings.allowsRemoteDolbyAtmos(isCellular: serverService.state.isCellularConnection))
                     && Self.shouldAllowAutomaticDownload(
                         isLimited: serverService.state.isLimitedNetwork,
                         allowCellular: cellularAllowed
                     )
-            }), !(await downloadService.isDownloaded(songId: song.id, serverId: serverId)) else { return }
+            }) else { return }
             do {
                 let downloadableSong = await MainActor.run { song.asSong() }
-                try await downloadService.download(song: downloadableSong, serverId: serverId)
+                guard epoch == playbackEpoch, !Task.isCancelled else { return }
+                if preservesOriginal {
+                    try await downloadService.downloadOriginal(song: downloadableSong, serverId: serverId)
+                } else {
+                    try await downloadService.download(song: downloadableSong, serverId: serverId)
+                }
                 automaticDownloadRetry.succeeded(requestKey)
                 // Normally playback is already healthy, so this is a no-op. If the engine fell
                 // back into acquisition while the transfer finished, immediately use the valid
@@ -103,17 +189,19 @@ extension PlayerService {
 
     /// Waits for a real advancing media clock rather than trusting an optimistic `.playing`
     /// callback. This keeps a background full-file transfer off the playback critical path.
-    private func waitForEstablishedPlayback(of songID: String) async -> Bool {
+    private func waitForEstablishedPlayback(of songID: String, epoch: UInt64) async -> Bool {
         var stability = PlaybackPreparationStability()
         for _ in 0..<80 {
-            guard !Task.isCancelled else { return false }
+            guard epoch == playbackEpoch, !Task.isCancelled else { return false }
             let snapshot = await MainActor.run {
-                (state.currentPlaybackTrack?.id ?? state.currentTrack?.id, state.playbackState)
+                (state.currentPlaybackTrack?.id ?? state.currentTrack?.id, state.playbackState, state.duration)
             }
-            guard snapshot.0 == songID else { return false }
+            guard epoch == playbackEpoch, !Task.isCancelled, snapshot.0 == songID else { return false }
             if stability.observe(mediaTime: engineProgress(), now: ProcessInfo.processInfo.systemUptime,
                                  isPlaying: snapshot.1 == .playing, requiredDuration: 5),
-               !systemPlayback.isActive || currentSource?.isLocal == true || systemEngine.bufferedDuration >= 10 {
+               !systemPlayback.isActive || PlaybackBufferPolicy.canPrepareNext(
+                    isLocal: currentSource?.isLocal == true, bufferedAhead: systemEngine.bufferedDuration,
+                    remaining: snapshot.2 - engineProgress()) {
                 return true
             }
             if snapshot.1 == .paused || snapshot.1 == .idle {
@@ -138,13 +226,19 @@ extension PlayerService {
     private func checkAutomaticDownload() async {
         guard Date() >= automaticDownloadCheckDate else { return }
         automaticDownloadCheckDate = Date().addingTimeInterval(30)
+        let epoch = playbackEpoch
+        let source = currentSource
         let current = await MainActor.run { () -> (DisplayableSong, UUID)? in
             guard state.playbackState == .playing, !state.isLiveStream,
                   let song = state.currentTrack, let serverId = serverService.state.activeServer?.id else { return nil }
             return (song, serverId)
         }
+        guard epoch == playbackEpoch, !Task.isCancelled else { return }
         if let (song, serverId) = current {
-            await scheduleAutomaticDownload(song: currentSource?.playbackSong ?? song, serverId: serverId)
+            await scheduleAutomaticDownload(song: source?.playbackSong ?? song, serverId: serverId)
+            if epoch == playbackEpoch, !Task.isCancelled, let source {
+                scheduleEphemeralCache(song: song, source: source, serverId: serverId)
+            }
         }
     }
 
@@ -156,7 +250,8 @@ extension PlayerService {
                 do { try await Task.sleep(for: interval, tolerance: .milliseconds(100)) } catch { return }
                 guard !Task.isCancelled, let self else { break }
                 await self.handleSystemPlayerItemChanged(generation: self.systemPlayback.generation)
-                let epoch = await self.playbackEpoch
+                let context = await self.playbackContext
+                let epoch = context.epoch
                 let trackID = await MainActor.run { self.state.currentTrack?.id }
                 let progress = await self.engineProgress()
                 let audioDuration = await self.engineDuration()
@@ -181,29 +276,30 @@ extension PlayerService {
                 // before publishing zero, so neither the UI nor repeat-one treats it as EOF.
                 if !seekState.isSettling,
                    await self.recoverUnexpectedProgressReset(progress: progress) { continue }
-                await MainActor.run {
-                    guard !Task.isCancelled, !isHandingOver, self.state.currentTrack?.id == trackID else { return }
-                    let cur = self.state.isLiveStream ? 0 : PlaybackDurationPolicy.resolve(
-                        catalog: self.state.currentTrack?.duration ?? 0,
+                let published = await self.commitPresentation(context) { state in
+                    guard !Task.isCancelled, !isHandingOver, state.currentTrack?.id == trackID else { return false }
+                    let cur = state.isLiveStream ? 0 : PlaybackDurationPolicy.resolve(
+                        catalog: state.currentTrack?.duration ?? 0,
                         engine: audioDuration,
                         engineIsEstimate: engineIsEstimate,
                         preserveCatalog: preservesCatalog
                     )
-                    if abs(self.state.duration - cur) > 0.5 || !self.state.duration.isFinite {
-                        self.state.duration = cur
+                    if abs(state.duration - cur) > 0.5 || !state.duration.isFinite {
+                        state.duration = cur
                     }
-                    if !seekState.isSettling, self.state.pendingSeekPosition == nil {
+                    if !seekState.isSettling, state.pendingSeekPosition == nil {
                         let clamped = cur > 0 ? min(progress, cur) : progress
-                        if self.state.position != clamped {
-                            self.state.position = clamped
+                        if state.position != clamped {
+                            state.position = clamped
                         }
                     }
                     let canSeek = engineSeekable || (audioDuration <= 0 && cur > 0)
-                    if self.state.isSeekable != canSeek {
-                        self.state.isSeekable = canSeek
+                    if state.isSeekable != canSeek {
+                        state.isSeekable = canSeek
                     }
+                    return true
                 }
-                guard epoch == (await self.playbackEpoch), !Task.isCancelled, !isHandingOver else { continue }
+                guard published, await self.contextIsCurrent(context), !isHandingOver else { continue }
                 // Advancing media time confirms audio after startup, buffering or recovery.
                 // A seek clock jump is excluded until the seek has settled.
                 if !seekState.isSettling, progress > positionBeforeTick + 0.05 {

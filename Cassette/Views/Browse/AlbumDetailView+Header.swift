@@ -14,37 +14,63 @@ import UIKit
 extension AlbumDetailContentView {
     // MARK: - Header
 
+    @ViewBuilder
     func albumHeader(vm: AlbumDetailViewModel?, songs: [DisplayableSong]) -> some View {
-        ImmersiveCoverHero(
-            coverArtId: vm?.coverArtId ?? coverArtId ?? albumId,
-            coverImage: effectiveInitialImage,
-            theme: theme,
-            heroHeight: heroHeight,
-            contentBelow: true,
-            fillCover: true,
-            meltTargetColor: atmosphere.isThemed ? atmosphere.pageColor : nil,
-            showBlurredMelt: false,
-            showsFloatingShadow: false,
-            coverShadowColor: atmosphere.coverShadowColor,
-            floatingInset: true,
-            floatingHorizontalPadding: 68,
-            floatingTopPadding: 24,
-            contentTopPadding: 24,
-            contentBottomPadding: 24
-        ) {
-            VStack(spacing: CassetteSpacing.l) {
-                albumTitleBlock(vm: vm, songs: songs, alignment: .center)
-                    .padding(.horizontal, CassetteSpacing.l)
-
-                albumActionBar(vm: vm, songs: songs, playMaxWidth: 165)
-                    .padding(.horizontal, CassetteSpacing.l)
-
-                if let description = vm?.albumDescription, !description.isEmpty {
-                    albumAboutPreview(description)
-                }
-
-                albumDownloadProgress(vm: vm)
+        if artworkStyle == .faded {
+            ScrollLinkedFadedArtworkHero(coverArtId: albumCoverId, initialImage: effectiveInitialImage,
+                             background: atmosphere.pageColor, title: albumDisplayName,
+                             treatment: artworkAnalysis?.fadedTreatment ?? .textured,
+                             edgeColor: artworkAnalysis?.bottomBackground,
+                             topColor: artworkAnalysis?.topBackground,
+                             topInsetPoints: artworkTopInset) {
+                albumHeaderInformation(vm: vm, songs: songs, includesTitle: false)
+                    .padding(.bottom, CassetteSpacing.xxl)
             }
+            .id(albumCoverId)
+        } else if artworkStyle == .uniform {
+            VStack(spacing: 0) {
+                SeamlessArtworkHero(coverArtId: albumCoverId, initialImage: effectiveInitialImage,
+                                    background: atmosphere.pageColor)
+                albumHeaderInformation(vm: vm, songs: songs)
+                    .padding(.top, CassetteSpacing.s)
+                    .padding(.bottom, CassetteSpacing.xxl)
+            }
+        } else {
+            ImmersiveCoverHero(
+                coverArtId: albumCoverId,
+                coverImage: effectiveInitialImage,
+                theme: theme,
+                heroHeight: heroHeight,
+                contentBelow: true,
+                fillCover: true,
+                meltTargetColor: atmosphere.isThemed ? atmosphere.pageColor : nil,
+                showBlurredMelt: false,
+                showsFloatingShadow: false,
+                coverShadowColor: atmosphere.coverShadowColor,
+                floatingInset: true,
+                floatingHorizontalPadding: CassetteAlbumLayout.coverSideInset,
+                floatingTopPadding: CassetteSpacing.xxl,
+                contentTopPadding: CassetteSpacing.xxl,
+                contentBottomPadding: CassetteSpacing.xxl
+            ) {
+                albumHeaderInformation(vm: vm, songs: songs)
+            }
+        }
+    }
+
+    private func albumHeaderInformation(vm: AlbumDetailViewModel?, songs: [DisplayableSong], includesTitle: Bool = true) -> some View {
+        VStack(spacing: artworkStyle == .faded ? CassetteSpacing.m : CassetteSpacing.l) {
+            albumTitleBlock(vm: vm, songs: songs, alignment: .center, includesTitle: includesTitle)
+                .anchorPreference(key: FadedArtworkLayoutKey.self, value: .bounds) { .init(details: $0) }
+                .padding(.horizontal, CassetteSpacing.xl)
+            albumActionBar(vm: vm, songs: songs,
+                           playMaxWidth: artworkStyle == .faded ? CassetteAlbumLayout.fadedPlayWidth : (usesFullBleedArtwork ? .infinity : CassetteAlbumLayout.insetPlayWidth))
+                .padding(.horizontal, usesFullBleedArtwork ? CassetteSpacing.xxxl : CassetteSpacing.l)
+                .padding(.top, artworkStyle == .faded ? CassetteSpacing.xs : (usesFullBleedArtwork ? CassetteSpacing.s : 0))
+            if let description = vm?.albumDescription, !description.isEmpty {
+                albumAboutPreview(description)
+            }
+            albumDownloadProgress(vm: vm)
         }
     }
 
@@ -52,18 +78,21 @@ extension AlbumDetailContentView {
     func albumTitleBlock(
         vm: AlbumDetailViewModel?,
         songs: [DisplayableSong],
-        alignment: HorizontalAlignment
+        alignment: HorizontalAlignment,
+        includesTitle: Bool = true
     ) -> some View {
         let textAlign: TextAlignment = alignment == .leading ? .leading : .center
         VStack(alignment: alignment, spacing: 0) {
-            Text(vm?.albumName ?? initialName)
-                // Music uses SF Pro Display here rather than the rounded display face.
-                .font(.system(size: 24, weight: .semibold, design: .default))
-                .foregroundStyle(heroTitleInk)
-                .multilineTextAlignment(textAlign)
-                .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .center)
-                .lineSpacing(1)
-                .padding(.bottom, CassetteSpacing.xs)
+            if includesTitle {
+                Text(albumDisplayName)
+                    // Music uses SF Pro Display here rather than the rounded display face.
+                    .font(usesFullBleedArtwork ? .cassetteAlbumTitle : .cassetteAlbumCardTitle)
+                    .foregroundStyle(heroTitleInk)
+                    .multilineTextAlignment(textAlign)
+                    .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .center)
+                    .lineSpacing(1)
+                    .padding(.bottom, CassetteSpacing.xs)
+            }
             if vm == nil {
                 SkeletonBlock(width: 140, height: 18, cornerRadius: 4)
                     .padding(.bottom, CassetteSpacing.s)
@@ -79,14 +108,14 @@ extension AlbumDetailContentView {
                         token: artistRouteToken
                     )) {
                         Text(artist)
-                            .font(.system(size: 22, weight: .regular))
+                            .font(.cassetteAlbumArtist)
                             .foregroundStyle(heroTitleInk)
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, CassetteSpacing.s)
                 } else {
                     Text(artist)
-                        .font(.system(size: 22, weight: .regular))
+                        .font(.cassetteAlbumArtist)
                         .foregroundStyle(heroTitleInk)
                         .padding(.bottom, CassetteSpacing.s)
                 }
@@ -95,7 +124,7 @@ extension AlbumDetailContentView {
                 SkeletonBlock(width: 100, height: 14, cornerRadius: 4)
             } else if let vm {
                 let qualities = vm.audioQualities
-                HStack(spacing: 6) {
+                HStack(spacing: CassetteSpacing.xs) {
                     if let genre = vm.genre, !genre.isEmpty {
                         Text(genre)
                     }
@@ -109,14 +138,14 @@ extension AlbumDetailContentView {
                         }
                         AudioQualityLabelView(
                             quality: qualities[index],
-                            foreground: headerSecondaryColor,
+                            foreground: artworkStyle == .faded ? albumMetadataInk : headerTextColor,
                             interactive: false,
                             style: .album
                         )
                     }
                 }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(headerSecondaryColor)
+                .font(.cassetteFootnote)
+                .foregroundStyle(albumMetadataInk)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
             }
@@ -139,7 +168,7 @@ extension AlbumDetailContentView {
                 Image(systemName: "shuffle")
                     .font(.cassetteCellTitle)
                     .foregroundStyle(headerTextColor)
-                    .albumTransportCircle(ink: headerTextColor)
+                    .albumTransportCircle(ink: headerTextColor, side: albumControlSide)
             }
             .disabled(songs.isEmpty)
             .opacity(vm == nil ? 0.4 : 1)
@@ -149,7 +178,7 @@ extension AlbumDetailContentView {
                     guard !songs.isEmpty else { return }
                     try? await container?.playerService.play(tracks: songs, startIndex: 0)
                 }
-            }, label: String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), isDisabled: songs.isEmpty || (mode == .full && vm?.isDownloadingAlbum == true), accentColor: heroButtonVariant.background, height: usesDesktopDetail ? nil : 52, labelColor: heroButtonVariant.background.luminance > 0.5 ? .black : .white)
+            }, label: String(localized: "Play", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale), isDisabled: songs.isEmpty || (mode == .full && vm?.isDownloadingAlbum == true), accentColor: heroButtonVariant.background, height: usesDesktopDetail ? nil : albumControlSide, labelColor: usesFullBleedArtwork ? heroButtonVariant.foreground : (heroButtonVariant.background.luminance > 0.5 ? .black : .white))
             .frame(maxWidth: playMaxWidth)
 
             if mode == .downloadedOnly {
@@ -166,7 +195,7 @@ extension AlbumDetailContentView {
                     Image(systemName: "trash")
                         .font(.cassetteCellTitle)
                         .foregroundStyle(headerTextColor)
-                        .albumTransportCircle(ink: headerTextColor)
+                        .albumTransportCircle(ink: headerTextColor, side: albumControlSide)
                 }
             } else if vm?.isOffline != true {
                 if let vm {
@@ -175,7 +204,7 @@ extension AlbumDetailContentView {
                             Image(systemName: "xmark")
                                 .font(.cassetteCellTitle)
                                 .foregroundStyle(headerTextColor)
-                                .albumTransportCircle(ink: headerTextColor)
+                                .albumTransportCircle(ink: headerTextColor, side: albumControlSide)
                         }
                     } else {
                         switch downloadState(for: vm) {
@@ -184,7 +213,7 @@ extension AlbumDetailContentView {
                                 Image(systemName: "arrow.down")
                                     .font(.cassetteCellTitle)
                                     .foregroundStyle(headerTextColor)
-                                    .albumTransportCircle(ink: headerTextColor)
+                                    .albumTransportCircle(ink: headerTextColor, side: albumControlSide)
                             }
                             .disabled(vm.songs.isEmpty)
                         case .partiallyDownloaded:
@@ -192,7 +221,7 @@ extension AlbumDetailContentView {
                                 Image(systemName: "arrow.down")
                                     .font(.cassetteCellTitle)
                                     .foregroundStyle(headerTextColor)
-                                    .albumTransportCircle(ink: headerTextColor)
+                                    .albumTransportCircle(ink: headerTextColor, side: albumControlSide)
                             }
                         case .fullyDownloaded:
                             Button {
@@ -202,7 +231,7 @@ extension AlbumDetailContentView {
                                 Image(systemName: "trash")
                                     .font(.cassetteCellTitle)
                                     .foregroundStyle(headerTextColor)
-                                    .albumTransportCircle(ink: headerTextColor)
+                                    .albumTransportCircle(ink: headerTextColor, side: albumControlSide)
                             }
                         }
                     }
@@ -211,7 +240,7 @@ extension AlbumDetailContentView {
                         Image(systemName: "arrow.down")
                             .font(.cassetteCellTitle)
                             .foregroundStyle(headerTextColor)
-                            .albumTransportCircle(ink: headerTextColor)
+                            .albumTransportCircle(ink: headerTextColor, side: albumControlSide)
                     }
                     .disabled(true)
                     .opacity(0.4)
@@ -250,11 +279,11 @@ extension AlbumDetailContentView {
 }
 
 private extension View {
-    func albumTransportCircle(ink: Color) -> some View {
+    func albumTransportCircle(ink: Color, side: CGFloat) -> some View {
         self
-            .font(.system(size: 22, weight: .semibold))
+            .font(.cassetteDetailTitle)
             .foregroundStyle(ink)
-            .frame(width: 52, height: 52)
+            .frame(width: side, height: side)
             .background(ink.opacity(0.12), in: Circle())
             .overlay(Circle().strokeBorder(ink.opacity(0.05), lineWidth: 1))
             .contentShape(Circle())

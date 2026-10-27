@@ -9,6 +9,7 @@ import SwiftSonic
 import OSLog
 
 struct AlbumsListView: View {
+    @Namespace private var albumNamespace
     @Environment(\.appContainer) private var container
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var viewModel: AlbumListViewModel?
@@ -145,8 +146,8 @@ struct AlbumsListView: View {
                     } else {
                         LazyVGrid(columns: columns, spacing: 24) {
                             ForEach(albums) { album in
-                                NavigationLink(value: HomeDestination.album(album)) {
-                                    AlbumGridCell(album: album)
+                                AlbumNavigationLink(album: album, namespace: albumNamespace) { sourceID, namespace in
+                                    AlbumGridCell(album: album, zoomSourceId: sourceID, zoomNamespace: namespace)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -220,9 +221,9 @@ struct AlbumsListView: View {
 
     private func albumRows(_ albums: [AlbumID3]) -> some View {
         ForEach(albums) { album in
-            NavigationLink(value: HomeDestination.album(album)) {
+            AlbumNavigationLink(album: album, namespace: albumNamespace) { sourceID, namespace in
                 AlbumRow(albumId: album.id, name: album.name, artist: album.artist,
-                    year: album.year, coverArtId: album.coverArt)
+                    year: album.year, coverArtId: album.coverArt, zoomSourceId: sourceID, zoomNamespace: namespace)
             }
             .id(album.id)
         }

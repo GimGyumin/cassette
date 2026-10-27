@@ -23,13 +23,9 @@ extension NowPlayingService {
 
         #if os(iOS)
         if #available(iOS 27.0, *) {
-            modernMediaSession = await MainActor.run {
-                // Hand the controller the cover cache: the Now Playing artwork provider answers from
-                // it before it ever opens a request, so the lock screen can show a cover the app
-                // already has while the server is unreachable.
-                CassetteMediaSessionController(player: playerService, artworkCache: artworkImageCache, preparedCoverIdProvider: preparedCoverIdProvider,
-                    seekHandler: { [weak self] position in await self?.seekFromSystem(to: position) })
-            }
+            // Siri relevance is independent of the system playback session. MediaPlayer
+            // alone owns metadata and commands; do not create a second MediaSession.
+            nowPlayingEntityPublisher = await MainActor.run { CassetteNowPlayingEntityPublisher() }
         }
         #endif
 

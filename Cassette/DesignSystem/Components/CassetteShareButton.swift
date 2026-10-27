@@ -112,7 +112,7 @@ enum CassetteShareButtonStyle {
     /// Pill/capsule button (album action bar) with explicit tint + foreground.
     case pill(tint: Color?, foreground: Color)
     /// Icon-only circular hero button (toolbar, next to the ellipsis).
-    case circle(foreground: Color)
+    case circle(foreground: Color, size: CGFloat = 34)
 }
 
 /// A share button variant for album/playlist sharing that uses pre-built options.
@@ -185,7 +185,7 @@ struct CassetteShareButtonWithOptions: View {
             .padding(.horizontal, CassetteSpacing.l)
             .frame(height: 44)
             .cassetteGlassCapsule(tint: tint)
-        case .circle(let foreground):
+        case .circle(let foreground, let size):
             Group {
                 if isLoading {
                     ProgressView()
@@ -194,9 +194,9 @@ struct CassetteShareButtonWithOptions: View {
                     Image(systemName: "square.and.arrow.up")
                 }
             }
-            .font(.system(size: 15, weight: .semibold))
+            .font(.system(size: size > 34 ? 20 : 17, weight: .regular))
             .foregroundStyle(foreground)
-            .cassetteHeroButton(size: 34)
+            .cassetteHeroButton(size: size)
         }
     }
 

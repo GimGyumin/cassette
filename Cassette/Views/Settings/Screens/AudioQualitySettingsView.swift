@@ -5,104 +5,107 @@
 
 import SwiftUI
 
-/// Streaming and download quality, grouped the way Apple Music groups it:
-/// one card per network, one card for downloads.
-///
-/// Automatic derives the server route from quality/capabilities; the method picker can override it.
 struct AudioQualitySettingsView: View {
-    @Environment(\.appContainer) private var container
     @Bindable var settings: StreamingSettings
-    @AppStorage("cassette.download.automaticAfterStreaming") private var automaticDownloadsEnabled = false
-    @AppStorage("cassette.download.automaticOverCellular") private var automaticDownloadsOverCellular = false
-
-    private static let qualityFooter: LocalizedStringKey =
-        "Automatic prefers the original on a capable connection. Lossless plays the original file when available; Jellyfin transcoding and HLS use lossy audio."
 
     var body: some View {
         Form {
-            streamingSection
             Section {
-                Toggle(isOn: $settings.preferDolbyAtmos) {
-                    SettingsRowTitle("Prefer Dolby Atmos")
+                Toggle(isOn: $settings.losslessAudioEnabled) {
+                    SettingsRowTitle("Lossless Audio")
                 }
             } footer: {
-                SettingsSectionFooter("Plays matching files from albums ending in (Dolby Atmos). Uses the original song when no reliable match is available. Changes apply to the next song.")
+                VStack(alignment: .leading, spacing: CassetteSpacing.l) {
+                    SettingsSectionFooter("Lossless preserves all the detail in the original audio. Streaming and downloading lossless files uses more data and storage.")
+                    NavigationLink("About Lossless Audio") { LosslessAudioInformationView() }
+                        .font(.cassetteFootnote)
+                        .textCase(nil)
+                }
+            }
+            Section {
+                SettingsNavigationRow("Wi-Fi Streaming", value: settings.formatForCurrentNetwork(isLimited: false).title) {
+                    AudioQualitySelectionView(title: "Wi-Fi Streaming", selection: $settings.wifiFormat,
+                                              losslessEnabled: settings.losslessAudioEnabled)
+                }
+                SettingsNavigationRow("Cellular Streaming", value: settings.formatForCurrentNetwork(isLimited: true).title) {
+                    AudioQualitySelectionView(title: "Cellular Streaming", selection: $settings.cellularFormat,
+                                              losslessEnabled: settings.losslessAudioEnabled)
+                }
+            } footer: {
+                SettingsSectionFooter("Changes apply to new streams and downloads. Previously downloaded and cached music keeps its existing quality. Turning lossless back on restores your saved quality choices.")
             }
             Section {
                 SettingsNavigationRow("Server Playback Method", value: settings.jellyfinRoute.choiceTitle) {
                     ServerPlaybackMethodSelectionView(selection: $settings.jellyfinRoute)
                 }
+            } footer: {
+                SettingsSectionFooter("Automatic follows the selected audio quality. A manual original-file method and spatial audio may use the original source regardless of the lossless switch.")
             }
-            downloadsSection
         }
         .formStyle(.grouped)
         .modifier(SettingsSubpageStyle())
         .navigationTitle(Text("Audio Quality"))
-        .onChange(of: settings.preferDolbyAtmos) {
-            Task { await container?.playerService.playbackVariantSettingsDidChange() }
-        }
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-    }
-
-    private var streamingSection: some View {
-        Section {
-            SettingsNavigationRow("Wi-Fi", value: settings.wifiFormat.title) {
-                AudioQualitySelectionView(title: "Wi-Fi", selection: $settings.wifiFormat)
-            }
-
-            SettingsNavigationRow("Cellular", value: settings.cellularFormat.title) {
-                AudioQualitySelectionView(title: "Cellular", selection: $settings.cellularFormat)
-            }
-        } header: {
-            SettingsSectionHeader("Streaming")
-        } footer: {
-            SettingsSectionFooter(Self.qualityFooter)
-        }
-    }
-
-    private var downloadsSection: some View {
-        Section {
-            SettingsNavigationRow("Download Quality", value: settings.downloadFormat.title) {
-                AudioQualitySelectionView(title: "Download Quality", selection: $settings.downloadFormat, isStreaming: false)
-            }
-
-            Toggle(isOn: $automaticDownloadsEnabled) {
-                SettingsRowTitle("Automatic Downloads")
-            }
-
-            Toggle(isOn: $automaticDownloadsOverCellular) {
-                SettingsRowTitle("Automatic Downloads over Cellular")
-            }
-            .disabled(!automaticDownloadsEnabled)
-        } header: {
-            SettingsSectionHeader("Downloads")
-        } footer: {
-            SettingsSectionFooter("When disabled, automatic downloads wait for Wi-Fi. This controls permanent downloads only — streaming cache and prefetching are controlled by the Cache settings.")
-        }
     }
 }
 
-/// Apple Music-style quality list: title and subtitle rows with a trailing
-/// blue checkmark for the current selection.
+struct DownloadQualitySettingsView: View {
+    @Bindable var settings: StreamingSettings
+
+    var body: some View {
+        AudioQualitySelectionView(title: "Downloads", selection: $settings.downloadFormat,
+                                  isStreaming: false, losslessEnabled: settings.losslessAudioEnabled)
+    }
+}
+
+/// Retain Cassette's real codec choices; never promise a sample-rate conversion the server cannot do.
 struct AudioQualitySelectionView: View {
     let title: LocalizedStringKey
     @Binding var selection: CacheFormat
     var isStreaming = true
+    var losslessEnabled = true
+
+    private var items: [CacheFormat] {
+        losslessEnabled ? [.matchStream, .aac256, .flacOriginal, .aac128, .opus_128] : [.aac256, .aac128, .opus_128]
+    }
 
     var body: some View {
         SettingsChoiceList(
             navigationTitle: title,
-            footer: "Lossless uses much more data. Availability depends on the original files on your server.",
-            items: CacheFormat.selectableCases,
-            selection: $selection,
+            footer: isStreaming
+                ? "Lossless streaming uses more data. The original file determines the format, bit depth, and sample rate, including high-resolution audio. Availability depends on your server, connection, and audio device."
+                : "Lossless files use more storage on your device. Downloads preserve the original file's resolution when available. Previously downloaded songs keep their existing quality.",
+            items: items,
+            selection: Binding(
+                get: { StreamingSettings.effectiveFormat(selection, losslessEnabled: losslessEnabled) },
+                set: { selection = $0 }
+            ),
             subtitle: { format in
-                if isStreaming, format == .matchStream {
-                    return String(localized: "Adapts to your connection and prefers original quality", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                if format == .matchStream {
+                    return isStreaming
+                        ? String(localized: "Adapts to your connection and prefers original quality", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
+                        : String(localized: "Original file without conversion", bundle: AppUILanguage.localizationBundle, locale: AppUILanguage.locale)
                 }
                 return format.subtitle
             }
         )
+    }
+}
+
+private struct LosslessAudioInformationView: View {
+    var body: some View {
+        Form {
+            Section {
+                Text("Lossless preserves all the detail in the original audio. Streaming and downloading lossless files uses more data and storage.")
+            }
+            Section {
+                Text("Cassette plays the original file from your server. Lossless and high-resolution availability depend on that file; choosing Lossless does not turn a lossy recording into lossless audio.")
+            }
+            Section {
+                Text("The connected audio device can limit the output quality. Bluetooth playback may compress the audio even when the source file is lossless.")
+            }
+        }
+        .formStyle(.grouped)
+        .modifier(SettingsSubpageStyle())
+        .navigationTitle(Text("About Lossless Audio"))
     }
 }

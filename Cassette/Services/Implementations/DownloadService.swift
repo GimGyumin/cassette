@@ -500,9 +500,17 @@ actor DownloadService: DownloadServiceProtocol {
     // MARK: - Single track download
 
     func download(song: Song, serverId: UUID) async throws {
+        try await download(song: song, serverId: serverId, formatOverride: nil)
+    }
+
+    func downloadOriginal(song: Song, serverId: UUID) async throws {
+        try await download(song: song, serverId: serverId, formatOverride: .flacOriginal)
+    }
+
+    private func download(song: Song, serverId: UUID, formatOverride: CacheFormat?) async throws {
         let generation = downloadGeneration
         try checkDownloadGeneration(generation)
-        try await downloadAudio(song: song, serverId: serverId, albumCoverArtID: nil, generation: generation)
+        try await downloadAudio(song: song, serverId: serverId, albumCoverArtID: nil, generation: generation, formatOverride: formatOverride)
         try checkDownloadGeneration(generation)
         let songCoverArtID = song.coverArt?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedCoverArtID = songCoverArtID.flatMap { $0.isEmpty ? nil : $0 } ?? song.albumId ?? song.id
@@ -517,9 +525,12 @@ actor DownloadService: DownloadServiceProtocol {
     /// Downloads and records only the audio payload. Album downloads call this path so artwork
     /// can be planned once for the whole album: the shared album cover is fetched once and only
     /// tracks with a different cover-art ID add another request.
-    private func downloadAudio(song: Song, serverId: UUID, albumCoverArtID: String?, generation: UInt64) async throws {
+    private func downloadAudio(song: Song, serverId: UUID, albumCoverArtID: String?, generation: UInt64, formatOverride: CacheFormat? = nil) async throws {
         try checkDownloadGeneration(generation)
-        guard await !isDownloaded(songId: song.id, serverId: serverId) else {
+        let alreadyDownloaded = formatOverride == .flacOriginal
+            ? await downloadedOriginalURL(forSongId: song.id, serverId: serverId) != nil
+            : await isDownloaded(songId: song.id, serverId: serverId)
+        guard !alreadyDownloaded else {
             Logger.download.debug("Song '\(song.id, privacy: .public)' already downloaded — skipping.")
             return
         }
@@ -531,6 +542,12 @@ actor DownloadService: DownloadServiceProtocol {
         if let existing = inFlightTasks[key], !existing.task.isCancelled {
             try await existing.task.value
             try checkDownloadGeneration(generation)
+            // An in-flight AAC download cannot satisfy an explicit original request.
+            if formatOverride == .flacOriginal,
+               await downloadedOriginalURL(forSongId: song.id, serverId: serverId) == nil {
+                try await downloadAudio(song: song, serverId: serverId, albumCoverArtID: albumCoverArtID,
+                                        generation: generation, formatOverride: formatOverride)
+            }
             return
         }
 
@@ -541,7 +558,8 @@ actor DownloadService: DownloadServiceProtocol {
             try await self._downloadSong(
                 song,
                 serverId: serverId,
-                albumCoverArtID: albumCoverArtID
+                albumCoverArtID: albumCoverArtID,
+                formatOverride: formatOverride
             )
         }
         inFlightTasks[key] = Flight(id: id, task: task)
@@ -552,7 +570,8 @@ actor DownloadService: DownloadServiceProtocol {
     private func _downloadSong(
         _ song: Song,
         serverId: UUID,
-        albumCoverArtID: String?
+        albumCoverArtID: String?,
+        formatOverride: CacheFormat?
     ) async throws {
         let identity = try await MainActor.run { try serverService.state.requestIdentity(for: serverId) }
         let creds = try await serverService.activeCredentials()
@@ -564,7 +583,10 @@ actor DownloadService: DownloadServiceProtocol {
         let formatRaw = UserDefaults.standard.string(forKey: "cassette.streaming.download")
         // Download quality is an explicit encoding instruction, including for spatial/ambiguous
         // catalog metadata. Automatic/original already request raw bytes in the switch below.
-        let requestedFormat = CacheFormat(rawValue: formatRaw ?? "") ?? .matchStream
+        let requestedFormat = formatOverride ?? StreamingSettings.effectiveFormat(
+            CacheFormat(rawValue: formatRaw ?? "") ?? .matchStream,
+            losslessEnabled: UserDefaults.standard.object(forKey: StreamingSettings.losslessAudioKey) as? Bool ?? true
+        )
         var mediaURL: URL?
         var expectedOriginalSize: Int64?
         var originalContainer: String?

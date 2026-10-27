@@ -42,7 +42,7 @@ extension AlbumDetailContentView {
                         GeometryReader { geo in
                             Color.clear.preference(
                                 key: AlbumScrollOffsetKey.self,
-                                value: geo.frame(in: .named("albumDetailScroll")).minY
+                                value: geo.frame(in: .named(AlbumScrollCoordinateSpace.name)).minY
                             )
                         }
                     }
@@ -50,16 +50,20 @@ extension AlbumDetailContentView {
             }
         }
         .scrollContentBackground(.hidden)
-        .coordinateSpace(name: "albumDetailScroll")
+        .cassetteSoftBottomScrollEdge()
+        .coordinateSpace(name: AlbumScrollCoordinateSpace.name)
         .onPreferenceChange(AlbumScrollOffsetKey.self) { minY in
+            guard viewModel?.acceptsPresentationUpdates != false else { return }
             // minY starts ~0 under the nav bleed; rises negative as the cover scrolls away.
             let distance = max(0, -minY)
-            let progress = min(1, distance / max(heroHeight * 0.55, 1))
-            if abs(navChromeProgress - progress) > 0.02 {
+            // Only publish a chrome boundary crossing, not every scrolling frame.
+            let progress: CGFloat = distance > heroHeight * 0.55 ? 1 : 0
+            if navChromeProgress != progress {
                 navChromeProgress = progress
             }
         }
-        // The inset album cover starts below the navigation bar, unlike full-bleed artist art.
+        .modifier(AlbumTopBleedModifier(bleed: usesFullBleedArtwork))
+        .scrollIndicators(.hidden)
     }
 
     // MARK: - Desktop (macOS / iPad regular) body

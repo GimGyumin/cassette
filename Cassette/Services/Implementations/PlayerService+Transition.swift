@@ -30,10 +30,21 @@ extension PlayerService {
         preservePlayingState: Bool,
         explicitRequest: Bool = false
     ) async throws {
-        guard await permitsNewTransportCommand(), stopBarrierCount == 0, tracks.indices.contains(startIndex) else { return }
+        let entryContext = playbackContext
+        playAdmissionID &+= 1
+        let admissionID = playAdmissionID
+        guard await permitsNewTransportCommand(), admissionID == playAdmissionID,
+              (explicitRequest || contextIsCurrent(entryContext)),
+              stopBarrierCount == 0, tracks.indices.contains(startIndex) else { return }
         if explicitRequest { clearInterruptionForExplicitPlayback() }
         guard !transport.interrupted else { return }
         transportCommandID &+= 1
+        let selectionCommand = transportCommandID
+        pendingSelectionCommand = selectionCommand
+        defer {
+            if pendingSelectionCommand == selectionCommand { pendingSelectionCommand = nil }
+        }
+        cancelQualityUpgrade()
         transport.intent = .play
         transport.terminalContext = nil
         let resetContext = playbackContext
@@ -223,6 +234,11 @@ extension PlayerService {
                 source = preparedSource
                 Logger.player.debug("[PLAY] reusing prepared source for '\(song.id, privacy: .public)'")
             } else {
+                source = try await mediaResolver.resolve(songId: song.id, serverId: serverId, song: song)
+            }
+            if !source.isLocal, AudioQualityClassifier.isDolbyAudio(source.playbackSong ?? song),
+               await MainActor.run(body: { !streamingSettings.allowsRemoteDolbyAtmos(isCellular: serverService.state.isCellularConnection) }) {
+                // A URL prepared on Wi-Fi cannot bypass a newer cellular policy.
                 source = try await mediaResolver.resolve(songId: song.id, serverId: serverId, song: song)
             }
         } catch is CancellationError {
@@ -463,6 +479,7 @@ extension PlayerService {
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
 
         isTrackTransitionPending = false
+        pendingSelectionCommand = nil
         resetTrackAccumulator(isPlaying: false)
         pendingFadeInDuration = fadingInAllowed ? crossfadeConfig.duration : nil
         startEnginePlayback(
@@ -524,80 +541,9 @@ extension PlayerService {
         )
         await nowPlayingService?.update(with: snapshot)
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
-        // Never background-cache Dolby/Atmos — lossy cache formats stereo-downmix the bitstream.
-        // Also skip competing downloads on wireless system routes where bandwidth/route churn hurts playback.
-        let skipEphemeralCache: Bool = {
-            if AudioQualityClassifier.shouldBypassEphemeralCache(source.playbackSong ?? song) { return true }
-            #if os(iOS)
-            return PlayerService.isWirelessSystemRouteActive()
-            #else
-            return false
-            #endif
-        }()
-        if case .stream(let streamURL, let customHeaders, let jellyfinContext, _, _) = source,
-           jellyfinContext == nil,
-           !skipEphemeralCache {
-            let cacheFormat = await MainActor.run { cacheSettings.cacheFormat }
-
-            let cacheStreamURL: URL?
-            if cacheFormat == .matchStream {
-                cacheStreamURL = streamURL
-            } else if cacheFormat == .flacOriginal {
-                cacheStreamURL = (try? await serverService.makeSwiftSonicClient())?.streamURL(
-                    id: songId,
-                    maxBitRate: nil,
-                    format: "raw"
-                )
-            } else {
-                // Lossy cache formats — fine for stereo/AAC sources only.
-                cacheStreamURL = (try? await serverService.makeSwiftSonicClient())?.streamURL(
-                    id: songId,
-                    maxBitRate: cacheFormat.subsonicMaxBitRate,
-                    format: cacheFormat.subsonicFormat
-                )
-            }
-
-            guard epoch == playbackEpoch, !Task.isCancelled else { return }
-            if let cacheStreamURL {
-                cacheDownloadTask = Task { [cacheService, downloadService, serverService, cacheSession, weak self] in
-                    try? await Task.sleep(for: .seconds(30))
-                    guard !Task.isCancelled, let self else { return }
-                    // Automatic offline storage already owns this song's full-file copy.
-                    // A different cache preset must not start a second encoding/transfer.
-                    guard !UserDefaults.standard.bool(forKey: Self.automaticDownloadUserDefaultsKey) else { return }
-                    if await cacheService.cachedURL(forSongId: songId, serverId: serverId) != nil { return }
-                    if await downloadService.isDownloaded(songId: songId, serverId: serverId) { return }
-                    if await downloadService.isDownloading(songId: songId, serverId: serverId) { return }
-                    let isLimited = await MainActor.run { serverService.state.isLimitedNetwork }
-                    let isStillPlaying = await MainActor.run {
-                        self.state.currentTrack?.id == song.id && self.state.playbackState == .playing
-                    }
-                    guard !Task.isCancelled, isStillPlaying else { return }
-                    if isLimited {
-                        Logger.player.debug("Cache skipped — limited network for '\(songId, privacy: .public)'")
-                        return
-                    }
-                    do {
-                        try await self.downloadAndCache(
-                            songId: songId,
-                            serverId: serverId,
-                            streamURL: cacheStreamURL,
-                            customHeaders: customHeaders,
-                            using: cacheSession
-                        )
-                    } catch {
-                        Logger.player.debug("Cache download failed for '\(songId, privacy: .public)': \(error, privacy: .public)")
-                    }
-                }
-            } else {
-                Logger.player.debug("Cache: no URL for '\(songId, privacy: .public)' in \(cacheFormat.rawValue) — skipping")
-            }
-        } else if skipEphemeralCache {
-            Logger.player.info("[SPATIAL] Skipping ephemeral cache for Dolby/multichannel '\(songId, privacy: .public)'")
-        }
-
         await scheduleAutomaticDownload(song: source.playbackSong ?? song, serverId: serverId)
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
+        scheduleEphemeralCache(song: song, source: source, serverId: serverId)
         await ensureGaplessPreparation()
         guard epoch == playbackEpoch, !Task.isCancelled else { return }
 

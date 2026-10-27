@@ -515,6 +515,8 @@ struct InlineQueueList: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
+                .cassetteHideScrollEdgeEffects()
+                .cassetteContentEdgeFade(top: 24, bottom: 40)
                 #if !os(macOS)
                 .environment(\.editMode, .constant(.active))
                 #endif

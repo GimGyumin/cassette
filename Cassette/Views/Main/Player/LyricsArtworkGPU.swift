@@ -95,6 +95,7 @@ nonisolated final class LyricsArtworkGPU: @unchecked Sendable {
     }
 
     func render(size: CGSize, elapsed: Float, transition: Float = 1,
+                flowSpeed: Double = AMLLArtworkMotion.defaultFlowSpeed,
                 drawable: (any CAMetalDrawable)? = nil) -> Frame? {
         guard let artwork else { return nil }
         let dimensions = ArtworkSceneMotion.renderSize(for: size)
@@ -105,9 +106,13 @@ nonisolated final class LyricsArtworkGPU: @unchecked Sendable {
             composed = makeTexture(width: dimensions.width, height: dimensions.height)
         }
         guard let scene, let blurred, let composed, let command = queue.makeCommandBuffer() else { return nil }
-        var parameters = SIMD4<Float>(Float(dimensions.width) / Float(dimensions.height), elapsed,
+        let speed = AMLLArtworkMotion.speed(flowSpeed)
+        let layers = AMLLArtworkMotion.layers(size: CGSize(width: dimensions.width, height: dimensions.height),
+                                             elapsed: Double(elapsed), flowSpeed: speed)
+        var parameters = SIMD4<Float>(Float(dimensions.width) / Float(dimensions.height), elapsed * Float(speed),
                                       previous == nil ? 1 : transition, 0)
-        guard encode(command: command, target: scene, pipeline: scenePipeline, textures: [artwork], parameters: &parameters) else { return nil }
+        guard encode(command: command, target: scene, pipeline: scenePipeline, textures: [artwork],
+                     parameters: &parameters, layers: layers) else { return nil }
         blur.encode(commandBuffer: command, sourceTexture: scene, destinationTexture: blurred)
         guard encode(command: command, target: composed, pipeline: compositePipeline,
                      textures: [blurred, previous ?? blurred], parameters: &parameters) else { return nil }
@@ -131,7 +136,7 @@ nonisolated final class LyricsArtworkGPU: @unchecked Sendable {
 
     private func encode(command: any MTLCommandBuffer, target: any MTLTexture,
                         pipeline: any MTLRenderPipelineState, textures: [any MTLTexture],
-                        parameters: inout SIMD4<Float>) -> Bool {
+                        parameters: inout SIMD4<Float>, layers: [SIMD4<Float>] = []) -> Bool {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .dontCare
@@ -141,6 +146,11 @@ nonisolated final class LyricsArtworkGPU: @unchecked Sendable {
         for (index, texture) in textures.enumerated() { encoder.setFragmentTexture(texture, index: index) }
         encoder.setFragmentBytes(&parameters, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         encoder.setFragmentBytes(&colorProfile, length: MemoryLayout<ArtworkSceneColorProfile>.stride, index: 1)
+        if !layers.isEmpty {
+            layers.withUnsafeBytes { bytes in
+                encoder.setFragmentBytes(bytes.baseAddress!, length: bytes.count, index: 2)
+            }
+        }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
         return true

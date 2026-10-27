@@ -20,6 +20,13 @@ struct AboutSettingsView: View {
         Bundle.main.infoDictionary?["NSHumanReadableCopyright"] as? String ?? "© 2026 Kyumin"
     }
 
+    private var amllLicense: String {
+        let notice = "Swift port of AMLL core. Upstream: https://github.com/amll-dev/applemusic-like-lyrics\nRevision: 5fee356362353dbb24ce9bea3a62536478040de7\nCopyright the AMLL contributors.\n\n"
+        guard let url = Bundle.main.url(forResource: "AMLL-AGPL-3.0", withExtension: "txt"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return notice + "https://www.gnu.org/licenses/agpl-3.0.html" }
+        return notice + text
+    }
+
     var body: some View {
         Form {
             Section {
@@ -36,9 +43,20 @@ struct AboutSettingsView: View {
 
             Section {
                 SettingsValueRow("Copyright", value: copyright)
-                SettingsValueRow("License", value: "Mozilla Public License 2.0")
+                SettingsValueRow("License", value: "MPL-2.0 · AGPL-3.0 components")
 
                 DisclosureGroup {
+                    NavigationLink {
+                        ScrollView {
+                            Text(verbatim: amllLicense)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .padding()
+                        }
+                        .navigationTitle("Apple Music Like Lyrics")
+                    } label: {
+                        SettingsValueRow("Apple Music Like Lyrics", value: "AGPL-3.0 — AMLL contributors")
+                    }
                     SettingsValueRow("SwiftSonic", value: "MIT License — MathieuDubart")
                     HStack(alignment: .firstTextBaseline, spacing: CassetteSpacing.s) {
                         Text("AudioStreaming")

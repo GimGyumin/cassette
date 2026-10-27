@@ -168,7 +168,14 @@ nonisolated enum StructuredLyricsAdapter {
         }
 
         lines = lines.map { line in
-            guard let index = line.sourceLineIndex, structured.line.indices.contains(index) else { return line }
+            guard let index = line.sourceLineIndex else { return line }
+            // Each vocal part has its own full text. The parent can contain several
+            // singers or parenthesized backing, so it is not always a match for the lead.
+            for cue in structured.cueLine where cue.index == index && cue.agentId == line.agentId {
+                let restored = restoringSpacing(in: line, source: cue.value)
+                if restored.preservesSourceSpacing { return restored }
+            }
+            guard structured.line.indices.contains(index) else { return line }
             return restoringSpacing(in: line, source: structured.line[index].value)
         }
         let timing: LyricTimingMode = lines.contains(where: { $0.words.count > 1 }) ? .word : .line
@@ -189,37 +196,54 @@ nonisolated enum StructuredLyricsAdapter {
     }
 
     private static func makeWords(from cueLine: CueLine, role: LyricRole) -> [LyricWord] {
-        cueLine.cue.map { cue in
+        let words = cueLine.cue.map { cue in
             let begin = LyricTime.seconds(fromMilliseconds: cue.start)
             let end = cue.end.map(LyricTime.seconds(fromMilliseconds:)) ?? begin
             return LyricWord(text: cue.value, begin: begin, end: end, role: role)
         }
+        return restoringWordSpacing(words, source: cueLine.value) ?? words
     }
 
     /// Cue boundaries are timing boundaries, not word boundaries. The full source line
     /// determines spaces when both representations contain exactly the same characters.
     static func restoringSpacing(in line: LyricLine, source: String) -> LyricLine {
-        let main = line.mainWords
-        let compact: (String) -> String = { String($0.filter { !$0.isWhitespace }) }
-        guard !main.isEmpty, compact(main.map(\.text).joined()) == compact(source) else { return line }
+        let targetWords = line.isBackgroundOnly ? line.words : line.mainWords
+        guard let restored = restoringWordSpacing(targetWords, source: source) else { return line }
+        var cursor = 0
+        let words = line.words.map { word -> LyricWord in
+            guard line.isBackgroundOnly || !word.role.isBackground else { return word }
+            defer { cursor += 1 }
+            return restored[cursor]
+        }
+        return LyricLine(begin: line.begin, end: line.end, key: line.key, agentId: line.agentId,
+                         words: words, documentOrder: line.documentOrder, sourceLineIndex: line.sourceLineIndex,
+                         preservesSourceSpacing: true, preservesSourceTiming: line.preservesSourceTiming)
+    }
+
+    /// Only a matching source may supply whitespace. Never guess word boundaries
+    /// from timing gaps (which would split glued syllables and joined CJK words).
+    private static func restoringWordSpacing(_ words: [LyricWord], source: String) -> [LyricWord]? {
+        let compact: (String) -> String = {
+            String($0.filter { !$0.isWhitespace })
+                .replacingOccurrences(of: "’", with: "'")
+                .replacingOccurrences(of: "‘", with: "'")
+                .precomposedStringWithCanonicalMapping
+        }
+        guard !words.isEmpty, !source.isEmpty,
+              compact(words.map(\.text).joined()) == compact(source) else { return nil }
         let characters = Array(source)
         var cursor = 0
-        var words: [LyricWord] = []
-        for word in line.words {
-            guard !word.role.isBackground else { words.append(word); continue }
+        return words.map { word in
             let start = cursor
-            var remaining = compact(word.text).count
+            var remaining = word.text.filter { !$0.isWhitespace }.count
             while cursor < characters.count, remaining > 0 {
                 if !characters[cursor].isWhitespace { remaining -= 1 }
                 cursor += 1
             }
             while cursor < characters.count, characters[cursor].isWhitespace { cursor += 1 }
-            words.append(LyricWord(text: String(characters[start..<cursor]), begin: word.begin, end: word.end,
-                                   role: word.role, agentId: word.agentId, ruby: word.ruby))
+            return LyricWord(text: String(characters[start..<cursor]), begin: word.begin, end: word.end,
+                             role: word.role, agentId: word.agentId, ruby: word.ruby)
         }
-        return LyricLine(begin: line.begin, end: line.end, key: line.key, agentId: line.agentId,
-                         words: words, documentOrder: line.documentOrder, sourceLineIndex: line.sourceLineIndex,
-                         preservesSourceSpacing: true, preservesSourceTiming: line.preservesSourceTiming)
     }
 
     private static func isBackgroundAgent(_ id: String?, agents: [String: LyricAgent]) -> Bool {

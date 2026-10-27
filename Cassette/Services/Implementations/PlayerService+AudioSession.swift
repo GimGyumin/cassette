@@ -19,6 +19,8 @@ import UIKit
 #if os(iOS)
 extension PlayerService {
     func configureAudioSessionIfNeeded(preferMultichannel: Bool = true) {
+        sessionActivationRetryTask?.cancel()
+        sessionActivationRetryTask = nil
         do {
             let session = AVAudioSession.sharedInstance()
             // Re-applying setCategory while audio is running causes audible glitches during
@@ -49,10 +51,11 @@ extension PlayerService {
             if error.code == -50 {
                 // Code=-50: another app holds the session — retry after short delay.
                 Logger.player.warning("AVAudioSession setActive Code=-50, retrying in 0.5s")
-                sessionActivationRetryTask = Task {
-                    try? await Task.sleep(for: .seconds(0.5))
-                    guard !Task.isCancelled else { return }
-                    try? AVAudioSession.sharedInstance().setActive(true)
+                let epoch = playbackEpoch
+                let command = transportCommandID
+                sessionActivationRetryTask = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(0.5)) } catch { return }
+                    await self?.retryAudioSessionActivation(epoch: epoch, command: command)
                 }
             } else {
                 // Category may need a hard reset after media-services reset.
@@ -61,6 +64,12 @@ extension PlayerService {
             }
         }
         installAudioSessionObserversIfNeeded()
+    }
+
+    private func retryAudioSessionActivation(epoch: UInt64, command: UInt64) {
+        guard !Task.isCancelled, epoch == playbackEpoch, command == transportCommandID,
+              transport.intent == .play, !transport.interrupted, stopBarrierCount == 0 else { return }
+        try? AVAudioSession.sharedInstance().setActive(true)
     }
 
     private func installAudioSessionObserversIfNeeded() {

@@ -1,0 +1,1433 @@
+{
+  "note": "Measurements of supplied composite screenshots, not original cover pixels or Apple implementation parameters. Current Cassette comparison images do not define the target.",
+  "references": [
+    {
+      "file": "codex-clipboard-f004907c-d76b-4888-8afa-26d0e52233eb.png",
+      "label": "Apple Music — Thriller",
+      "role": "target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        12,
+        20,
+        28
+      ],
+      "canvas_hex": "#0C141C",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            110,
+            126,
+            125
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            197,
+            202,
+            200
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            210,
+            215,
+            207
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            135,
+            141,
+            140
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            59,
+            66,
+            71
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            18,
+            26,
+            34
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            12,
+            20,
+            28
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-bd2927e4-a664-4844-868f-14f99fbf0042.png",
+      "label": "Apple Music — The Indispensable Collection",
+      "role": "target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        85,
+        12,
+        12
+      ],
+      "canvas_hex": "#550C0C",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            166,
+            67,
+            59
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            165,
+            67,
+            59
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            16,
+            11,
+            12
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            53,
+            13,
+            14
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            103,
+            24,
+            22
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            87,
+            14,
+            14
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            85,
+            12,
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-42bc5081-a854-4e7f-b27b-f7799e40710f.png",
+      "label": "Number Ones — earlier target attribution superseded by corrected second image",
+      "role": "superseded_reference",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        46,
+        46,
+        46
+      ],
+      "canvas_hex": "#2E2E2E",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            254,
+            254,
+            254
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            233,
+            233,
+            233
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            164,
+            164,
+            164
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            92,
+            92,
+            92
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            53,
+            53,
+            53
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-9795233d-b0bc-4f41-8c18-b0a1a3b01a5d.png",
+      "label": "Apple Music — Thriller 40, latest",
+      "role": "target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        46,
+        46,
+        46
+      ],
+      "canvas_hex": "#2E2E2E",
+      "mode_pixel_count": 18167,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            155,
+            155,
+            156
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            147,
+            147,
+            148
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            169,
+            169,
+            170
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            108,
+            108,
+            108
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            75,
+            75,
+            75
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            48,
+            48,
+            48
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-e8f04168-1f74-4ce0-99fd-72e4e1131fd1.jpg",
+      "label": "Apple Music — Thriller 40",
+      "role": "target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        46,
+        46,
+        46
+      ],
+      "canvas_hex": "#2E2E2E",
+      "mode_pixel_count": 23424,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            155,
+            155,
+            157
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            142,
+            142,
+            144
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            168,
+            168,
+            170
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            106,
+            106,
+            108
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            71,
+            71,
+            71
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            48,
+            48,
+            48
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-b38534ac-8b10-4d79-9da9-ef6acca2ff0a.jpg",
+      "label": "Apple Music — This Is It (user clarified second image)",
+      "role": "target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        43,
+        47,
+        46
+      ],
+      "canvas_hex": "#2B2F2E",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            165,
+            177,
+            177
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            159,
+            173,
+            174
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            139,
+            153,
+            156
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            98,
+            109,
+            111
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            62,
+            68,
+            68
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            46,
+            50,
+            49
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            43,
+            47,
+            46
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-22b7a21b-212b-43c9-99d2-00384932742c.png",
+      "label": "Apple Music — Thriller 40, earlier",
+      "role": "target",
+      "size": [
+        941,
+        2048
+      ],
+      "canvas_rgb": [
+        46,
+        46,
+        46
+      ],
+      "canvas_hex": "#2E2E2E",
+      "mode_pixel_count": 13902,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            128,
+            128,
+            130
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            114,
+            114,
+            116
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            154,
+            154,
+            156
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            93,
+            93,
+            95
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            66,
+            66,
+            66
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            48,
+            48,
+            48
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-f27bb3ab-34e8-43b0-9b3e-8e3b896bda18.jpg",
+      "label": "Cassette — Thriller 40, prior implementation",
+      "role": "comparison",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        46,
+        46,
+        46
+      ],
+      "canvas_hex": "#2E2E2E",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            90,
+            90,
+            90
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            57,
+            57,
+            57
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            51,
+            51,
+            51
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-f1093b7c-a528-4473-a676-daef57f082ad.jpg",
+      "label": "Cassette — This Is It, prior implementation",
+      "role": "comparison",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        46,
+        46,
+        46
+      ],
+      "canvas_hex": "#2E2E2E",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            153,
+            162,
+            161
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            140,
+            149,
+            148
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            108,
+            113,
+            116
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            53,
+            53,
+            53
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            48,
+            48,
+            48
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-dcfac188-7d53-477e-b5a7-ae96bbb6b6b0.png",
+      "label": "Cassette — Thriller 40, older bright implementation",
+      "role": "comparison",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        155,
+        155,
+        155
+      ],
+      "canvas_hex": "#9B9B9B",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            171,
+            171,
+            171
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            119,
+            119,
+            119
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            150,
+            150,
+            150
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            155,
+            155,
+            155
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            155,
+            155,
+            155
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            155,
+            155,
+            155
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            155,
+            155,
+            155
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-b547fc7f-f500-4280-9a15-2f18a0f21cab.png",
+      "label": "Cassette — Number Ones (user identified first image)",
+      "role": "comparison",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        45,
+        45,
+        45
+      ],
+      "canvas_hex": "#2D2D2D",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "y_over_width": 0.05,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "y_over_width": 0.1,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "y_over_width": 0.2,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "y_over_width": 0.3,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "y_over_width": 0.4,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            254,
+            254,
+            254
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            234,
+            234,
+            234
+          ]
+        },
+        {
+          "y_over_width": 0.95,
+          "rgb": [
+            190,
+            190,
+            190
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            164,
+            164,
+            164
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            92,
+            92,
+            92
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            52,
+            52,
+            52
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            45,
+            45,
+            45
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-860878ae-ab6f-4cd9-8b9e-cf79bfab90c5.png",
+      "label": "Apple Music — Number Ones (user identified second image)",
+      "role": "authoritative_target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        46,
+        46,
+        46
+      ],
+      "canvas_hex": "#2E2E2E",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0,
+          "rgb": [
+            151,
+            151,
+            151
+          ]
+        },
+        {
+          "y_over_width": 0.05,
+          "rgb": [
+            152,
+            152,
+            152
+          ]
+        },
+        {
+          "y_over_width": 0.1,
+          "rgb": [
+            154,
+            154,
+            154
+          ]
+        },
+        {
+          "y_over_width": 0.2,
+          "rgb": [
+            173,
+            173,
+            173
+          ]
+        },
+        {
+          "y_over_width": 0.3,
+          "rgb": [
+            227,
+            227,
+            227
+          ]
+        },
+        {
+          "y_over_width": 0.4,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "y_over_width": 0.75,
+          "rgb": [
+            252,
+            252,
+            252
+          ]
+        },
+        {
+          "y_over_width": 0.85,
+          "rgb": [
+            221,
+            221,
+            221
+          ]
+        },
+        {
+          "y_over_width": 0.95,
+          "rgb": [
+            183,
+            183,
+            183
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            160,
+            160,
+            160
+          ]
+        },
+        {
+          "y_over_width": 1.15,
+          "rgb": [
+            93,
+            93,
+            93
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            57,
+            57,
+            57
+          ]
+        },
+        {
+          "y_over_width": 1.45,
+          "rgb": [
+            46,
+            46,
+            46
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-74fd59ea-2d78-470f-a8ae-5029965b11fa.png",
+      "label": "Whitney",
+      "role": "target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        56,
+        39,
+        45
+      ],
+      "canvas_hex": "#38272D",
+      "mode_pixel_count": 24777,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            203,
+            183,
+            189
+          ]
+        },
+        {
+          "y_over_width": 0.8,
+          "rgb": [
+            198,
+            177,
+            182
+          ]
+        },
+        {
+          "y_over_width": 0.9,
+          "rgb": [
+            179,
+            159,
+            164
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            142,
+            123,
+            128
+          ]
+        },
+        {
+          "y_over_width": 1.1,
+          "rgb": [
+            104,
+            86,
+            91
+          ]
+        },
+        {
+          "y_over_width": 1.2,
+          "rgb": [
+            77,
+            59,
+            64
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            61,
+            44,
+            49
+          ]
+        },
+        {
+          "y_over_width": 1.4,
+          "rgb": [
+            56,
+            39,
+            45
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-0f065105-718f-495d-9562-181649bbf578.png",
+      "label": "Whitney Houston",
+      "role": "target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        24,
+        15,
+        12
+      ],
+      "canvas_hex": "#180F0C",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            78,
+            86,
+            93
+          ]
+        },
+        {
+          "y_over_width": 0.8,
+          "rgb": [
+            47,
+            52,
+            52
+          ]
+        },
+        {
+          "y_over_width": 0.9,
+          "rgb": [
+            33,
+            39,
+            37
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            77,
+            59,
+            52
+          ]
+        },
+        {
+          "y_over_width": 1.1,
+          "rgb": [
+            44,
+            23,
+            20
+          ]
+        },
+        {
+          "y_over_width": 1.2,
+          "rgb": [
+            37,
+            25,
+            21
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            25,
+            17,
+            14
+          ]
+        },
+        {
+          "y_over_width": 1.4,
+          "rgb": [
+            24,
+            15,
+            12
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-9aa12d91-8141-4280-b445-19185a562e6a.png",
+      "label": "After Hours",
+      "role": "target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        24,
+        24,
+        25
+      ],
+      "canvas_hex": "#181819",
+      "mode_pixel_count": 25200,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            126,
+            133,
+            114
+          ]
+        },
+        {
+          "y_over_width": 0.8,
+          "rgb": [
+            24,
+            24,
+            19
+          ]
+        },
+        {
+          "y_over_width": 0.9,
+          "rgb": [
+            27,
+            28,
+            25
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            100,
+            106,
+            100
+          ]
+        },
+        {
+          "y_over_width": 1.1,
+          "rgb": [
+            50,
+            54,
+            47
+          ]
+        },
+        {
+          "y_over_width": 1.2,
+          "rgb": [
+            31,
+            23,
+            25
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            26,
+            23,
+            25
+          ]
+        },
+        {
+          "y_over_width": 1.4,
+          "rgb": [
+            24,
+            24,
+            25
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-b09a3596-445f-437a-9297-0f6f9f96dcc2.png",
+      "label": "The Bodyguard",
+      "role": "target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        25,
+        12,
+        17
+      ],
+      "canvas_hex": "#190C11",
+      "mode_pixel_count": 24263,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            4,
+            1,
+            3
+          ]
+        },
+        {
+          "y_over_width": 0.8,
+          "rgb": [
+            3,
+            0,
+            1
+          ]
+        },
+        {
+          "y_over_width": 0.9,
+          "rgb": [
+            7,
+            3,
+            4
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            13,
+            6,
+            8
+          ]
+        },
+        {
+          "y_over_width": 1.1,
+          "rgb": [
+            18,
+            8,
+            12
+          ]
+        },
+        {
+          "y_over_width": 1.2,
+          "rgb": [
+            22,
+            11,
+            15
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            24,
+            12,
+            16
+          ]
+        },
+        {
+          "y_over_width": 1.4,
+          "rgb": [
+            25,
+            12,
+            17
+          ]
+        }
+      ]
+    },
+    {
+      "file": "codex-clipboard-283ad26b-1fdd-475d-9457-969a24ed42d2.png",
+      "label": "Starboy",
+      "role": "target",
+      "size": [
+        1206,
+        2622
+      ],
+      "canvas_rgb": [
+        12,
+        13,
+        39
+      ],
+      "canvas_hex": "#0C0D27",
+      "mode_pixel_count": 24722,
+      "sample_region": "x=[0,0.04*width), y=[0.68*height,0.88*height)",
+      "left_edge_rows": [
+        {
+          "y_over_width": 0.7,
+          "rgb": [
+            137,
+            24,
+            28
+          ]
+        },
+        {
+          "y_over_width": 0.8,
+          "rgb": [
+            202,
+            46,
+            69
+          ]
+        },
+        {
+          "y_over_width": 0.9,
+          "rgb": [
+            162,
+            37,
+            62
+          ]
+        },
+        {
+          "y_over_width": 1,
+          "rgb": [
+            23,
+            32,
+            77
+          ]
+        },
+        {
+          "y_over_width": 1.1,
+          "rgb": [
+            11,
+            11,
+            34
+          ]
+        },
+        {
+          "y_over_width": 1.2,
+          "rgb": [
+            12,
+            12,
+            35
+          ]
+        },
+        {
+          "y_over_width": 1.3,
+          "rgb": [
+            12,
+            13,
+            38
+          ]
+        },
+        {
+          "y_over_width": 1.4,
+          "rgb": [
+            12,
+            13,
+            39
+          ]
+        }
+      ]
+    }
+  ],
+  "latest_correction": "For the latest Number Ones pair, the user explicitly identified the SECOND image as Apple Music. Build 1015 uses that as its target; the prior Number Ones attribution is superseded."
+}

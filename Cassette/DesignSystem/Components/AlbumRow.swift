@@ -16,10 +16,13 @@ struct AlbumRow: View {
     let artist: String?
     let year: Int?
     let coverArtId: String?
+    var zoomSourceId: String? = nil
+    var zoomNamespace: Namespace.ID? = nil
 
     var body: some View {
         HStack(spacing: CassetteSpacing.m) {
             CoverArtCard(id: coverArtId ?? albumId, size: 56)
+                .cassetteMatchedTransitionSource(id: zoomSourceId ?? albumId, in: zoomNamespace)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)

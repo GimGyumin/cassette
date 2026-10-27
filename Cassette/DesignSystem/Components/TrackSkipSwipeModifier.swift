@@ -6,6 +6,8 @@
 import SwiftUI
 
 #if os(iOS)
+import UIKit
+
 private struct TrackSkipSwipeModifier: ViewModifier {
     @Environment(\.appContainer) private var container
     @State private var dragOffset: CGFloat = 0
@@ -24,27 +26,16 @@ private struct TrackSkipSwipeModifier: ViewModifier {
             .onChange(of: playerState.currentTrack?.id) { _, _ in dragOffset = 0 }
     }
 
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 10)
-            .onChanged { value in
-                guard !isAnimatingSwipe, !playerState.isLiveStream else { return }
-                let h = value.translation.width
-                guard abs(h) > abs(value.translation.height) else { return }
-                withAnimation(.interactiveSpring()) { dragOffset = h }
-            }
-            .onEnded { value in
-                guard !isAnimatingSwipe, !playerState.isLiveStream else { return }
-                let h = value.translation.width
-                let velocity = value.velocity.width
-                guard abs(h) > abs(value.translation.height) else { bounceBack(); return }
-                let triggeredNext = h < -swipeThreshold || velocity < -velocityThreshold
-                let triggeredPrev = h > swipeThreshold || velocity > velocityThreshold
-                if triggeredNext || triggeredPrev {
-                    commitSwipe(goNext: triggeredNext)
-                } else {
-                    bounceBack()
-                }
-            }
+    private var swipeGesture: PlayerHorizontalPanGesture {
+        PlayerHorizontalPanGesture { offset, velocity, ended, cancelled in
+            guard !isAnimatingSwipe, !playerState.isLiveStream else { return }
+            if cancelled { bounceBack(); return }
+            if !ended { dragOffset = offset; return }
+            let next = offset < -swipeThreshold || velocity < -velocityThreshold
+            let previous = offset > swipeThreshold || velocity > velocityThreshold
+            if next || previous { commitSwipe(goNext: next) }
+            else { bounceBack() }
+        }
     }
 
     private func commitSwipe(goNext: Bool) {
@@ -69,6 +60,31 @@ private struct TrackSkipSwipeModifier: ViewModifier {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { dragOffset = 0 }
     }
 }
+/// Reject vertical pans before recognition so UIKit's interactive zoom dismissal
+/// owns them from the first frame. Filtering in onChanged is already too late.
+struct PlayerHorizontalPanGesture: UIGestureRecognizerRepresentable {
+    var action: (CGFloat, CGFloat, Bool, Bool) -> Void
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let recognizer = UIPanGestureRecognizer()
+        recognizer.maximumNumberOfTouches = 1
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        action(recognizer.translation(in: recognizer.view).x,
+               recognizer.velocity(in: recognizer.view).x, recognizer.state == .ended,
+               recognizer.state == .cancelled || recognizer.state == .failed)
+    }
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            let velocity = pan.velocity(in: pan.view)
+            return PlayerArtworkGesturePolicy.isHorizontal(velocity: CGSize(width: velocity.x, height: velocity.y))
+        }
+    }
+}
+
 #endif
 
 extension View {
@@ -78,5 +94,11 @@ extension View {
         #else
         self
         #endif
+    }
+}
+
+nonisolated enum PlayerArtworkGesturePolicy {
+    static func isHorizontal(velocity: CGSize) -> Bool {
+        abs(velocity.width) > abs(velocity.height) * 1.2
     }
 }

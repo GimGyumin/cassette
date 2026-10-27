@@ -39,6 +39,12 @@ public enum CassetteColors {
     public static var textSecondary: Color { SemanticLabel.secondary }
     public static var textTertiary: Color { SemanticLabel.tertiary }
 
+    /// Secondary album metadata stays consistent across words and quality marks.
+    public static func albumMetadataInk(on background: Color, increasedContrast: Bool) -> Color {
+        let ink: Color = prefersLightControl(on: background) ? .white : .black
+        return increasedContrast ? ink : ink.opacity(0.70)
+    }
+
     /// System label / status colors for descriptions, guidance, and warnings.
     public enum SemanticLabel {
         public static var primary: Color {

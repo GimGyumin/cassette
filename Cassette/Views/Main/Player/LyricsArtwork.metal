@@ -1,3 +1,7 @@
+// Four-layer artwork compositing adapts AMLL PixiRenderer (AGPL-3.0-only).
+// Copyright the AMLL contributors; native adaptation (C) 2026 Cassette contributors.
+// Source revision 5fee356362353dbb24ce9bea3a62536478040de7, bg-render/pixi-renderer.ts.
+// See Resources/Licenses/AMLL-AGPL-3.0.txt and THIRD_PARTY_NOTICES.md.
 #include <metal_stdlib>
 using namespace metal;
 
@@ -37,43 +41,28 @@ constant float3 lyricsLuma = float3(0.2289746, 0.6917385, 0.0792869);
 fragment float4 cassetteLyricsScene(LyricsVertex in [[stage_in]],
                                      texture2d<float> artwork [[texture(0)]],
                                      constant float4 &parameters [[buffer(0)]],
-                                     constant LyricsColorProfile &profile [[buffer(1)]]) {
-    constexpr sampler artworkSampler(filter::linear, address::mirrored_repeat);
+                                     constant LyricsColorProfile &profile [[buffer(1)]],
+                                     constant float4 *layers [[buffer(2)]]) {
+    constexpr sampler artworkSampler(filter::linear, address::clamp_to_edge);
     float aspect = parameters.x, time = parameters.y;
-    float2 point = float2(in.uv.x, in.uv.y / aspect);
-    float2 drift = float2(time * 0.007, time * -0.005);
-    float2 first = float2(lyricsNoise(point * 1.6 + drift),
-                          lyricsNoise(point * 1.6 + drift + 13.1)) - 0.5;
-    float2 warp = float2(lyricsNoise(point * 1.9 + first * 0.7 + drift + 7.3),
-                         lyricsNoise(point * 1.9 + first * 0.7 - drift + 31.7)) - 0.5;
-    point += warp * 0.22;
-    const float scales[4] = { 1.25, 0.80, 0.50, 0.25 };
-    const float weights[4] = { 1.0, 0.48, 0.38, 0.25 };
-    const float2 centers[4] = { float2(0.48, 0.48), float2(0.66, 0.28),
-                               float2(0.70, 0.67), float2(0.27, 0.84) };
-    float3 result = float3(0);
-    float total = 0;
+    // Work in longest-edge units so the four square sleeves retain their shape
+    // in both portrait and landscape. Swift supplies AMLL's sprite transforms.
+    float2 point = in.uv * float2(min(aspect, 1.0), min(1.0 / aspect, 1.0));
+    float2 drift = float2(time * 0.025, time * -0.018);
+    float2 warp = float2(lyricsNoise(point * 2.0 + drift),
+                         lyricsNoise(point * 2.0 - drift + 13.1)) - 0.5;
+    point += warp * 0.035;
+    float3 result = profile.average.rgb;
     for (uint layer = 0; layer < 4; layer++) {
-        float phase = float(layer) * 1.73;
-        float direction = layer % 2 == 0 ? 1.0 : -1.0;
-        float orbit = layer < 2 ? 0.065 : 0.13;
-        float2 center = float2(centers[layer].x, centers[layer].y / aspect)
-            + float2(cos(time * (0.012 + layer * 0.002) + phase),
-                     sin(time * (0.009 + layer * 0.003) + phase)) * orbit;
-        float2 local = (point - center) / scales[layer];
-        local = lyricsRotate(local, direction * time * (0.006 + layer * 0.002) + phase);
-        float2 twistCenter = float2(sin(time * 0.008 + phase), cos(time * 0.007 + phase)) * 0.13;
-        float2 delta = local - twistCenter;
-        float falloff = max(0.0, 1.0 - length(delta) / 0.95);
-        float twist = falloff * falloff * (0.75 + sin(time * 0.01 + phase) * 0.25) * direction;
-        float4 sampled = artwork.sample(artworkSampler, lyricsRotate(delta, twist) + twistCenter + 0.5);
-        float3 color = mix(profile.average.rgb, sampled.rgb, sampled.a);
-        float mask = layer == 0 ? 1.0 : exp(-dot(local, local) * 2.4);
-        float weight = weights[layer] * mask;
-        result += color * weight;
-        total += weight;
+        float4 transform = layers[layer];
+        float2 local = lyricsRotate(point - transform.xy, -transform.w) / transform.z;
+        float edge = max(abs(local.x), abs(local.y));
+        float coverage = 1.0 - smoothstep(0.48, 0.5, edge);
+        float4 sampled = artwork.sample(artworkSampler, local + 0.5);
+        // Source-over ordering matches AMLL's four opaque sprites. The following
+        // Gaussian pass dissolves their boundaries into large flowing color fields.
+        result = mix(result, sampled.rgb, sampled.a * coverage);
     }
-    result /= total;
     // Spread the artwork's own light/color into subject shadows without adding a new hue.
     float spread = profile.distribution.y - profile.distribution.x;
     float diffusion = mix(0.12, 0.22, smoothstep(0.08, 0.65, spread));

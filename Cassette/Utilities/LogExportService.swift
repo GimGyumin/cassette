@@ -31,11 +31,13 @@ nonisolated enum LogExportService {
         var name: String { url.lastPathComponent }
     }
 
+    private static let buildNumber = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+
     private static let sessionName: String = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd-HHmmss"
-        return "Cassette-\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8)).txt"
+        return "Cassette-build\(buildNumber)-\(formatter.string(from: Date()))-\(UUID().uuidString.prefix(8)).txt"
     }()
 
     static var archiveDirectory: URL {
@@ -83,11 +85,11 @@ nonisolated enum LogExportService {
         try await Task.detached(priority: .utility) {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CassetteLogs", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let url = directory.appendingPathComponent("Cassette-\(UUID().uuidString).txt")
+            let url = directory.appendingPathComponent("Cassette-build\(buildNumber)-\(UUID().uuidString).txt")
             let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
             let formatter = ISO8601DateFormatter()
-            var output = "Cassette \(version) (\(build))\n\(ProcessInfo.processInfo.operatingSystemVersionString)\nExported: \(formatter.string(from: Date()))\nCurrent process, available logs from the last 24 hours.\nCassette diagnostics and system errors; newest entries retained within 5 MB.\n\n"
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            var output = "Cassette \(version) (\(buildNumber))\n\(ProcessInfo.processInfo.operatingSystemVersionString)\nExported: \(formatter.string(from: Date()))\nCurrent process, available logs from the last 24 hours.\nCassette diagnostics and system errors; newest entries retained within 5 MB.\n\n"
             var buffer = RecentLogBuffer(limit: 5 * 1024 * 1024 - 4096)
             let store = try OSLogStore(scope: .currentProcessIdentifier)
             let entries = try store.getEntries(at: store.position(date: Date().addingTimeInterval(-86400)))

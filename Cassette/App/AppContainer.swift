@@ -83,6 +83,9 @@ final class AppContainer {
     /// `engine` exists so tests can drive a real `PlayerService` with a fake audio engine: the
     /// composition root is otherwise the only place that knows the concrete engine.
     init(inMemory: Bool = false, engine: (any PlaybackEngine)? = nil) throws {
+        // In-memory databases must not share real downloads or artwork between tests.
+        let temporaryStorage = inMemory ? FileManager.default.temporaryDirectory
+            .appendingPathComponent("cassette-test-media-\(UUID())", isDirectory: true) : nil
         libraryIndexService = LibraryIndexService(
             serverID: { [serverState] in serverState.activeServer?.id },
             networkAvailable: { [serverState] in serverState.isOnline && serverState.isServerReachable },
@@ -106,6 +109,7 @@ final class AppContainer {
         let cache = CacheService(
             modelContainer: modelContainer,
             maxBytes: cacheSettings.maxCacheBytes,
+            cacheDirectory: temporaryStorage?.appendingPathComponent("audio"),
             mediaIdentityService: mediaIdentityService
         )
         cacheService = cache
@@ -144,8 +148,8 @@ final class AppContainer {
             toastService: toastService,
             mediaIdentityService: mediaIdentityService,
             jellyfinService: jellyfinService,
-            journal: inMemory ? BackgroundDownloadJournal(directory: FileManager.default.temporaryDirectory
-                .appendingPathComponent("cassette-test-transfers-\(UUID())")) : .shared,
+            journal: temporaryStorage.map { BackgroundDownloadJournal(directory: $0.appendingPathComponent("journal")) } ?? .shared,
+            storageDirectory: temporaryStorage,
             transferCoordinator: transfers,
             cacheService: cache
         )
@@ -171,7 +175,8 @@ final class AppContainer {
         }
         // Shared knowledge, computed once: the bulk cover pass probes this directory to see what a
         // previous run already wrote, and WidgetSyncService copies covers out of it.
-        let coversDir = docs.appendingPathComponent("app.cassette/coverarts", isDirectory: true)
+        let coversDir = temporaryStorage?.appendingPathComponent("coverarts", isDirectory: true)
+            ?? docs.appendingPathComponent("app.cassette/coverarts", isDirectory: true)
 
         albumCoverPreloadService = AlbumCoverPreloadService(
             libraryService: library,
@@ -343,6 +348,8 @@ final class AppContainer {
     /// PlayerService→NowPlayingService and PlayerService→WidgetSyncService
     /// wiring is complete before any user interaction is possible.
     func setup() async {
+        Self.removeLegacyAMLLData()
+        let started = ContinuousClock.now
         await _player.setNowPlayingService(nowPlayingService)
         await _player.setWidgetSyncService(widgetSyncService)
         await _player.setReplayGainService(replayGainService)
@@ -352,6 +359,33 @@ final class AppContainer {
         // Waiting for Home/session restoration leaves a cold Siri launch without a fully
         // initialized Now Playing session, so Apple Watch sees stale or empty metadata.
         await nowPlayingService.start()
+        let elapsed = RuntimeDiagnostics.milliseconds(started.duration(to: .now))
+        Logger.boot.notice("[BOOT] setup() done duration_ms=\(elapsed, privacy: .public)")
+        RuntimeDiagnostics.mark(.setupReady)
+    }
+
+    /// The AMLL TTML Database integration was removed. Drop its cached files and
+    /// preferences once so upgrades reclaim the disk space and privacy settings.
+    private static func removeLegacyAMLLData() {
+        let defaults = UserDefaults.standard
+        for key in [
+            "cassette.amll.enabled",
+            "cassette.amll.autoSearch",
+            "cassette.amll.preferOverExisting",
+            "cassette.amll.allowCellular",
+            "cassette.amll.wifiOnlyDownloads",
+            "cassette.amll.offlineCache"
+        ] {
+            defaults.removeObject(forKey: key)
+        }
+        guard let support = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else { return }
+        let directory = support
+            .appendingPathComponent("app.cassette", isDirectory: true)
+            .appendingPathComponent("amll", isDirectory: true)
+        try? FileManager.default.removeItem(at: directory)
     }
 
     /// Call after the user re-enters a missing Keychain password so cached API clients
@@ -382,6 +416,7 @@ final class AppContainer {
     func indexLibraryForOnboarding() async -> Bool {
         let ready = await libraryIndexService.rebuildAndWait(using: libraryService)
         guard ready else { return false }
+        await albumCoverPreloadService.prepareCachedThemes(albumCovers: libraryIndexService.albumArtworkSnapshot)
         if #available(iOS 27.0, macOS 27.0, *) {
             await warmSiriLibrary()
         }
@@ -391,6 +426,37 @@ final class AppContainer {
     /// Each track may carry distinct embedded artwork, even within one album.
     func playbackCoverId(for song: DisplayableSong?) -> String? {
         song.map { libraryIndexService.playbackCoverID(for: $0) }
+    }
+
+    /// All cover ids that can describe the current track. The explicit track
+    /// cover comes first (distinct artwork), then the album cover recorded during
+    /// library preparation (the id a download stores), then playback/effective.
+    func playbackCoverCandidates(for song: DisplayableSong?) -> [String] {
+        guard let song else { return [] }
+        var ids: [String] = []
+        if let own = song.explicitCoverArtId { ids.append(own) }
+        if let prepared = preparedCoverId(forAlbumId: song.albumId) { ids.append(prepared) }
+        if let playback = playbackCoverId(for: song) { ids.append(playback) }
+        ids.append(song.effectiveCoverArtId)
+        return ArtworkIdentity.distinct(ids)
+    }
+
+    /// Resolves the best *local* artwork for the full player. Permanent downloaded
+    /// originals are checked across every candidate before a tiered streaming
+    /// derivative; a thumb-only copy must not beat the downloaded album cover.
+    func localPlaybackArtwork(for song: DisplayableSong?) async -> (id: String, image: PlatformImage)? {
+        let ids = playbackCoverCandidates(for: song)
+        for id in ids {
+            if let image = await artworkImageCache.loadPlainDiskCover(coverArtId: id, tier: .hero) {
+                return (id, image)
+            }
+        }
+        for id in ids {
+            if let image = await artworkImageCache.load(coverArtId: id, tier: .hero, allowNetwork: false) {
+                return (id, image)
+            }
+        }
+        return nil
     }
 
     /// Album-id → prepared cover id, for surfaces that only carry the album id (lock screen).
@@ -436,6 +502,7 @@ final class AppContainer {
 
     @MainActor
     private func resetAppSettingsToDefaults() {
+        artworkImageCache.resetArtworkPreferences()
         let defaults = UserDefaults.standard
         let keys = [
             "cassette.cache.maxTracks",
@@ -445,6 +512,7 @@ final class AppContainer {
             "cassette.streaming.wifi",
             "cassette.streaming.cellular",
             "cassette.streaming.download",
+            StreamingSettings.losslessAudioKey,
             "cassette.download.automaticAfterStreaming",
             "cassette.download.automaticOverCellular",
             "cassette.lyrics.largerText",

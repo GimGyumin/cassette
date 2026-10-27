@@ -26,53 +26,18 @@ struct LyricWordKaraokeLine: View {
         if m.isEmpty, isSecondary { return resolved }
         return m
     }
-    private var bw: [LyricDisplayWord] { isSecondary ? [] : resolved.filter(\.isBackground) }
-    private var mi: Int? { idx(in: mw) }
-    private var bi: Int? {
-        if let c = bClip, adjustedMs > c { return nil }
-        return idx(in: bw)
-    }
-    private var bClip: Int? {
-        let e = bw.map(\.endMs).max()
-        guard let n = nextLineStartMs else { return e }
-        return e.map { min($0, n) } ?? n
-    }
-    private var bVis: Bool {
-        guard let f = bw.first, adjustedMs >= f.startMs else { return false }
-        if let c = bClip, adjustedMs > c { return false }
-        return true
-    }
-    private var horizontalAlignment: HorizontalAlignment {
-        switch textAlignment {
-        case .center: return .center
-        case .trailing: return .trailing
-        default: return .leading
-        }
-    }
-    private var frameAlignment: Alignment {
-        switch textAlignment {
-        case .center: return .center
-        case .trailing: return .trailing
-        default: return .leading
-        }
-    }
-
     var body: some View {
-        VStack(alignment: horizontalAlignment, spacing: 6) {
-            if !mw.isEmpty { KaraokeRow(words: mw, activeIdx: mi, ms: adjustedMs, fs: fontSize, sec: isSecondary, align: textAlignment, rm: reduceMotion) }
-            // Background (x-bg) words are rendered as a Dynamic Lyric Insertion flow
-            // block below the translation line in LyricsView — never inline here.
-            // This prevents the chorus text from being drawn inside the main lyric row.
-        }
-        .frame(maxWidth: .infinity, alignment: frameAlignment)
+        PreparedLyricText(words: mw, fontSize: fontSize, secondary: isSecondary)
+            .equatable()
+            .textRenderer(LyricGlyphRenderer(timeMs: Double(adjustedMs), fontSize: fontSize,
+                secondary: isSecondary, motion: !reduceMotion))
+            .multilineTextAlignment(textAlignment)
+            .lineSpacing(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: textAlignment == .trailing ? .trailing : textAlignment == .center ? .center : .leading)
     }
 
     // helpers
-    private func idx(in wds: [LyricDisplayWord]) -> Int? {
-        var found: Int?
-        for (i, w) in wds.enumerated() { if w.startMs <= adjustedMs { found = i } else { break } }
-        return found
-    }
     private static func displayWords(from cl: CueLine) -> [LyricDisplayWord] {
         var r: [LyricDisplayWord] = []; var ip = false
         for c in cl.cue {
@@ -85,85 +50,134 @@ struct LyricWordKaraokeLine: View {
     }
 }
 
-// ── per-word view ──
-
-private struct KaraokeWord: View, Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.word == rhs.word && lhs.displayText == rhs.displayText && lhs.idx == rhs.idx
-            && lhs.activeIdx == rhs.activeIdx && lhs.all[safe: lhs.idx + 1]?.startMs == rhs.all[safe: rhs.idx + 1]?.startMs && lhs.fs == rhs.fs
-            && lhs.sec == rhs.sec && lhs.rm == rhs.rm
-            && (lhs.role != 1 || lhs.ms == rhs.ms) && lhs.role == rhs.role
-    }
-
-    let word: LyricDisplayWord
-    let displayText: String
-    let idx: Int
-    let activeIdx: Int?
-    let all: [LyricDisplayWord]
-    let ms: Int
-    let fs: CGFloat
-    let sec: Bool
-    let rm: Bool
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-            // dim base — always visible
-            Text(verbatim: displayText)
-                .font(font)
-                .foregroundStyle(Color.white.opacity(dimOpacity))
-            // bright fill — masked left→right
-            Text(verbatim: displayText)
-                .font(font)
-                .foregroundStyle(Color.white.opacity(brightOpacity))
-                .mask(alignment: .leading) {
-                    GeometryReader { geo in
-                        Rectangle()
-                            .frame(width: geo.size.width * (rm ? (role > 0 ? 1 : 0) : fillPct))
-                    }
-                }
-        }
-        .scaleEffect(rm ? 1.0 : (isCurrent ? 1.06 : 1.0))
-        .animation(rm ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: isCurrent)
-        .fixedSize()
-    }
-
-    private var font: Font { .system(size: sec ? fs * 0.92 : fs, weight: sec ? .medium : .heavy) }
-    private var role: Int { // 0=upcoming, 1=current, 2=lit/sung
-        if sec {
-            if let a = activeIdx { return idx <= a ? (idx == a ? 1 : 2) : 0 }
-            return 0
-        }
-        guard let a = activeIdx else { return ms < (all.first?.startMs ?? 0) ? 0 : 2 }
-        if idx > a { return 0 }
-        return idx == a ? 1 : 2
-    }
-    private var isCurrent: Bool { role == 1 }
-    private var fillPct: Double {
-        guard role == 1 else { return role == 2 ? 1 : 0 }
-        let b = word.startMs
-        let e: Int
-        if word.endMs > b { e = word.endMs }
-        else if let nxt = all[safe: idx + 1], nxt.startMs > b { e = nxt.startMs }
-        else { e = b + 280 }
-        guard e > b else { return 1 }
-        return min(1, max(0, Double(ms - b) / Double(e - b)))
-    }
-    private var dimOpacity: Double { role == 0 ? (sec ? 0.42 : 0.45) : (sec ? 0.55 : 0.45) }
-    private var brightOpacity: Double { sec ? 0.78 : 1.0 }
+/// Timing is an attribute of text, not a separate layout box. Native paragraph
+/// shaping preserves delimiters, kerning, connected scripts and balanced wrapping.
+private struct LyricTokenTiming: TextAttribute {
+    let id: Int
+    let start: Double
+    let end: Double
+    let emphasized: Bool
+    let lastWord: Bool
+    let group: Int
+    let groupStart: Double
+    let groupEnd: Double
 }
 
-/// Text can discard trailing breakable spaces when each timed token is a separate view.
-/// Wrapping is handled by WordWrapLayout, so nonbreaking glyph spaces preserve its measured
-/// separators without altering source text, cue offsets, translations or sung syllables.
+private struct PreparedLyricText: View, Equatable {
+    let words: [LyricDisplayWord]
+    let fontSize: CGFloat
+    let secondary: Bool
+
+    private var text: Text {
+        let strings = LyricKaraokeSpacing.sourceTexts(words, secondary: secondary)
+        let input = words.enumerated().map { index, word in
+            let end = word.endMs > word.startMs ? word.endMs
+                : max(word.startMs + 1, words[safe: index + 1]?.startMs ?? word.startMs + 280)
+            return AMLLTextPlan.Word(text: strings[index], start: Double(word.startMs), end: Double(end))
+        }
+        return AMLLTextPlan.prepare(input).enumerated().reduce(Text(verbatim: "")) { result, pair in
+            let (index, token) = pair
+            let piece = Text(verbatim: token.word.text).customAttribute(
+                LyricTokenTiming(id: index, start: token.word.start, end: token.word.end,
+                    emphasized: token.emphasized, lastWord: token.lastWord, group: token.group,
+                    groupStart: token.groupStart, groupEnd: token.groupEnd))
+            return Text("\(result)\(piece)")
+        }
+    }
+
+    var body: some View {
+        text.font(.system(size: secondary ? fontSize * 0.92 : fontSize, weight: secondary ? .semibold : .bold))
+            .foregroundStyle(.white)
+    }
+}
+
+struct LyricGlyphRenderer: TextRenderer {
+    let timeMs: Double
+    let fontSize: CGFloat
+    let secondary: Bool
+    let motion: Bool
+
+    // Horizontal display padding also widens SwiftUI's drawing layout without
+    // widening the measured paragraph. Center/trailing alignment then shifts ink
+    // beyond its row and may even wrap differently from the measured text.
+    // The row already supplies horizontal breathing room; only extend vertically
+    // for glyph lift/glow so every alignment uses the same paragraph width.
+    var displayPadding: EdgeInsets { EdgeInsets(top: 14, leading: 0, bottom: 10, trailing: 0) }
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        // One token can wrap or form multiple shaping runs. Its highlight still
+        // progresses once over its complete typographic length, never per visual line.
+        var widths: [Int: CGFloat] = [:]
+        var glyphCounts: [Int: Int] = [:]
+        for line in layout {
+            for run in line {
+                guard let timing = run[LyricTokenTiming.self] else { continue }
+                widths[timing.id, default: 0] += run.typographicBounds.rect.width
+                glyphCounts[timing.group, default: 0] += run.count
+            }
+        }
+        var preceding: [Int: CGFloat] = [:]
+        var glyphOffsets: [Int: Int] = [:]
+        let feather = max(1, fontSize * 0.5)
+        for line in layout {
+            for run in line {
+                guard let timing = run[LyricTokenTiming.self] else { context.draw(run); continue }
+                let bounds = run.typographicBounds.rect
+                let width = max(1, widths[timing.id, default: bounds.width])
+                let prefix = preceding[timing.id, default: 0]
+                preceding[timing.id, default: 0] += bounds.width
+                let edge = bounds.minX - prefix + AMLLWordMask.edge(timeMs: timeMs,
+                    startMs: timing.start, endMs: timing.end, width: width, fadeWidth: feather)
+                for slice in run {
+                    let rect = slice.typographicBounds.rect
+                    let character = glyphOffsets[timing.group, default: 0]
+                    glyphOffsets[timing.group, default: 0] += 1
+                    let phase = AMLLGlyphStyle.sample(timeMs: timeMs, startMs: timing.start, endMs: timing.end,
+                        fontSize: fontSize, character: character, count: glyphCounts[timing.group, default: 1],
+                        emphasized: timing.emphasized, lastWord: timing.lastWord, background: secondary, motion: motion,
+                        emphasisStartMs: timing.groupStart, emphasisEndMs: timing.groupEnd)
+                    var glyph = context
+                    glyph.translateBy(x: rect.midX + phase.shiftX, y: rect.maxY - phase.lift)
+                    glyph.scaleBy(x: phase.scale, y: phase.scale)
+                    glyph.translateBy(x: -rect.midX, y: -rect.maxY)
+                    var dim = glyph
+                    dim.opacity = 0.4
+                    dim.draw(slice)
+                    guard edge + feather / 2 > rect.minX else { continue }
+                    var bright = glyph
+                    if edge - feather / 2 < rect.maxX {
+                        bright.clipToLayer { mask in
+                            mask.fill(Path(bounds.insetBy(dx: -8, dy: -10)), with: .linearGradient(
+                                Gradient(colors: [.white, .clear]),
+                                startPoint: CGPoint(x: edge - feather / 2, y: 0),
+                                endPoint: CGPoint(x: edge + feather / 2, y: 0)))
+                        }
+                    }
+                    bright.opacity = secondary ? 0.84 : 1
+                    if phase.glow > 0.01 {
+                        bright.addFilter(.shadow(color: .white.opacity(phase.glow), radius: phase.glowRadius))
+                    }
+                    bright.draw(slice)
+                }
+            }
+        }
+    }
+}
+
+/// Preserve source separators in one native text paragraph. A delimiter-only span
+/// remains text, so it cannot collapse to a zero-width SwiftUI layout child.
 nonisolated enum LyricKaraokeSpacing {
     static func displayTexts(_ words: [LyricDisplayWord], secondary: Bool) -> [String] {
-        // Scan the line once, instead of scanning every word again for both Text layers.
+        sourceTexts(words, secondary: secondary).map(visibleText)
+    }
+
+    static func sourceTexts(_ words: [LyricDisplayWord], secondary: Bool) -> [String] {
         let hasSourceBoundaries = words.contains { isCJK($0.text) || $0.text.contains(where: \.isWhitespace) }
         return words.enumerated().map { index, word in
             let raw = secondary ? word.text.replacingOccurrences(of: "(", with: "").replacingOccurrences(of: ")", with: "") : word.text
             let text = word.preservesSourceSpacing || hasSourceBoundaries || index == words.count - 1 || raw.hasSuffix(" ")
                 ? raw : raw + " "
-            return visibleText(text)
+            return text
         }
     }
 
@@ -185,106 +199,6 @@ nonisolated enum LyricKaraokeSpacing {
     }
     static func visibleText(_ source: String) -> String {
         source.replacingOccurrences(of: " ", with: "\u{00A0}")
-    }
-}
-
-// ── word-wrapping row Layout ──
-
-private struct KaraokeRow: View {
-    let words: [LyricDisplayWord]
-    let activeIdx: Int?
-    let ms: Int
-    let fs: CGFloat
-    let sec: Bool
-    let align: TextAlignment
-    let rm: Bool
-
-    var body: some View {
-        let displayTexts = LyricKaraokeSpacing.displayTexts(words, secondary: sec)
-        WordWrapLayout(hAlign: align == .center ? .center : align == .trailing ? .trailing : .leading) {
-            ForEach(Array(words.enumerated()), id: \.0) { i, w in
-                KaraokeWord(word: w, displayText: displayTexts[i], idx: i, activeIdx: activeIdx, all: words, ms: ms, fs: fs, sec: sec, rm: rm).equatable()
-            }
-        }
-    }
-}
-
-// ── Bounded word-wrap Layout ──
-
-private struct WordWrapLayout: Layout {
-    let hAlign: HorizontalAlignment
-
-    private static let fallbackW: CGFloat = {
-        #if os(iOS)
-        // Last resort when the layout gets no width proposal. Capped at the macOS value: the raw
-        // screen width is the *device* width on iPad, so an unpainted lyrics pane in Split View could
-        // otherwise be laid out against a 1300 pt line.
-        min(UIScreen.main.bounds.width - 80, 600)
-        #else
-        600
-        #endif
-    }()
-
-    struct Cache {
-        var sizes: [CGSize]
-        var width: CGFloat?
-        var rows: R?
-    }
-
-    func makeCache(subviews: Subviews) -> Cache { Cache(sizes: subviews.map { $0.sizeThatFits(.unspecified) }) }
-    func updateCache(_ cache: inout Cache, subviews: Subviews) { cache = makeCache(subviews: subviews) }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
-        let mw = maxW(proposal)
-        let rows = layout(mw: mw, cache: &cache)
-        return CGSize(width: min(rows.nw, mw), height: rows.th)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
-        let mw = bounds.width > 0 ? bounds.width : maxW(proposal)
-        let rows = layout(mw: mw, cache: &cache)
-        var y = bounds.minY
-        for (ri, row) in rows.rows.enumerated() {
-            let rw = rows.rw[ri]
-            let x0: CGFloat = switch hAlign {
-            case .center: bounds.minX + (mw - rw) / 2
-            case .trailing: bounds.minX + (mw - rw)
-            default: bounds.minX
-            }
-            var x = x0
-            let h = rows.rh[ri]
-            for (sv, sz) in row {
-                subviews[sv].place(at: CGPoint(x: x, y: y + (h - sz.height) / 2), proposal: ProposedViewSize(sz))
-                x += sz.width
-            }
-            y += h
-        }
-    }
-
-    private func maxW(_ p: ProposedViewSize) -> CGFloat {
-        if let w = p.width, w.isFinite { return w }; return Self.fallbackW
-    }
-
-    struct R { let rows: [[(Int, CGSize)]]; let rw: [CGFloat]; let rh: [CGFloat]; let nw: CGFloat; let th: CGFloat }
-
-    private func layout(mw: CGFloat, cache: inout Cache) -> R {
-        if cache.width == mw, let rows = cache.rows { return rows }
-        var rows: [[(Int, CGSize)]] = [[]]
-        var rw: [CGFloat] = [0]
-        var rh: [CGFloat] = [0]
-        for (sv, sz) in cache.sizes.enumerated() {
-            let last = rows.count - 1
-            if rw[last] > 0, rw[last] + sz.width > mw { rows.append([]); rw.append(0); rh.append(0) }
-            rows[rows.count - 1].append((sv, sz))
-            rw[rw.count - 1] += sz.width
-            rh[rh.count - 1] = max(rh[rh.count - 1], sz.height)
-        }
-        var th: CGFloat = 0, nw: CGFloat = 0
-        for (i, h) in rh.enumerated() { nw = max(nw, rw[i]); th += h }
-        let result = R(rows: rows, rw: rw, rh: rh, nw: nw, th: th)
-        cache.width = mw
-        cache.rows = result
-        return result
     }
 }
 

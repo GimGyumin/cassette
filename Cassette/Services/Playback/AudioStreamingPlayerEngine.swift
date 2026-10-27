@@ -25,21 +25,36 @@ nonisolated final class AudioStreamingPlayerEngine: AudioStreamingPlaybackEngine
     )
 
     private let playerLock = NSRecursiveLock()
-    private var storedPlayer: AudioPlayer
-    private var player: AudioPlayer { playerLock.withLock { storedPlayer } }
+    private var storedPlayer: AudioPlayer?
     private let configuration: AudioPlayerConfiguration
     private weak var callbackDelegate: AudioPlayerDelegate?
     private var needsReplacement = false
     private var filters: [String: FilterCallback] = [:]
+    private var pendingNodes: [AVAudioNode] = []
+    private var storedVolume: Float = 1
 
-    var playerIdentity: ObjectIdentifier { playerLock.withLock { ObjectIdentifier(storedPlayer) } }
+    var playerIdentity: ObjectIdentifier? { playerLock.withLock { storedPlayer.map(ObjectIdentifier.init) } }
 
     init(configuration: AudioPlayerConfiguration = AudioStreamingPlayerEngine.defaultConfiguration) {
         self.configuration = configuration
-        self.storedPlayer = AudioPlayer(configuration: configuration)
+    }
+
+    /// Native playback and idle browsing must not allocate the fallback engine's PCM
+    /// reservoir, audio graph and networking client. Configuration is retained until play.
+    private func playerForPlaybackLocked() -> AudioPlayer {
+        if let storedPlayer { return storedPlayer }
+        let player = AudioPlayer(configuration: configuration)
+        player.volume = storedVolume
         player.frameFiltering.add(entry: PlaybackBeatMeter.filterName) { buffer, _ in
             PlaybackBeatMeter.enqueue(buffer: buffer)
         }
+        for (name, filter) in filters { player.frameFiltering.add(entry: name, filter: filter) }
+        if !pendingNodes.isEmpty { player.attach(nodes: pendingNodes) }
+        pendingNodes.removeAll()
+        player.delegate = callbackDelegate
+        storedPlayer = player
+        needsReplacement = false
+        return player
     }
 
     /// Engine callbacks (state changes, EOF, errors). Owned here, wired by `PlayerService`.
@@ -47,7 +62,7 @@ nonisolated final class AudioStreamingPlayerEngine: AudioStreamingPlaybackEngine
         get { playerLock.withLock { callbackDelegate } }
         set { playerLock.withLock {
             callbackDelegate = newValue
-            if !needsReplacement { storedPlayer.delegate = newValue }
+            if !needsReplacement { storedPlayer?.delegate = newValue }
         } }
     }
 
@@ -56,14 +71,17 @@ nonisolated final class AudioStreamingPlayerEngine: AudioStreamingPlaybackEngine
     }
 
     func resetAfterMediaServicesReset() {
-        playerLock.withLock { replacePlayer(preserveNodes: false) }
+        playerLock.withLock {
+            pendingNodes.removeAll()
+            if storedPlayer != nil { replacePlayer(preserveNodes: false) }
+        }
     }
 
     /// AudioPlayer.stop() schedules source cleanup asynchronously. Reusing that instance
     /// immediately lets its old cleanup erase the new entry, leaving every retry at zero.
     /// A stopped/failed instance is retired; queued gapless entries keep the current one.
     private func replacePlayer(preserveNodes: Bool) {
-        let old = storedPlayer
+        guard let old = storedPlayer else { return }
         old.delegate = nil
         let volume = old.volume
         old.stop()
@@ -84,78 +102,82 @@ nonisolated final class AudioStreamingPlayerEngine: AudioStreamingPlaybackEngine
 
     // MARK: - PlaybackEngine
 
-    var state: AudioPlayerState { player.state }
-    var progress: Double { player.progress }
-    var duration: Double { player.duration }
-    var isSeekable: Bool { player.isSeekable }
+    var state: AudioPlayerState { playerLock.withLock { storedPlayer?.state ?? (needsReplacement ? .stopped : .ready) } }
+    var progress: Double { playerLock.withLock { storedPlayer?.progress ?? 0 } }
+    var duration: Double { playerLock.withLock { storedPlayer?.duration ?? 0 } }
+    var isSeekable: Bool { playerLock.withLock { storedPlayer?.isSeekable ?? false } }
 
     var volume: Float {
-        get { player.volume }
-        set { player.volume = newValue }
+        get { playerLock.withLock { storedPlayer?.volume ?? storedVolume } }
+        set { playerLock.withLock { storedVolume = newValue; storedPlayer?.volume = newValue } }
     }
 
     func play(url: URL, headers: [String: String]) {
         playerLock.withLock {
-            if needsReplacement || storedPlayer.state == .error { replacePlayer(preserveNodes: true) }
-            storedPlayer.play(url: url, headers: headers)
+            if needsReplacement || storedPlayer?.state == .error { replacePlayer(preserveNodes: true) }
+            playerForPlaybackLocked().play(url: url, headers: headers)
         }
     }
 
     func queue(url: URL, headers: [String: String]) {
-        player.queue(url: url, headers: headers)
+        playerLock.withLock { playerForPlaybackLocked().queue(url: url, headers: headers) }
     }
 
     func removeFromQueue(url: URL) {
-        player.removeFromQueue(url: url)
+        playerLock.withLock { storedPlayer?.removeFromQueue(url: url) }
     }
 
     func stop() {
         playerLock.withLock {
             guard !needsReplacement else { return }
             needsReplacement = true
-            storedPlayer.delegate = nil
-            storedPlayer.stop()
+            storedPlayer?.delegate = nil
+            storedPlayer?.stop()
         }
     }
-    func pause() { player.pause() }
-    func resume() { player.resume() }
-    func seek(to time: Double) { player.seek(to: time) }
+    func pause() { playerLock.withLock { storedPlayer?.pause() } }
+    func resume() { playerLock.withLock { storedPlayer?.resume() } }
+    func seek(to time: Double) { playerLock.withLock { storedPlayer?.seek(to: time) } }
 
     func recoverQueuedTransitionIfNeeded() {
-        switch player.state {
-        case .paused:
-            player.resume()
-        case .bufferring:
-            // `AudioPlayer.resume()` is deliberately a no-op unless its private state is
-            // `.paused`. A queued hand-off can instead be left in `.waitingForData` (published as
-            // `.bufferring`), so reproduce the transport reset that previously only happened
-            // after the listener touched play/pause.
-            player.pause()
-            player.resume()
-        default:
-            break
+        playerLock.withLock {
+            guard let player = storedPlayer else { return }
+            switch player.state {
+            case .paused:
+                player.resume()
+            case .bufferring:
+                // `AudioPlayer.resume()` is deliberately a no-op unless its private state is
+                // `.paused`. Wake a queued hand-off without replacing its buffered entry.
+                player.pause()
+                player.resume()
+            default:
+                break
+            }
         }
     }
 
     // MARK: - AudioGraphHosting
 
     func attach(node: AVAudioNode) {
-        playerLock.withLock { storedPlayer.attach(node: node) }
+        playerLock.withLock {
+            if let storedPlayer { storedPlayer.attach(node: node) }
+            else if !pendingNodes.contains(where: { $0 === node }) { pendingNodes.append(node) }
+        }
     }
 
     func addFrameFilter(named name: String, filter: @escaping FilterCallback) {
         // Replacing an existing entry keeps the "install once" behaviour the beat meter relies on.
         playerLock.withLock {
             filters[name] = filter
-            storedPlayer.frameFiltering.remove(entry: name)
-            storedPlayer.frameFiltering.add(entry: name, filter: filter)
+            storedPlayer?.frameFiltering.remove(entry: name)
+            storedPlayer?.frameFiltering.add(entry: name, filter: filter)
         }
     }
 
     func removeFrameFilter(named name: String) {
         playerLock.withLock {
             filters[name] = nil
-            storedPlayer.frameFiltering.remove(entry: name)
+            storedPlayer?.frameFiltering.remove(entry: name)
         }
     }
 }

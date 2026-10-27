@@ -28,6 +28,7 @@ extension PlayerService {
     /// Invalidate pending work before suspending. Session interruptions use this without
     /// clearing the user's pre-interruption intention, unlike an explicit pause command.
     func cancelPendingTransportWork() {
+        cancelQualityUpgrade()
         playbackRequestTask?.cancel()
         playbackRequestTask = nil
         playbackAcquisitionTask?.cancel()
@@ -76,6 +77,7 @@ extension PlayerService {
                                position: TimeInterval? = nil) async {
         guard contextIsCurrent(context), transport.terminalContext != context else { return }
         transport.terminalContext = context
+        Logger.player.error("[PLAYBACK] run=\(RuntimeDiagnostics.sessionID, privacy: .public) event=terminal_failure epoch=\(self.playbackEpoch, privacy: .public) engine=\(self.systemPlayback.isActive ? "AVPlayer" : "AudioStreaming", privacy: .public)")
         finalizePlaySegment()
         // Do not cancel the task that is committing its own failure until the UI is committed.
         let progress = progressTask

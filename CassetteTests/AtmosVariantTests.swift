@@ -33,6 +33,31 @@ struct AtmosVariantTests {
         #expect(AtmosAlbumPolicy.baseName("Dangerous (Dolby Atmos) Bonus") == "Dangerous (Dolby Atmos) Bonus")
     }
 
+    @Test(arguments: ["Michael Jackson's The Dolby Atmos", "Michael Jackson's The Dolby Atmos Collection",
+                      "The Essential [DOLBY ATMOS]", "The Essential - Dolby Atmos"])
+    func dedicatedAtmosCollectionsSupplyAudioWithoutMergingAlbums(_ name: String) {
+        let original = song("s")
+        let alternate = song("a", album: name, albumID: "collection")
+        let albums = [album("stereo", name: "Thriller"), album("collection", name: name)]
+        #expect(AtmosAlbumPolicy.isAtmos(name))
+        #expect(AtmosVariantCatalogue(songs: [original, alternate], albums: albums).preferred(for: original) == alternate)
+        #expect(AtmosAlbumPolicy.presented(albums).map(\.id) == ["stereo", "collection"])
+        #expect(AudioQualityClassifier.requiresSystemPlayer(alternate))
+        #expect(AudioQualityClassifier.shouldSkipTranscoding(alternate))
+    }
+
+    @Test func collectionNamesDoNotRelaxRecordingIdentityOrAmbiguityChecks() {
+        let name = "Michael Jackson's The Dolby Atmos"
+        let original = song("s")
+        let alternate = song("a", album: name, albumID: "collection")
+        let duplicate = song("b", album: "Michael Jackson's The Dolby Atmos Collection", albumID: "other")
+        #expect(AtmosVariantCatalogue(songs: [original, alternate, duplicate]).preferred(for: original) == nil)
+        #expect(!AtmosVariantCatalogue.compatible(original, song("a", title: "Billie Jean (Live)", album: name)))
+        #expect(!AtmosVariantCatalogue.compatible(original, song("a", album: name, artist: "Other Artist")))
+        #expect(!AtmosAlbumPolicy.isAtmos("Dolby Atmosphere"))
+        #expect(!AtmosAlbumPolicy.isAtmos("NotDolby Atmos"))
+    }
+
     @Test func prefersSameAlbumBeforeRecordingIDOnACompilation() {
         let original = song("s", mbid: "recording")
         let paired = song("a", album: "Thriller (Dolby Atmos)", albumID: "atmos")
@@ -89,7 +114,8 @@ struct AtmosVariantTests {
         let sid: UUID
         func clean() { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
     }
-    private func fixture() async throws -> Fixture {
+    private func fixture(atmosAlbumName: String = "Thriller (Dolby Atmos)",
+                         persistedMatchingVersion: Int? = nil) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("downloads"), withIntermediateDirectories: true)
         let suite = "Cassette.AtmosTests." + UUID().uuidString
@@ -104,11 +130,12 @@ struct AtmosVariantTests {
         let downloads = DownloadService(serverService: server, modelContainer: model, toastService: ToastService(),
             journal: BackgroundDownloadJournal(directory: root.appendingPathComponent("journal")), storageDirectory: root)
         let index = LibraryIndexService(serverID: { server.state.activeServer?.id }, networkAvailable: { false }, directory: root, defaults: defaults)
-        let original = song("s"), alternate = song("a", album: "Thriller (Dolby Atmos)", albumID: "atmos")
-        let albums = [album("stereo", name: "Thriller", songs: [original]), album("atmos", name: "Thriller (Dolby Atmos)", songs: [alternate])]
+        let original = song("s"), alternate = song("a", album: atmosAlbumName, albumID: "atmos")
+        let albums = [album("stereo", name: "Thriller", songs: [original]), album("atmos", name: atmosAlbumName, songs: [alternate])]
         let snapshot = LibraryIndexService.Snapshot(artists: [], albums: albums.map {
             .init(id: $0.id, name: $0.name, artist: $0.artist, coverArtId: $0.coverArt)
-        }, playlists: [], songs: [original, alternate], date: Date(), albumCatalog: albums)
+        }, playlists: [], songs: [original, alternate], date: Date(), albumCatalog: albums,
+            atmosMatches: persistedMatchingVersion.map { _ in [:] }, atmosMatchingVersion: persistedMatchingVersion)
         try JSONEncoder().encode(snapshot).write(to: root.appendingPathComponent("\(sid).json"))
         #expect(await index.ensureIndexedAndWait(using: SearchLibraryStub()))
         let settings = StreamingSettings(defaults: defaults)
@@ -116,6 +143,23 @@ struct AtmosVariantTests {
             serverState: server.state, streamingSettings: settings, libraryIndex: index)
         return Fixture(root: root, defaults: defaults, suite: suite, model: model, server: server,
                        downloads: downloads, index: index, settings: settings, resolver: resolver, sid: sid)
+    }
+
+    @Test func downloadPreferenceIsIndependentOfPlaybackQualityAndAccountScoped() async throws {
+        let f = try await fixture(); defer { f.clean() }
+        let original = song("s")
+        #expect(await f.resolver.preferredAtmosDownloadSong(for: original, serverId: f.sid) == nil)
+        f.settings.preferDolbyAtmosDownload = true
+        f.settings.preferDolbyAtmos = false
+        f.settings.losslessAudioEnabled = false
+        f.settings.downloadFormat = .aac128
+        let variant = try #require(await f.resolver.preferredAtmosDownloadSong(for: original, serverId: f.sid))
+        #expect(variant.id == "a")
+        #expect(await f.resolver.preferredAtmosDownloadSong(for: variant, serverId: f.sid) == variant)
+        #expect(await f.resolver.preferredAtmosDownloadSong(for: song("missing", title: "No match"), serverId: f.sid) == nil)
+        #expect(await f.resolver.preferredAtmosDownloadSong(for: original, serverId: UUID()) == nil)
+        f.settings.preferDolbyAtmosDownload = false
+        #expect(await f.resolver.preferredAtmosDownloadSong(for: variant, serverId: f.sid) == nil)
     }
 
     @Test func persistedIndexMergesSearchAndRestoresAccountScopedManualChoice() async throws {
@@ -135,8 +179,9 @@ struct AtmosVariantTests {
         #expect(f.defaults.dictionary(forKey: "cassette.atmos.matches.\(f.sid)") == nil)
     }
 
-    @Test func preferenceUsesActualTrackRawStreamWithoutChangingDisplayIdentity() async throws {
-        let f = try await fixture(); defer { f.clean() }
+    @Test(arguments: ["Thriller (Dolby Atmos)", "Michael Jackson's The Dolby Atmos"])
+    func preferenceUsesActualTrackRawStreamWithoutChangingDisplayIdentity(_ albumName: String) async throws {
+        let f = try await fixture(atmosAlbumName: albumName, persistedMatchingVersion: 1); defer { f.clean() }
         #expect(!f.settings.preferDolbyAtmos)
         f.settings.wifiFormat = .aac128
         f.settings.preferDolbyAtmos = true
@@ -155,6 +200,71 @@ struct AtmosVariantTests {
         let stereo = try await f.resolver.resolve(songId: "s", serverId: f.sid, song: original)
         #expect(stereo.playbackSong == nil)
         #expect(URLComponents(url: stereo.url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value == "s")
+    }
+
+    @Test func cellularRestrictionFallsBackWithoutDisablingWiFiAtmos() async throws {
+        let f = try await fixture(); defer { f.clean() }
+        f.settings.preferDolbyAtmos = true
+        f.settings.allowDolbyAtmosOverCellular = false
+        #expect(!StreamingSettings(defaults: f.defaults).allowDolbyAtmosOverCellular)
+        f.server.state.isCellularConnection = true
+        let cellular = try await f.resolver.resolve(songId: "s", serverId: f.sid, song: song("s"))
+        #expect(cellular.playbackSong == nil)
+        #expect(URLComponents(url: cellular.url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value == "s")
+        let atmos = song("a", album: "Thriller (Dolby Atmos)", albumID: "atmos")
+        do {
+            _ = try await f.resolver.resolve(songId: "a", serverId: f.sid, song: atmos)
+            Issue.record("A Dolby-only remote track bypassed cellular restriction")
+        } catch CassetteError.dolbyAtmosCellularRestricted {}
+        f.server.state.isCellularConnection = false
+        let wifi = try await f.resolver.resolve(songId: "s", serverId: f.sid, song: song("s"))
+        #expect(wifi.playbackSong?.id == "a")
+    }
+
+    @Test func cellularRestrictionStillAllowsDownloadedDolbyOriginal() async throws {
+        let f = try await fixture(); defer { f.clean() }
+        let context = ModelContext(f.model)
+        try Data([1, 2, 3]).write(to: f.root.appendingPathComponent("downloads/a.m4a"))
+        context.insert(DownloadedTrack(songId: "a", serverId: f.sid, filePath: "a.m4a", fileSize: 3,
+            mimeType: "audio/mp4", isOriginalAudio: true, title: "Billie Jean", artist: "Michael Jackson",
+            album: "Thriller (Dolby Atmos)", suffix: "m4a"))
+        try context.save()
+        f.settings.preferDolbyAtmos = true
+        f.settings.allowDolbyAtmosOverCellular = false
+        f.server.state.isCellularConnection = true
+        let local = try await f.resolver.resolve(songId: "s", serverId: f.sid, song: song("s"))
+        #expect(local.isLocal)
+        #expect(local.playbackSong?.id == "a")
+    }
+
+    @Test func albumDetailWarmsAStandaloneAtmosCollectionWithoutAddingItsTracks() async throws {
+        let f = try await fixture(); defer { f.clean() }
+        f.index.clear()
+        let original = song("s")
+        let collectionName = "Michael Jackson's The Dolby Atmos"
+        let alternate = song("a", album: collectionName, albumID: "collection")
+        let bonus = song("bonus", title: "Collection Exclusive", album: collectionName, albumID: "collection")
+        let base = album("stereo", name: "Thriller", songs: [original])
+        let collection = album("collection", name: collectionName, songs: [alternate, bonus])
+        let foreign = album("foreign", name: "Other Dolby Atmos Collection", artist: "Other Artist")
+        func response<T: Encodable>(_ value: T, key: String) throws -> Data {
+            let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
+            return try JSONSerialization.data(withJSONObject: ["subsonic-response": ["status": "ok", "version": "1.16.1", key: object]])
+        }
+        let artist = ArtistID3(id: "Michael Jackson", name: "Michael Jackson", album: [base, collection, foreign])
+        f.server.musicClient = SwiftSonicClient(configuration: ServerConfiguration(serverURL: URL(string: "https://music.example.invalid")!, username: "u", password: "p"),
+            transport: AtmosAlbumTransport(responses: ["stereo": try response(base, key: "album"), "collection": try response(collection, key: "album"), "artist": try response(artist, key: "artist")]), retryPolicy: .none)
+        let library = LibraryService(serverService: f.server, modelContainer: f.model, downloadService: f.downloads,
+                                     statsService: StatsService(modelContainer: f.model), libraryIndex: f.index)
+        let detail = try await library.displayAlbum(id: "stereo")
+        #expect(detail == base)
+        #expect(detail.song?.map(\.id) == [original.id])
+        #expect(!f.index.hasUsableIndex)
+        #expect(f.index.preferredAtmosSong(for: original, serverId: f.sid) == alternate)
+        f.settings.preferDolbyAtmos = true
+        let source = try await f.resolver.resolve(songId: original.id, serverId: f.sid, song: original)
+        #expect(source.playbackSong == alternate)
+        #expect(URLComponents(url: source.url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value == alternate.id)
     }
 
     @Test func offlineUsesOriginalDownloadAndRejectsConvertedAtmosFile() async throws {
@@ -246,12 +356,13 @@ struct AtmosVariantTests {
         #expect(f.index.preferredAtmosSong(for: stereoOnly, serverId: f.sid) == nil)
     }
 
-    @Test func playerKeepsVisibleAlbumAndQueueWhilePublishingActualAudioMetadata() async throws {
-        let f = try await fixture(); defer { f.clean() }
+    @Test(arguments: ["Thriller (Dolby Atmos)", "Michael Jackson's The Dolby Atmos"])
+    func playerKeepsVisibleAlbumAndQueueWhilePublishingActualAudioMetadata(_ albumName: String) async throws {
+        let f = try await fixture(atmosAlbumName: albumName); defer { f.clean() }
         let engine = FakePlaybackEngine()
         let container = try AppContainer(inMemory: true, engine: engine)
         let original = song("s")
-        let alternate = song("a", album: "Thriller (Dolby Atmos)", albumID: "atmos")
+        let alternate = song("a", album: albumName, albumID: "atmos")
         let player = PlayerService(state: container.playerState, mediaResolver: f.resolver, serverService: f.server,
             sessionService: container.sessionService, artworkImageCache: container.artworkImageCache,
             lyricsService: container.lyricsService, libraryService: SearchLibraryStub(), cacheService: MockCacheService(),
@@ -263,10 +374,9 @@ struct AtmosVariantTests {
         let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/SilentMP3.mp3")
         await player.startPlayback(song: original, source: .downloaded(file, playbackSong: alternate),
                                    serverId: f.sid, epoch: 0, preservePlayingState: false)
-        #expect(container.playerState.currentTrack?.id == "s")
-        #expect(container.playerState.currentTrack?.coverArtId == "cover-stereo")
-        #expect(container.playerState.queue.map(\.id) == ["s"])
-        #expect(container.playerState.currentPlaybackTrack?.id == "a")
+        #expect(container.playerState.currentTrack == original)
+        #expect(container.playerState.queue == [original])
+        #expect(container.playerState.currentPlaybackTrack == alternate)
         await player.stop()
         #expect(container.playerState.currentPlaybackTrack == nil)
     }

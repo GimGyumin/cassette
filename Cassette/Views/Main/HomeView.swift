@@ -562,8 +562,8 @@ struct HomeView: View {
                     } else {
                         LazyVGrid(columns: recentColumns, spacing: CassetteSpacing.m) {
                             ForEach(vm.recentAlbums) { album in
-                                NavigationLink(value: HomeDestination.album(album)) {
-                                    HomeAlbumCell(album: album, namespace: recentlyAddedZoomNamespace)
+                                AlbumNavigationLink(album: album, namespace: recentlyAddedZoomNamespace) { sourceID, namespace in
+                                    HomeAlbumCell(album: album, sourceID: sourceID, namespace: namespace)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -948,6 +948,7 @@ private nonisolated struct DownloadedItem: Identifiable, Sendable {
 
 private struct HomeAlbumCell: View {
     let album: AlbumID3
+    let sourceID: String
     let namespace: Namespace.ID
 
     @Environment(\.appContainer) private var container
@@ -962,7 +963,7 @@ private struct HomeAlbumCell: View {
                     .cassetteCoverStyle(cornerRadius: CassetteCornerRadius.standard)
             }
             .aspectRatio(1, contentMode: .fit)
-            .cassetteMatchedTransitionSource(id: album.id, in: namespace)
+            .cassetteMatchedTransitionSource(id: sourceID, in: namespace)
             Text(album.name)
                 .foregroundStyle(.primary)
                 .font(.cassetteCaption)
@@ -1026,8 +1027,6 @@ private struct HomeDestinationRegistrar: ViewModifier {
                 case .album(let album):
                     AlbumDetailView(
                         album: album,
-                        zoomSourceId: album.id,
-                        zoomNamespace: recentlyAddedZoomNamespace,
                         coverArtId: album.coverArt
                     )
                 case .artist(let artist):
@@ -1050,8 +1049,6 @@ private struct HomeDestinationRegistrar: ViewModifier {
                     AlbumDetailView(
                         albumId: id,
                         albumName: name,
-                        zoomSourceId: id,
-                        zoomNamespace: pinnedZoomNamespace,
                         coverArtId: coverArtId
                     )
                 case .playlistById(let id, let name, let coverArtId):

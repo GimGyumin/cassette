@@ -10,8 +10,16 @@ import SwiftSonic
 struct LyricsInstrumentalGapLeaf: View {
     @Bindable var viewModel: LyricsViewModel
     var body: some View {
-        if let progress = viewModel.instrumentalGapProgress {
-            LyricInstrumentalDotsView(progress: progress)
+        if viewModel.hasInstrumentalGap {
+            TimelineView(.animation(minimumInterval: PerformanceGovernor.shared.budget.lyricsRenderInterval,
+                paused: !viewModel.isPlaying || !viewModel.isShown || !viewModel.isActive)) { _ in
+                let elapsed = viewModel.presentationTimeMs() - viewModel.instrumentalGapStartMs
+                let duration = max(1, viewModel.instrumentalGapEndMs - viewModel.instrumentalGapStartMs)
+                LyricInstrumentalDotsView(progress: Double(elapsed) / Double(duration),
+                    elapsedMs: Double(elapsed), durationMs: Double(duration),
+                    isIntro: viewModel.instrumentalGapAfterIndex == nil,
+                    allowsMotion: PerformanceGovernor.shared.budget.allowsDecorativeMotion)
+            }
         }
     }
 }
@@ -27,17 +35,17 @@ struct LyricsPlaybackLineRow: View {
     let reduceMotion: Bool
     var alignment: HorizontalAlignment = .leading
     var textAlignment: TextAlignment = .leading
-    var primaryFontSize: CGFloat = 34
+    var primaryFontSize: CGFloat = 36
     var usesSpeakerLayout: Bool = false
+    var horizontalInset: CGFloat = 32
     let onTap: () -> Void
 
     private var followsPlayback: Bool { viewModel.followsPlayback }
     private var isSecondary: Bool { viewModel.isSecondaryAgent(at: index) }
-    private var isCurrent: Bool { followsPlayback && viewModel.activeLineIndices.contains(index) }
+    private var isCurrent: Bool { followsPlayback && viewModel.emphasizedLineIndices.contains(index) }
     private var currentLineIndex: Int? { viewModel.currentLineIndex }
     private var karaokeByteEnd: Int? { isCurrent ? viewModel.karaokeByteEnds[index] : nil }
     private var cueLine: CueLine? { viewModel.cueLine(at: index) }
-    private var karaokeMs: Int { viewModel.karaokePlaybackMs }
     private var nextLyricStartMs: Int? { viewModel.nextLyricStartMs(after: index) }
     private var isTTMLWordTiming: Bool { viewModel.lyricDocument?.timing == .word }
 
@@ -59,23 +67,24 @@ struct LyricsPlaybackLineRow: View {
     }
     private var emphasisOpacity: Double {
         guard followsPlayback else { return 1 }
-        if isSecondary { return isCurrent ? 0.62 : 0.28 }
+        if isSecondary { return isCurrent ? 0.82 : 0.38 }
         if isCurrent { return 1 }
         guard let currentLineIndex else { return 0.30 }
         switch abs(index - currentLineIndex) {
-        case 1: return 0.55; case 2: return 0.40; case 3: return 0.28; default: return 0.22
+        case 1: return index > currentLineIndex ? 0.38 : 0.30
+        case 2: return 0.28
+        default: return 0.24
         }
     }
     private var emphasisScale: CGFloat { guard followsPlayback else { return 1 }; return isCurrent ? 1.0 : 0.985 }
-    /// Keep word-timed TTML text out of a blur render pass. Its per-word masks update every
-    /// playback tick, and animating a blurred row while scrolling can leave stale glyph textures.
+    /// Only dormant, static text is blurred. The frame-driven active glyphs stay sharp.
     private var emphasisBlur: CGFloat {
-        guard !isTTMLWordTiming, followsPlayback, !isCurrent, let currentLineIndex else { return 0 }
+        guard followsPlayback, !isCurrent, let currentLineIndex else { return 0 }
         if isSecondary { return 1.4 }
         switch abs(index - currentLineIndex) {
-        case 1: return 0.8
-        case 2: return 1.8
-        default: return 2.8
+        case 1: return 2.4
+        case 2: return 3.2
+        default: return 4.0
         }
     }
     private var translationAnimation: Animation? { reduceMotion ? nil : .easeInOut(duration: 0.38) }
@@ -93,8 +102,22 @@ struct LyricsPlaybackLineRow: View {
             removal: .opacity
         )
     }
-    private var chorusTranslationTransition: AnyTransition {
-        reduceMotion ? .opacity : .offset(y: 16).combined(with: .opacity)
+    private func settledTime(_ words: [LyricDisplayWord]) -> Int {
+        let start = words.map(\.startMs).min() ?? 0
+        let end = words.map { max($0.endMs, $0.startMs + 280) }.max() ?? cueLine?.end ?? start
+        return Int(AMLLGlyphStyle.settledTime(startMs: Double(start), endMs: Double(end)))
+    }
+
+    private var lineAnimation: Animation? {
+        guard !reduceMotion, !viewModel.justSeeked, !viewModel.amllTransitionIsSeek,
+              viewModel.playerState.pendingSeekPosition == nil else { return nil }
+        // Dimming follows the vocal boundary immediately; stagger only incoming rows.
+        if !isCurrent { return .easeOut(duration: 0.10) }
+        let current = currentLineIndex ?? index
+        let firstVisible = max(0, current - 2)
+        let delay = AMLLSpringPolicy.stagger(visibleOrdinal: max(0, index - firstVisible),
+            focalOrdinal: current - firstVisible, seeking: viewModel.isUserScrolling)
+        return .easeOut(duration: 0.45).delay(delay)
     }
 
     // MARK: - Body
@@ -111,7 +134,7 @@ struct LyricsPlaybackLineRow: View {
                         if followsPlayback, !pronunciationWords.isEmpty {
                             LyricsWordClockLine(
                                 words: pronunciationWords,
-                                viewModel: viewModel, followsClock: isCurrent, idleMs: (pronunciationWords.first?.startMs ?? 0) - 1,
+                                viewModel: viewModel, followsClock: isCurrent, idleMs: settledTime(pronunciationWords),
                                 fontSize: resolvedFontSize,
                                 textAlignment: textAlignment,
                                 reduceMotion: reduceMotion
@@ -124,15 +147,16 @@ struct LyricsPlaybackLineRow: View {
                     } else if followsPlayback, isTTMLWordTiming {
                         LyricsWordClockLine(
                             words: viewModel.displayWords(at: index), cueLine: cueLine,
-                            viewModel: viewModel, followsClock: isCurrent, idleMs: (viewModel.displayWords(at: index).first?.startMs ?? cueLine?.cue.first?.start ?? 0) - 1,
+                            viewModel: viewModel, followsClock: isCurrent, idleMs: settledTime(viewModel.displayWords(at: index)),
                             nextLineStartMs: nextLyricStartMs, fontSize: resolvedFontSize,
                             isSecondary: isSecondary, textAlignment: textAlignment, reduceMotion: reduceMotion
                         )
                     } else {
                         Text(LyricKaraokeText.attributed(line.originalText, activeThroughByteEnd: karaokeByteEnd,
-                            isCurrent: isCurrent && !isSecondary, followsPlayback: followsPlayback, fontSize: resolvedFontSize))
+                            isCurrent: isCurrent, followsPlayback: followsPlayback, fontSize: resolvedFontSize, dimsInactive: false))
                     }
                 }
+                .lineSpacing(2)
                 .multilineTextAlignment(textAlignment).fixedSize(horizontal: false, vertical: true)
 
                 // 2. Pronunciation
@@ -147,7 +171,7 @@ struct LyricsPlaybackLineRow: View {
                     let pronunciationWords = viewModel.pronunciationWords(at: index)
                     if followsPlayback, !pronunciationWords.isEmpty {
                         LyricsWordClockLine(words: pronunciationWords,
-                            viewModel: viewModel, followsClock: isCurrent, idleMs: (pronunciationWords.first?.startMs ?? 0) - 1,
+                            viewModel: viewModel, followsClock: isCurrent, idleMs: settledTime(pronunciationWords),
                             fontSize: max(16, primaryFontSize * 0.46), textAlignment: textAlignment, reduceMotion: reduceMotion)
                     } else {
                         Text(pronunciationText)
@@ -158,7 +182,7 @@ struct LyricsPlaybackLineRow: View {
                 }
 
                 // 3. Backing overlay
-                if !isSecondary, isCurrent, currentLineIndex == index {
+                if !isSecondary, currentLineIndex == index {
                     ForEach(viewModel.activeBackingOverlayIndices(underLead: index), id: \.self) { bi in
                         let text = viewModel.translatedLyrics.indices.contains(bi) ? viewModel.translatedLyrics[bi].originalText : ""
                         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -181,53 +205,28 @@ struct LyricsPlaybackLineRow: View {
                     Text(line.translatedText)
                         .font(.system(size: translationFontSize, weight: .semibold))
                         .foregroundColor(.white.opacity(0.78)).opacity(isCurrent ? 1.0 : 0.48)
-                        .multilineTextAlignment(textAlignment).fixedSize(horizontal: false, vertical: true)
+                        .lineSpacing(2)
+                .multilineTextAlignment(textAlignment).fixedSize(horizontal: false, vertical: true)
                         .transition(translationTransition)
                 }
 
-                // 5. Chorus — word-by-word karaoke fill for original (same engine as lead vocal).
-                //    Only when bgWords (English x-bg) exist on this lead row.
-                if isCurrent, !isSecondary {
-                    let bgWords = viewModel.displayBackgroundWords(at: index)
-                    if !bgWords.isEmpty,
-                       karaokeMs >= (bgWords.map(\.startMs).min() ?? 0),
-                       karaokeMs < (bgWords.map(\.endMs).max() ?? 0) {
-                        let transText = line.backgroundTranslation.trimmingCharacters(in: .whitespacesAndNewlines)
-                        VStack(alignment: alignment, spacing: 3) {
-                            LyricsWordClockLine(
-                                words: bgWords,
-                                cueLine: nil,
-                                viewModel: viewModel, followsClock: true, idleMs: 0,
-                                nextLineStartMs: nil,
-                                fontSize: translationFontSize * 0.92,
-                                isSecondary: true,
-                                textAlignment: textAlignment,
-                                reduceMotion: reduceMotion
-                            )
-                            let pronunciation = viewModel.pronunciationWords(at: index, background: true)
-                            if !pronunciation.isEmpty {
-                                LyricsWordClockLine(words: pronunciation, viewModel: viewModel, followsClock: true, idleMs: 0,
-                                    fontSize: translationFontSize * 0.80, isSecondary: true,
-                                    textAlignment: textAlignment, reduceMotion: reduceMotion)
-                            }
-                            if showTranslation, !transText.isEmpty {
-                                Text(transText)
-                                    .font(.system(size: translationFontSize * 0.80, weight: .regular))
-                                    .foregroundColor(.white.opacity(0.55)).multilineTextAlignment(textAlignment)
-                                    .fixedSize(horizontal: false, vertical: true).transition(chorusTranslationTransition)
-                            }
-                        }
-                        .transition(chorusTranslationTransition)
-                    }
+                // Reserve backing layout without showing future chorus text. Its clock
+                // follows x-bg timestamps, including overlap beyond the lead's end.
+                if !isSecondary, !viewModel.displayBackgroundWords(at: index).isEmpty {
+                    LyricsBackgroundClockBlock(viewModel: viewModel, index: index,
+                        translation: showTranslation ? line.backgroundTranslation : "",
+                        alignment: alignment, textAlignment: textAlignment,
+                        fontSize: translationFontSize * 0.92, reduceMotion: reduceMotion)
                 }
             }
             .opacity(emphasisOpacity)
             .blur(radius: emphasisBlur)
             .scaleEffect(emphasisScale, anchor: scaleAnchor)
-            .offset(y: isCurrent ? -6 : 0)
-            .animation(reduceMotion || isTTMLWordTiming ? nil : CassetteAnimation.lyricLine, value: isCurrent)
+            .offset(y: isCurrent ? -2 : 0)
+            .animation(lineAnimation, value: currentLineIndex)
+            .animation(lineAnimation, value: isCurrent)
             .animation(translationAnimation, value: showTranslation)
-            .padding(.horizontal, usesSpeakerLayout ? 18 : 16)
+            .padding(.horizontal, usesSpeakerLayout ? 18 : horizontalInset)
             .padding(.leading, { if alignment == .trailing { return speakerSideInset }; if isSecondary { return usesSpeakerLayout ? 12 : 20 }; return 0 }())
             .padding(.trailing, alignment == .leading && usesSpeakerLayout && !isSecondary ? speakerSideInset : 0)
             .padding(.top, isSecondary ? 2 : 0)
@@ -254,10 +253,59 @@ private struct LyricsWordClockLine: View {
     var isSecondary = false
     var textAlignment: TextAlignment = .leading
     var reduceMotion = false
+    @State private var governor = PerformanceGovernor.shared
     var body: some View {
-        LyricWordKaraokeLine(words: words, cueLine: cueLine,
-            adjustedMs: followsClock ? viewModel.karaokePlaybackMs : idleMs,
-            nextLineStartMs: nextLineStartMs, fontSize: fontSize,
-            isSecondary: isSecondary, textAlignment: textAlignment, reduceMotion: reduceMotion)
+        let running = followsClock && viewModel.isShown && viewModel.isActive && viewModel.isPlaying
+        TimelineView(.animation(minimumInterval: governor.budget.lyricsRenderInterval, paused: !running)) { _ in
+            LyricWordKaraokeLine(words: words, cueLine: cueLine,
+                adjustedMs: followsClock ? viewModel.presentationTimeMs() : idleMs,
+                nextLineStartMs: nextLineStartMs, fontSize: fontSize,
+                isSecondary: isSecondary, textAlignment: textAlignment,
+                reduceMotion: reduceMotion || !governor.budget.allowsDecorativeMotion)
+                .transaction { $0.animation = nil }
+        }
+    }
+}
+
+/// A backing vocal can keep singing after the lead. Only this leaf reads its clock,
+/// so the measured row and translation layout stay unchanged between frame samples.
+struct LyricsBackgroundClockBlock: View {
+    let viewModel: LyricsViewModel
+    let index: Int
+    let translation: String
+    let alignment: HorizontalAlignment
+    let textAlignment: TextAlignment
+    let fontSize: CGFloat
+    let reduceMotion: Bool
+
+    var body: some View {
+        let words = viewModel.displayBackgroundWords(at: index)
+        let start = words.map(\.startMs).min() ?? 0
+        let end = words.map(\.endMs).max() ?? start
+        let time = viewModel.karaokePlaybackMs
+        let active = time >= start && time < end
+        let settled = Int(AMLLGlyphStyle.settledTime(startMs: Double(start), endMs: Double(end)))
+        VStack(alignment: alignment, spacing: 3) {
+            LyricsWordClockLine(words: words, viewModel: viewModel,
+                followsClock: active, idleMs: settled, fontSize: fontSize,
+                isSecondary: true, textAlignment: textAlignment, reduceMotion: reduceMotion)
+            let pronunciation = viewModel.arePronunciationsVisible
+                ? viewModel.pronunciationWords(at: index, background: true) : []
+            if !pronunciation.isEmpty {
+                LyricsWordClockLine(words: pronunciation, viewModel: viewModel,
+                    followsClock: active, idleMs: settled, fontSize: fontSize * 0.87,
+                    isSecondary: true, textAlignment: textAlignment, reduceMotion: reduceMotion)
+            }
+            if !translation.isEmpty {
+                Text(translation).font(.system(size: fontSize * 0.87))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .lineSpacing(2)
+                .multilineTextAlignment(textAlignment).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .opacity(active || !viewModel.followsPlayback ? 1 : 0)
+        .accessibilityHidden(viewModel.followsPlayback && !active)
+        .allowsHitTesting(active || !viewModel.followsPlayback)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: active)
     }
 }

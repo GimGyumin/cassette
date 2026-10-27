@@ -95,7 +95,9 @@ struct PlaybackControlAppearanceTests {
 @Suite("Resume publishes audio, not optimism", .serialized)
 struct ResumePlaybackStateTests {
     @Test func engineRebuildPublishesRecoveryAndPreservesPause() async throws {
-        let container = try AppContainer(inMemory: true, engine: FakePlaybackEngine())
+        let engine = FakePlaybackEngine()
+        engine.state = .playing
+        let container = try AppContainer(inMemory: true, engine: engine)
         let service = try #require(container.playerService as? PlayerService)
         container.playerState.position = 60
         container.playerState.playbackState = .playing

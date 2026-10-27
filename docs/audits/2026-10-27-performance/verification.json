@@ -1,0 +1,66 @@
+{
+  "baseline": {
+    "result": "Failed",
+    "passedTests": 1329,
+    "failedTests": 13,
+    "skippedTests": 1,
+    "passedCases": 1496,
+    "failures": [
+      "AVPlayerEngineTests/cancellingNextTrackAndStoppingReleaseTheNativeQueue()",
+      "LockScreenArtworkTests/cellularKeepsThePreviewWithoutBypassingPolicyOrResettingRetryCount()",
+      "UnifiedLocalAudioTests/downloadServicePinsPersistedCacheWithoutFetchingAudioAgain()",
+      "ArtworkDownloadPolicyTests/healthyPlaybackContinuesDownloadingCovers()",
+      "LockScreenArtworkTests/lateHeroCannotReplaceTheNextTrack()",
+      "SeekAndAACDownloadRegressionTests/nativeColdSeekWaitsForReadinessAndKeepsTheNewestPausedTarget()",
+      "NativePlaybackMeterTests/nativePCM()",
+      "ServerReachabilityMonitorTests/noAccountAndStop()",
+      "PlaybackFailureAndPublicationTests/oldPositionAndFullSnapshotCannotOverwriteTheNewOccurrence()",
+      "PlaybackClockRegressionTests/realProgressTimerRejectsInflatedDuration()",
+      "ResumePlaybackStateTests/resumeThatHasToReopenTheStreamStaysLoading()",
+      "GaplessContinuityTests/stoppedAndFailedStreamingEnginesCannotPoisonFollowingTracks()",
+      "LockScreenArtworkTests/thumbnailUpgradesWithoutResettingClockAndPauseKeepsTheHero()"
+    ]
+  },
+  "phase1": {
+    "result": "Passed",
+    "passedTests": 16,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "passedCases": 17,
+    "failures": []
+  },
+  "phase2": {
+    "result": "Passed",
+    "passedTests": 49,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "passedCases": 51,
+    "failures": []
+  },
+  "final-full": {
+    "result": "Passed",
+    "passedTests": 1347,
+    "failedTests": 0,
+    "skippedTests": 1,
+    "passedCases": 1514,
+    "failures": []
+  },
+  "ios-release": {
+    "result": "BUILD SUCCEEDED",
+    "sdk": "iOS 27.2",
+    "minimumOS": "18.6",
+    "signing": false
+  },
+  "swiftsonic": {
+    "passedTests": 387,
+    "suites": 120,
+    "failedTests": 0
+  },
+  "final-scheme": {
+    "result": "Passed",
+    "passedTests": 1347,
+    "failedTests": 0,
+    "skippedTests": 1,
+    "passedCases": 1514
+  }
+}

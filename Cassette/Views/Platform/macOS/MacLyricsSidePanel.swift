@@ -90,7 +90,8 @@ struct MacLyricsSidePanel: View {
                 serverId: serverId,
                 lyricsService: lyricsService,
                 playerService: pService,
-                playerState: pState
+                playerState: pState,
+                match: LyricsMatchInfo(song: track)
             )
             lyricsViewModel = newVM
             await newVM.load()

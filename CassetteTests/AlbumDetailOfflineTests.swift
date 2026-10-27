@@ -4,6 +4,8 @@
 // See LICENSE file in the project root for full license information.
 
 import Testing
+import ImageIO
+import Synchronization
 import Foundation
 import SwiftSonic
 import MediaPlayer
@@ -38,12 +40,21 @@ private final class ADLibraryStub: LibraryServiceProtocol {
         throw URLError(.notConnectedToInternet)
     }
     func artists() async throws -> [ArtistIndex] { throw URLError(.unknown) }
-    func artist(id: String) async throws -> ArtistID3 { throw URLError(.unknown) }
+    var artistOperation: (() async throws -> ArtistID3)?
+    func artist(id: String) async throws -> ArtistID3 {
+        if let artistOperation { return try await artistOperation() }
+        throw URLError(.unknown)
+    }
     func fetchAllTracks(forArtistID artistID: String) async throws -> [DisplayableSong] { throw URLError(.unknown) }
     func playlists() async throws -> [Playlist] { throw URLError(.unknown) }
     func playlist(id: String) async throws -> PlaylistWithSongs { throw URLError(.unknown) }
     func search(_ query: String) async throws -> SearchResult3 { throw URLError(.unknown) }
-    func coverArtURL(id: String, size: Int?) async -> URL? { nil }
+    var coverURL: URL?
+    var requestedCoverSizes: [Int?] = []
+    func coverArtURL(id: String, size: Int?) async -> URL? {
+        requestedCoverSizes.append(size)
+        return coverURL
+    }
     func streamURL(songId: String) async -> URL? { nil }
     func star(songIds: [String], albumIds: [String], artistIds: [String]) async throws { throw URLError(.unknown) }
     func unstar(songIds: [String], albumIds: [String], artistIds: [String]) async throws { throw URLError(.unknown) }
@@ -76,13 +87,17 @@ private final class ADDownloadStub: DownloadServiceProtocol {
     var albumData: LocalAlbumData?
     var coverURLs: [String: URL] = [:]
     var persistedCovers: [String: Data] = [:]
+    var coverURLOperation: ((String) async -> URL?)?
 
     let progressStream: AsyncStream<[DownloadProgress]> = AsyncStream { $0.finish() }
     func localAlbumData(albumId: String, serverId: UUID) async -> LocalAlbumData? { albumData }
     func downloadedURL(forSongId songId: String, serverId: UUID) async -> URL? { nil }
     func isDownloaded(songId: String, serverId: UUID) async -> Bool { false }
     func downloadedSongIds(serverId: UUID) async -> Set<String> { [] }
-    func localCoverArtURL(forId coverArtId: String) async -> URL? { coverURLs[coverArtId] }
+    func localCoverArtURL(forId coverArtId: String) async -> URL? {
+        if let coverURLOperation { return await coverURLOperation(coverArtId) }
+        return coverURLs[coverArtId]
+    }
     func persistCover(_ data: Data, forId coverArtId: String) async { persistedCovers[coverArtId] = data }
     func removeCover(forId coverArtId: String) async {}
     func garbageCollectOrphanedCovers(referencedIds: Set<String>) async -> Int { 0 }
@@ -105,6 +120,80 @@ private final class ADDownloadStub: DownloadServiceProtocol {
 @Suite("AlbumDetailViewModel — offline local fallback")
 @MainActor
 struct AlbumDetailOfflineTests {
+    @Test func closingAfterPrimaryLoadRejectsLateMoreByAndKeepsTheOutgoingFrameStable() async throws {
+        let library = ADLibraryStub()
+        let description = String(repeating: "Fixture album description. ", count: 6)
+        let song = DisplayableSong(id: "s1", title: "Song", duration: 180, comment: description).asSong()
+        library.albumResult = AlbumID3(id: "album-1", name: "Visible album", songCount: 1, duration: 180,
+                                      artist: "Artist", artistId: "artist-1", song: [song])
+        var pending: CheckedContinuation<ArtistID3, any Error>?
+        library.artistOperation = { try await withCheckedThrowingContinuation { pending = $0 } }
+        let state = ServerState()
+        state.activeServer = ServerSnapshot(from: ServerConfig(displayName: "Test", baseURL: "https://example.invalid", username: "u"))
+        let vm = AlbumDetailViewModel(albumId: "album-1", libraryService: library,
+            downloadService: ADDownloadStub(), toastService: ToastService(), serverState: state)
+        let loading = Task { await vm.load() }
+        while pending == nil { await Task.yield() }
+        try #require(vm.isPrimaryContentReady)
+        let loadingBeforeClose = vm.isLoading
+        let moreByBeforeClose = vm.isLoadingMoreAlbums
+        vm.suspendPendingLoad()
+        // This service deliberately completes despite the page beginning dismissal.
+        pending?.resume(returning: ArtistID3(id: "artist-1", name: "Artist", album: [
+            AlbumID3(id: "another", name: "Late album", songCount: 1, duration: 180)
+        ]))
+        await loading.value
+        #expect(vm.albumName == "Visible album")
+        #expect(vm.songs.map(\.id) == ["s1"])
+        #expect(vm.moreAlbumsByArtist.isEmpty)
+        #expect(vm.isLoading == loadingBeforeClose)
+        #expect(vm.isLoadingMoreAlbums == moreByBeforeClose)
+        // A late SwiftUI task restart must not fetch/repaint a page already leaving.
+        library.albumResult = AlbumID3(id: "album-1", name: "Must not appear", songCount: 0, duration: 0)
+        await vm.load()
+        #expect(vm.albumName == "Visible album")
+        // A return callback queued just before another departure must not reopen
+        // publication after the lifecycle controller cancels it.
+        let cancelledReturn = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await vm.resumePendingLoadIfNeeded()
+        }
+        await cancelledReturn.value
+        #expect(!vm.acceptsPresentationUpdates)
+        library.artistOperation = nil
+        library.albumResult = AlbumID3(id: "album-1", name: "Visible album", songCount: 1, duration: 180, song: [song])
+        await vm.resumePendingLoadIfNeeded()
+        #expect(vm.isPrimaryContentReady)
+        #expect(!vm.isLoading)
+    }
+
+    @Test func cancelledRefreshKeepsPublishedAlbumVisible() async throws {
+        let library = ADLibraryStub()
+        let album = AlbumID3(id: "album-1", name: "Visible album", songCount: 1, duration: 180,
+                             song: [DisplayableSong(id: "s1", title: "Song", duration: 180).asSong()])
+        library.albumResult = album
+        let state = ServerState()
+        state.activeServer = ServerSnapshot(from: ServerConfig(displayName: "Test", baseURL: "https://example.invalid", username: "u"))
+        let vm = AlbumDetailViewModel(albumId: "album-1", libraryService: library,
+            downloadService: ADDownloadStub(), toastService: ToastService(), serverState: state)
+        await vm.load()
+        try #require(vm.isPrimaryContentReady)
+        var pending: CheckedContinuation<AlbumID3, any Error>?
+        library.albumOperation = { try await withCheckedThrowingContinuation { pending = $0 } }
+        let refresh = Task { await vm.load() }
+        while pending == nil { await Task.yield() }
+        #expect(vm.isPrimaryContentReady)
+        #expect(vm.albumName == "Visible album")
+        #expect(vm.songs.map(\.id) == ["s1"])
+        refresh.cancel()
+        pending?.resume(throwing: CancellationError())
+        await refresh.value
+        #expect(vm.isPrimaryContentReady)
+        #expect(!vm.isLoading)
+        #expect(vm.error == nil)
+        #expect(vm.songs.map(\.id) == ["s1"])
+    }
+
     @Test func successfulOnlineCatalogPublishesAllTracksTogether() async throws {
         let library = ADLibraryStub()
         var pending: CheckedContinuation<AlbumID3, any Error>?
@@ -279,6 +368,45 @@ struct AlbumDetailOfflineTests {
             }
             server.state.isCellularConnection = false
         }
+    }
+
+    @Test func wifiUpgradeBypassesLossyCacheAndHonorsQualityPreference() async throws {
+        let suite = "QualityUpgradeResolver.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = StreamingSettings(defaults: defaults)
+        let cache = MockCacheService()
+        cache.cachedFileURL = URL(fileURLWithPath: "/tmp/cached-lossy.aac")
+        let server = MockServerService()
+        let base = try #require(URL(string: "https://example.invalid/proxy"))
+        server.state.activeServer = ServerSnapshot(from: ServerConfig(displayName: "Test", baseURL: base.absoluteString, username: "fixture"))
+        server.state.playbackNetworkPath = PlaybackNetworkPath(online: true, wifi: true, cellular: false, expensive: false, constrained: false)
+        server.musicClient = SwiftSonicClient(configuration: ServerConfiguration(serverURL: base, username: "u", password: "p"),
+            transport: StubHTTPTransport(outcome: .urlError(.unsupportedURL)), retryPolicy: .none)
+        server.credentials = ServerCredentials(password: "p", customHeaders: ["X-Fixture": "retained"])
+        let serverID = try #require(server.state.activeServer?.id)
+        let resolver = MediaResolver(downloadService: ADDownloadStub(), cacheService: cache,
+            serverService: server, serverState: server.state, streamingSettings: settings)
+        let song = DisplayableSong(id: "original", title: "Track", audioFormat: "flac", bitDepth: 16, samplingRate: 44_100)
+        settings.wifiFormat = .aac256
+        #expect(try await resolver.resolveLosslessUpgrade(song: song, serverId: serverID) == nil)
+        settings.wifiFormat = .flacOriginal
+        settings.losslessAudioEnabled = false
+        #expect(try await resolver.resolveLosslessUpgrade(song: song, serverId: serverID) == nil)
+        cache.cachedFileURL = nil
+        let capped = try await resolver.resolve(songId: song.id, serverId: serverID, song: song)
+        let cappedQuery = URLComponents(url: capped.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(cappedQuery.contains { $0.name == "format" && $0.value == "aac" })
+        #expect(cappedQuery.contains { $0.name == "maxBitRate" && $0.value == "256" })
+        settings.losslessAudioEnabled = true
+        cache.cachedFileURL = URL(fileURLWithPath: "/tmp/cached-lossy.aac")
+        let source = try #require(try await resolver.resolveLosslessUpgrade(song: song, serverId: serverID))
+        #expect(!source.isLocal)
+        #expect(!AudioQualityClassifier.isLossyTranscodeStream(source))
+        #expect(source.customHeaders["X-Fixture"] == "retained")
+        let query = URLComponents(url: source.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(query.contains { $0.name == "format" && $0.value == "raw" })
+        #expect(query.contains { $0.name == "id" && $0.value == song.id })
     }
 
     @Test("Cached audio wins over lossless quality and bitstream streaming, online or offline")
@@ -593,6 +721,55 @@ struct AlbumDetailOfflineTests {
         ) == false)
     }
 
+    @Test("Cached preparation analyzes existing covers and aliases albums without downloading missing art")
+    func cachedPreparationOwnsEdgeAnalysis() async throws {
+        let cover = "cached-preparation-\(UUID())"
+        let album = "album-\(UUID())"
+        let missing = "missing-\(UUID())"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(cover + ".png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let data = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVQI12NgAAAAAgAB4iG8MwAAAABJRU5ErkJggg=="))
+        try data.write(to: url)
+        let download = ADDownloadStub()
+        download.coverURLs["\(cover)@hero"] = url
+        let library = ADLibraryStub()
+        let cache = ArtworkImageCache(downloadService: download, libraryService: library)
+        #expect(await cache.load(coverArtId: cover, tier: .thumb, allowNetwork: false) != nil)
+        #expect(cache.preparedPalette(for: cover) == nil)
+        let preload = AlbumCoverPreloadService(libraryService: library, artworkImageCache: cache)
+        await preload.prepareCachedThemes(albumCovers: [album: cover, "unavailable": missing])
+        #expect(cache.preparedPalette(for: cover)?.edgeAnalysis?.version == ArtworkEdgeAnalysis.currentVersion)
+        #expect(cache.preparedPalette(for: album)?.edgeAnalysis == cache.preparedPalette(for: cover)?.edgeAnalysis)
+        #expect(cache.preparedPalette(for: missing) == nil)
+        #expect(!preload.state.isAnalyzingColors)
+        #expect(!preload.state.isDownloading)
+    }
+
+    @Test("A full-download request arriving during cached analysis still starts its own pass")
+    func fullDownloadWaitsForCachedPreparation() async {
+        let library = ADLibraryStub()
+        library.allAlbumsOperation = { [] }
+        let download = ADDownloadStub()
+        var pending: CheckedContinuation<URL?, Never>?
+        var blockedOnce = false
+        download.coverURLOperation = { _ in
+            guard !blockedOnce else { return nil }
+            blockedOnce = true
+            return await withCheckedContinuation { pending = $0 }
+        }
+        let cache = ArtworkImageCache(downloadService: download, libraryService: library)
+        let preload = AlbumCoverPreloadService(libraryService: library, artworkImageCache: cache)
+        let local = Task { await preload.prepareCachedThemes(albumCovers: ["album": "missing"]) }
+        while pending == nil { await Task.yield() }
+        let full = Task { await preload.downloadAllCovers() }
+        await Task.yield()
+        pending?.resume(returning: nil)
+        await local.value
+        await full.value
+        #expect(library.allAlbumsCallCount == 1)
+        #expect(preload.state.isComplete)
+    }
+
     @Test("Leaving preparation keeps the service-owned download alive and joins it")
     func deferCoverPreparation() async {
         let library = ADLibraryStub()
@@ -808,4 +985,163 @@ struct AlbumDetailOfflineTests {
         #expect(vm.error == nil)
         #expect(vm.isPrimaryContentReady)
     }
+}
+
+
+nonisolated private final class LockScreenArtworkResponse: URLProtocol, @unchecked Sendable {
+    struct State { var payload = Data(); var requests = 0; var hold = true }
+    static let state = Mutex(State())
+    private var responseTask: Task<Void, Never>?
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "lockscreen.test" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.state.withLock { $0.requests += 1 }
+        responseTask = Task { [weak self] in
+            while Self.state.withLock({ $0.hold }) {
+                do { try await Task.sleep(for: .milliseconds(5)) } catch { return }
+            }
+            guard let self, !Task.isCancelled, let url = request.url else { return }
+            let data = Self.state.withLock { $0.payload }
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "image/png"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+    override func stopLoading() { responseTask?.cancel() }
+}
+
+@Suite("Lock screen high-resolution artwork", .serialized) @MainActor
+struct LockScreenArtworkTests {
+    private func imageData(side: Int) throws -> Data {
+        let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try #require(CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
+            bytesPerRow: side * 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.7, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        let image = try #require(context.makeImage())
+        let bytes = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(bytes, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return bytes as Data
+    }
+
+    private func snapshot(id: String, cover: String) -> NowPlayingSnapshot {
+        NowPlayingSnapshot(title: id, artist: "Artist", album: "Album", duration: 180,
+            position: 0, playbackRate: 1, artworkURL: URL(string: "https://lockscreen.test/fallback"),
+            artworkHeaders: [:], coverArtId: cover, isLiveStream: false,
+            radioStationName: nil, isrc: nil, trackId: id)
+    }
+
+    private func waitForPreview() async throws {
+        for _ in 0..<200 {
+            let art = MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork] as? MPMediaItemArtwork
+            if art?.bounds.width == 240, LockScreenArtworkResponse.state.withLock({ $0.requests }) > 0 { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Thumbnail was not published before the held high-resolution request")
+    }
+
+    @Test func thumbnailUpgradesWithoutResettingClockAndPauseKeepsTheHero() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        try imageData(side: 240).write(to: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let hero = try imageData(side: 1200)
+        LockScreenArtworkResponse.state.withLock { $0 = .init(payload: hero) }
+        defer { LockScreenArtworkResponse.state.withLock { $0.hold = false } }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [LockScreenArtworkResponse.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let download = ADDownloadStub()
+        let library = ADLibraryStub()
+        library.coverURL = URL(string: "https://lockscreen.test/hero")
+        let cover = UUID().uuidString
+        download.coverURLs[cover + "@thumb"] = root
+        let cache = ArtworkImageCache(downloadService: download, libraryService: library, session: session)
+        let service = NowPlayingService(playerService: MockPlayerService(), artworkImageCache: cache)
+        let playing = snapshot(id: "track", cover: cover)
+        let load = Task { await service.update(with: playing) }
+        try await waitForPreview()
+        await service.pushPosition(elapsed: 37, rate: 0, duration: 180)
+        LockScreenArtworkResponse.state.withLock { $0.hold = false }
+        await load.value
+        let info = try #require(MPNowPlayingInfoCenter.default().nowPlayingInfo)
+        let artwork = try #require(info[MPMediaItemPropertyArtwork] as? MPMediaItemArtwork)
+        #expect(artwork.bounds.size == CGSize(width: 1200, height: 1200))
+        #expect((info[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? NSNumber)?.doubleValue == 37)
+        #expect((info[MPNowPlayingInfoPropertyPlaybackRate] as? NSNumber)?.floatValue == 0)
+        #expect(library.requestedCoverSizes == [1200])
+        #expect(LockScreenArtworkResponse.state.withLock { $0.requests } == 1)
+        #expect(artwork.image(at: CGSize(width: 1200, height: 1200))?.size == CGSize(width: 1200, height: 1200))
+        await service.setPlaybackRate(1)
+        await service.setPlaybackRate(0)
+        let retained = MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork] as? MPMediaItemArtwork
+        #expect(retained === artwork)
+        await service.stop()
+    }
+
+    @Test func lateHeroCannotReplaceTheNextTrack() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        try imageData(side: 240).write(to: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let hero = try imageData(side: 1200)
+        LockScreenArtworkResponse.state.withLock { $0 = .init(payload: hero) }
+        defer { LockScreenArtworkResponse.state.withLock { $0.hold = false } }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [LockScreenArtworkResponse.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let library = ADLibraryStub()
+        library.coverURL = URL(string: "https://lockscreen.test/late")
+        let download = ADDownloadStub()
+        let cover = UUID().uuidString
+        download.coverURLs[cover + "@thumb"] = root
+        let cache = ArtworkImageCache(downloadService: download, libraryService: library, session: session)
+        let service = NowPlayingService(playerService: MockPlayerService(), artworkImageCache: cache)
+        let load = Task { await service.update(with: snapshot(id: "old", cover: cover)) }
+        try await waitForPreview()
+        await service.publishTrackChange(snapshot(id: "new", cover: UUID().uuidString))
+        LockScreenArtworkResponse.state.withLock { $0.hold = false }
+        await load.value
+        let info = try #require(MPNowPlayingInfoCenter.default().nowPlayingInfo)
+        #expect(info[MPMediaItemPropertyTitle] as? String == "new")
+        #expect(info[MPMediaItemPropertyArtwork] == nil)
+        await service.stop()
+    }
+
+    @Test func cellularKeepsThePreviewWithoutBypassingPolicyOrResettingRetryCount() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        try imageData(side: 240).write(to: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        LockScreenArtworkResponse.state.withLock { $0 = .init(hold: false) }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [LockScreenArtworkResponse.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let state = ServerState()
+        state.isCellularConnection = true
+        let library = ADLibraryStub()
+        library.coverURL = URL(string: "https://lockscreen.test/hero")
+        let download = ADDownloadStub()
+        let cover = UUID().uuidString
+        download.coverURLs[cover + "@thumb"] = root
+        let cache = ArtworkImageCache(downloadService: download, libraryService: library,
+                                      session: session, serverState: state)
+        let service = NowPlayingService(playerService: MockPlayerService(), artworkImageCache: cache)
+        let playing = snapshot(id: "cellular", cover: cover)
+        await service.update(with: playing)
+        await service.displayArtwork(playing)
+        await service.displayArtwork(playing)
+        #expect(await service.artworkRetryAttempt == 3)
+        #expect(await service.pendingArtwork != nil)
+        #expect(library.requestedCoverSizes.isEmpty)
+        #expect(LockScreenArtworkResponse.state.withLock { $0.requests } == 0)
+        let artwork = MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork] as? MPMediaItemArtwork
+        #expect(artwork?.bounds.width == 240)
+        await service.stop()
+    }
+
 }

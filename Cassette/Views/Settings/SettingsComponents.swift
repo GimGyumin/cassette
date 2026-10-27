@@ -24,7 +24,7 @@ struct SettingsSectionHeader: View {
 
     var body: some View {
         content
-            .font(.footnote.weight(.medium))
+            .font(.cassetteSettingsHeader)
             .foregroundStyle(.secondary)
             .textCase(nil)
     }
@@ -40,9 +40,10 @@ struct SettingsSectionFooter: View {
 
     var body: some View {
         Text(text)
-            .font(.footnote)
+            .font(.cassetteFootnote)
             .foregroundStyle(.secondary)
             .textCase(nil)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -60,17 +61,16 @@ struct SettingsRowTitle: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
             Text(title)
-                .foregroundStyle(.primary)
+                .font(.cassetteBody)
             if let subtitle {
                 Text(subtitle)
-                    .font(.subheadline)
+                    .font(.cassetteCellSubtitle)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.vertical, subtitle == nil ? 0 : 2)
     }
 }
 
@@ -121,6 +121,7 @@ struct SettingsValueRow: View {
             }
         } label: {
             SettingsRowTitle(title, subtitle: subtitle)
+                .foregroundStyle(.primary)
         }
     }
 }
@@ -151,7 +152,7 @@ struct SettingsActionRow: View {
         Button(role: isDestructive ? .destructive : nil, action: action) {
             HStack(spacing: CassetteSpacing.s) {
                 SettingsRowTitle(title, subtitle: subtitle)
-                    .foregroundStyle(isDestructive ? Color.red : Color.primary)
+                    .foregroundStyle(isDestructive ? Color.red : Color.blue)
                 Spacer(minLength: CassetteSpacing.s)
                 if isBusy {
                     ProgressView().controlSize(.small)
@@ -174,7 +175,7 @@ extension SettingsChoiceItem {
     var choiceSubtitle: String? { nil }
 }
 
-/// Native single-selection form, including system checkmarks and accessibility.
+/// Whole-row choices with a stable trailing checkmark and VoiceOver selection state.
 struct SettingsChoiceList<Item: SettingsChoiceItem>: View {
     let navigationTitle: LocalizedStringKey
     var footer: LocalizedStringKey?
@@ -199,19 +200,35 @@ struct SettingsChoiceList<Item: SettingsChoiceItem>: View {
     var body: some View {
         Form {
             Section {
-                Picker(navigationTitle, selection: $selection) {
-                    ForEach(items, id: \.self) { item in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.choiceTitle)
-                            if let detail = subtitle?(item) ?? item.choiceSubtitle {
-                                Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                ForEach(items, id: \.self) { item in
+                    Button {
+                        selection = item
+                    } label: {
+                        HStack(spacing: CassetteSpacing.l) {
+                            VStack(alignment: .leading, spacing: CassetteSpacing.xs) {
+                                Text(item.choiceTitle)
+                                    .font(.cassetteBody)
+                                    .foregroundStyle(Color.primary)
+                                if let detail = subtitle?(item) ?? item.choiceSubtitle {
+                                    Text(detail)
+                                        .font(.cassetteCellSubtitle)
+                                        .foregroundStyle(Color.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                             }
+                            Spacer(minLength: CassetteSpacing.s)
+                            Image(systemName: "checkmark")
+                                .font(.cassetteSettingsHeader)
+                                .foregroundStyle(.blue)
+                                .opacity(selection == item ? 1 : 0)
+                                .accessibilityHidden(true)
                         }
-                        .tag(item)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(selection == item ? [.isSelected] : [])
                 }
-                .pickerStyle(.inline)
-                .labelsHidden()
             } footer: {
                 if let footer {
                     SettingsSectionFooter(footer)
@@ -270,12 +287,28 @@ struct SettingsSubpageStyle: ViewModifier {
         content
             // One restrained icon treatment everywhere: no per-row rainbow.
             .environment(\.settingsSubduedIcons, true)
-            .environment(\.defaultMinListRowHeight, 44)
+            .font(.cassetteBody)
             .tint(.blue)
+            .toggleStyle(SettingsToggleStyle())
             .headerProminence(.standard)
             #if os(iOS)
-            .listSectionSpacing(.compact)
+            .environment(\.defaultMinListRowHeight, CassetteSettingsLayout.minimumRowHeight)
+            .listStyle(.insetGrouped)
+            .listRowInsets(CassetteSettingsLayout.rowInsets)
+            .listSectionSpacing(CassetteSpacing.xxl)
+            .scrollContentBackground(.hidden)
+            .background(Color(uiColor: .systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.inline)
             #endif
+    }
+}
+
+/// Settings use the system green switch independently of the blue links/checkmarks.
+private struct SettingsToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Toggle(isOn: configuration.$isOn) { configuration.label }
+            .toggleStyle(.switch)
+            .tint(.green)
     }
 }
 

@@ -71,6 +71,7 @@ final class AlbumCoverPreloadService {
     /// / `state.completed` cannot be overwritten mid-pass by a concurrent caller (the boot
     /// reconcile and the onboarding/manual download can fire together).
     private var activePass = false
+    private var isPreparingCachedThemes = false
     private var inventoryServerID: UUID?
     private var downloadTask: Task<Void, Never>?
     private var activeCoverArtId: String?
@@ -136,6 +137,11 @@ final class AlbumCoverPreloadService {
     /// Callers observe the owned pass; leaving a screen cancels only that caller's wait.
     /// Per-cover artwork updates are delivered directly through `reportPreparation`.
     func downloadAllCovers(resumeDeferred: Bool = true, onProgress: (@MainActor (Int, Int, String?) -> Void)? = nil) async {
+        guard !isResettingAccount, !Task.isCancelled else { return }
+        // A local-only analysis pass does not satisfy a request to download originals.
+        while isPreparingCachedThemes, !Task.isCancelled, !isResettingAccount {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
         guard !isResettingAccount, !Task.isCancelled else { return }
         startDownloadPassIfNeeded()
         var reported = -1
@@ -240,6 +246,54 @@ final class AlbumCoverPreloadService {
         state.errorMessage = nil
         // Finish the shared progress/Live Activity as well as the local cover state.
         reportPreparation?(.init(phase: .complete, coversCompleted: record.uniqueCount, coversTotal: record.uniqueCount))
+    }
+
+    /// Reuses local artwork; launch migration may fetch missing analysis thumbnails
+    /// on an allowed non-cellular connection. Page/scroll tasks never analyze edges.
+    func prepareCachedThemes(albumCovers: [String: String], fillMissing: Bool = false) async {
+        let serverID = serverState?.activeServer?.id
+        let revision = serverState?.accountRevision
+        // Startup migration must not silently disappear behind an existing preload.
+        while activePass, !Task.isCancelled, !isResettingAccount {
+            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+            guard serverState?.activeServer?.id == serverID,
+                  serverState?.accountRevision == revision else { return }
+        }
+        guard !isResettingAccount, !Task.isCancelled else { return }
+        activePass = true
+        isPreparingCachedThemes = true
+        state.isAnalyzingColors = true
+        let ids = ArtworkIdentity.distinct(Array(albumCovers.values))
+        state.colorsCompleted = 0
+        state.colorsTotal = ids.count
+        defer { activePass = false; isPreparingCachedThemes = false; state.isAnalyzingColors = false }
+        for id in ids {
+            guard !Task.isCancelled, !isResettingAccount,
+                  serverState?.activeServer?.id == serverID,
+                  serverState?.accountRevision == revision else { return }
+            let prepared = await Self.prepareTheme(for: id, artworkImageCache: artworkImageCache,
+                                                   dominantColorExtractor: dominantColorExtractor)
+            if !prepared, fillMissing, artworkImageCache.allowsNetworkDownloads,
+               serverState?.isCellularConnection != true {
+                // Only a small analysis image is needed, not a full-library hero download.
+                _ = await artworkImageCache.load(coverArtId: id, tier: .thumb, allowNetwork: true)
+                guard !Task.isCancelled, serverState?.activeServer?.id == serverID,
+                      serverState?.accountRevision == revision else { return }
+                _ = await Self.prepareTheme(for: id, artworkImageCache: artworkImageCache,
+                                            dominantColorExtractor: dominantColorExtractor)
+            }
+            state.colorsCompleted += 1
+        }
+        guard !Task.isCancelled, serverState?.activeServer?.id == serverID,
+              serverState?.accountRevision == revision else { return }
+        for (albumID, coverID) in albumCovers {
+            if let palette = artworkImageCache.preparedPalette(for: coverID) {
+                artworkImageCache.storePreparedPalette(palette, for: albumID)
+                dominantColorExtractor?.storePreparedBackground(palette.packedBackground, for: albumID)
+            }
+        }
+        dominantColorExtractor?.persistPreparedBackgrounds()
+        await ColorCache.persistPreparedPalettes()
     }
 
     /// Clears the stored snapshot and completion flag (called when the artwork cache is wiped).
@@ -431,28 +485,40 @@ final class AlbumCoverPreloadService {
         }
         finishBackgroundSubmission()
         #endif
+        let expectedNames = Set(ids.map { id in
+            let original = OriginalArtwork.storageID(id)
+            return serverID.map { DownloadService.coverStorageName(for: original, serverId: $0) } ?? original
+        })
         let inventoryMonitor = Task { @MainActor [weak self] in
-            var verified = Set<String>()
+            var scanner = ArtworkInventoryScanner(expectedNames: expectedNames)
             while !Task.isCancelled {
                 guard let self, let directory = coversDirectory else { return }
-                let outstanding = ids.filter { !verified.contains($0) }
-                let newlyPrepared = await Task.detached(priority: .utility) {
-                    outstanding.filter { id in
-                        let original = OriginalArtwork.storageID(id)
-                        let name = serverID.map { DownloadService.coverStorageName(for: original, serverId: $0) } ?? original
-                        return CassetteBackgroundDownloads.isValidArtwork(at: directory.appendingPathComponent(name))
+                let previous = scanner
+                let scan = Task.detached(priority: .utility) {
+                    var next = previous
+                    let verified = try next.scan(directory: directory) {
+                        CassetteBackgroundDownloads.isValidArtwork(at: $0)
                     }
-                }.value
-                guard !Task.isCancelled else { return }
-                verified.formUnion(newlyPrepared)
-                if verified.count > self.state.completed {
-                    self.state.completed = verified.count
-                    onProgress?(self.state.availableCompleted, self.state.libraryTotal, nil)
-                    self.reportPreparation?(.init(phase: .covers, coversCompleted: self.state.availableCompleted,
-                                                  coversTotal: self.state.libraryTotal))
+                    return (next, verified)
                 }
-                if verified.count == ids.count { return }
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                let result = await withTaskCancellationHandler {
+                    try? await scan.value
+                } onCancel: {
+                    scan.cancel()
+                }
+                guard !Task.isCancelled else { return }
+                if let (next, verified) = result {
+                    scanner = next
+                    if verified.count > self.state.completed {
+                        self.state.completed = verified.count
+                        onProgress?(self.state.availableCompleted, self.state.libraryTotal, nil)
+                        self.reportPreparation?(.init(phase: .covers, coversCompleted: self.state.availableCompleted,
+                                                      coversTotal: self.state.libraryTotal))
+                    }
+                    if verified.count == expectedNames.count { return }
+                }
+                let interval: Duration = CassettePerformance.budget.artworkInventoryInterval
+                do { try await Task.sleep(for: interval, tolerance: .milliseconds(250)) } catch { return }
             }
         }
         defer { inventoryMonitor.cancel() }
@@ -546,8 +612,8 @@ final class AlbumCoverPreloadService {
         for id in themeIDs {
             guard !Task.isCancelled, !isResettingAccount, serverState?.activeServer?.id == serverID else { return false }
             let identity = identities[id] ?? ArtworkIdentity.key(id)
-            if let source = paletteSources[identity], let palette = ColorCache.palette(for: source) {
-                ColorCache.store(palette, for: id)
+            if let source = paletteSources[identity], let palette = artworkImageCache.preparedPalette(for: source) {
+                artworkImageCache.storePreparedPalette(palette, for: id)
                 dominantColorExtractor?.storePreparedBackground(palette.packedBackground, for: id)
             } else if await Self.prepareTheme(for: id, artworkImageCache: artworkImageCache,
                                               dominantColorExtractor: dominantColorExtractor,
@@ -571,8 +637,8 @@ final class AlbumCoverPreloadService {
         // cover palette under that stable key so its very first detail frame is themed.
         for album in albums {
             guard let cover = album.coverArt?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  let palette = ColorCache.palette(for: cover) else { continue }
-            ColorCache.store(palette, for: album.id)
+                  let palette = artworkImageCache.preparedPalette(for: cover) else { continue }
+            artworkImageCache.storePreparedPalette(palette, for: album.id)
             dominantColorExtractor?.storePreparedBackground(palette.packedBackground, for: album.id)
         }
         // Persist cover-id and album-id lookups before the preparation UI advances.
@@ -600,8 +666,11 @@ final class AlbumCoverPreloadService {
         dominantColorExtractor: DominantColorExtractor?,
         originalURL: URL? = nil
     ) async -> Bool {
+        let token = artworkImageCache.palettePreparationToken(for: coverArtId)
         let palette: ArtworkPalette
-        if let cached = ColorCache.palette(for: coverArtId) {
+        if let cached = artworkImageCache.preparedPalette(for: coverArtId),
+           cached.edgeAnalysis?.isPreparedForCurrentPresentation == true,
+           cached.isProvisional != true {
             palette = cached
         } else {
             let image: PlatformImage?
@@ -610,7 +679,9 @@ final class AlbumCoverPreloadService {
             } else { image = nil }
             guard !Task.isCancelled else { return false }
             let generated = await Task.detached(priority: .utility) { () -> ArtworkPalette? in
-                if let image { return AlbumColorAnalyzer.generateArtworkPalette(from: image) }
+                if let image {
+                    return AlbumColorAnalyzer.presentationPalette(from: image)
+                }
                 guard let originalURL,
                       let source = CGImageSourceCreateWithURL(originalURL as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
                       let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -619,20 +690,25 @@ final class AlbumCoverPreloadService {
                         kCGImageSourceCreateThumbnailWithTransform: true,
                         kCGImageSourceShouldCacheImmediately: true
                       ] as CFDictionary) else { return nil }
-                return AlbumColorAnalyzer.generateArtworkPalette(from: thumbnail)
+                return AlbumColorAnalyzer.presentationPalette(from: thumbnail)
             }.value
-            guard !Task.isCancelled, let generated else { return false }
+            guard !Task.isCancelled, let generated,
+                  artworkImageCache.palettePreparationToken(for: coverArtId) == token else { return false }
             palette = generated
-            ColorCache.store(palette, for: coverArtId)
+            artworkImageCache.storePreparedPalette(palette, for: coverArtId)
+            // Pace only new analysis. Warm-cache launches must not sleep once per album.
+            if !CassettePerformance.allowsHeavyColorAnalysis {
+                do { try await Task.sleep(for: .milliseconds(20)) } catch { return false }
+            }
         }
-        guard !Task.isCancelled else { return false }
+        guard !Task.isCancelled, artworkImageCache.palettePreparationToken(for: coverArtId) == token else { return false }
         if let dominantColorExtractor {
             dominantColorExtractor.storePreparedBackground(
                 palette.packedBackground,
                 for: coverArtId
             )
         }
-        return ColorCache.palette(for: coverArtId) != nil
+        return artworkImageCache.preparedPalette(for: coverArtId) != nil
     }
 
     private static func snapshot(from albums: [AlbumID3]) -> [String: String] {

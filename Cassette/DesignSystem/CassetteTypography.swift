@@ -19,9 +19,15 @@ extension Font {
 
     /// Full-player track title. ~28pt. Rounded, bold.
     static let cassettePlayerTitle = Font.system(.title, design: .rounded, weight: .bold)
+    static let cassetteImmersivePlayerTitle = Font.system(size: 20, weight: .semibold)
+    static let cassetteImmersivePlayerArtist = Font.system(size: 20, weight: .regular)
 
     /// Album or artist name in detail-screen headers. ~22pt. Rounded, semibold.
     static let cassetteDetailTitle = Font.system(.title2, design: .rounded, weight: .semibold)
+    static let cassetteAlbumTitle = Font.system(.title, design: .default, weight: .bold)
+    static let cassetteFadedAlbumTitle = Font.system(.title2, design: .default, weight: .bold)
+    static let cassetteAlbumCardTitle = Font.system(.title2, design: .default, weight: .semibold)
+    static let cassetteAlbumArtist = Font.system(.title2, design: .default, weight: .regular)
 
     /// Section header labels (e.g. "Albums", "Tracks"). ~17pt. Rounded, semibold.
     static let cassetteSectionTitle = Font.system(.headline, design: .rounded, weight: .semibold)
@@ -30,6 +36,9 @@ extension Font {
 
     /// Standard readable body. ~17pt. Regular.
     static let cassetteBody = Font.system(.body, design: .default, weight: .regular)
+
+    static let cassetteSettingsHeader = Font.system(.subheadline, design: .default, weight: .semibold)
+    static let cassetteFootnote = Font.system(.footnote, design: .default, weight: .regular)
 
     /// Primary label in list cells (track title, album name). ~16pt. Semibold.
     static let cassetteCellTitle = Font.system(.callout, design: .default, weight: .semibold)

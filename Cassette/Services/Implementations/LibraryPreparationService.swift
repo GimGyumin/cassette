@@ -92,6 +92,7 @@ final class LibraryPreparationService {
         }
 
         ownsPreparationPass = true
+        let preparationStarted = ContinuousClock.now
         defer { ownsPreparationPass = false }
         detectedTrackCount = serverCount
         Logger.library.notice(
@@ -113,6 +114,8 @@ final class LibraryPreparationService {
             return
         }
 
+        await coverPreload.prepareCachedThemes(albumCovers: indexService.albumArtworkSnapshot)
+        guard !Task.isCancelled else { finish(phase: .idle); return }
         if BulkArtworkPreference.isEnabled {
             phase = .covers
             publish(.init(phase: .covers, coversCompleted: coverPreload.state.availableCompleted, coversTotal: coverPreload.state.libraryTotal, indexFraction: 1))
@@ -150,7 +153,8 @@ final class LibraryPreparationService {
         if let serverCount {
             LibraryChangeDetector.store(count: serverCount, for: serverId)
         }
-        Logger.library.notice("[LIBRARY-PREP] preparation complete")
+        let elapsed = RuntimeDiagnostics.milliseconds(preparationStarted.duration(to: .now))
+        Logger.library.notice("[LIBRARY-PREP] preparation complete duration_ms=\(elapsed, privacy: .public)")
 
         finish(phase: .complete)
     }

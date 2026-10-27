@@ -37,7 +37,7 @@ extension PlayerService {
     }
 
     func checkPrefetchThreshold() async {
-        guard !prefetchScheduled, gaplessBridge.next == nil else { return }
+        guard crossfadeConfig.duration > 0, !prefetchScheduled, gaplessBridge.next == nil else { return }
         #if os(iOS)
         // Prefetch can compete with the current stream on wireless system routes.
         guard !PlayerService.isWirelessSystemRouteActive() else { return }

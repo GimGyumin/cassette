@@ -103,6 +103,43 @@ The view modifier that `CoverArtCard` applies internally. It clips the view and 
 
 ## Components
 
+### Settings forms
+
+`SettingsSubpageStyle` uses native inset-grouped forms on iOS: semantic grouped
+backgrounds, inline navigation titles, green switches, and blue links/checkmarks.
+Use `SettingsSectionHeader`, `SettingsSectionFooter`, `SettingsNavigationRow`, and
+`SettingsChoiceList` to keep descriptions outside the rounded cards. Rows use
+`CassetteSettingsLayout` and Dynamic Type fonts; do not give them fixed heights.
+
+### Album navigation
+
+`AlbumNavigationLink(album:namespace:) { namespace in … }` pushes the standard
+`HomeDestination.album` route on iOS (and the normal detail route on macOS). Album
+pages use the default NavigationStack transition. Do **not** add a navigation zoom
+transition to the album page: the interactive pop is owned by UIKit's normal
+transition, and a matched source inside a lazy/re-created shelf can invalidate it.
+Cover expansion inside the page may use `.cassetteZoomTransition` separately.
+
+### Seamless album artwork
+
+`ArtworkEdgeAnalyzer` samples a 64×64 sRGB raster on an artwork preparation task.
+`ArtworkEdgeAnalysis` stores only image facts, its algorithm version, and a pixel
+fingerprint. The persisted `ArtworkPalette` includes those facts while remaining
+compatible with older cache records. `AlbumCoverPreloadService` performs this work
+during library preparation, including a disk-only pass for already cached artwork.
+Ordinary image loads and album-page tasks never start edge analysis.
+`ArtworkImageCache` scopes results/preferences to the account and invalidates facts
+on cover replacement.
+
+Compact album pages use `SeamlessArtworkHero` only for a confident opaque uniform
+border (or the album's explicit Full-Width preference). It fits the entire image
+into a full-width square; no fade or crop removes artwork near the bottom.
+The existing dominant-color palette and manual override still determine the page
+background. `AlbumAtmosphere` chooses contrast from that canvas, independently of
+the layout decision. Edge-analysis version 2 backfills the earlier preparation policy.
+Other covers keep `ImmersiveCoverHero`'s inset card. The root navigation stack and
+mini player remain responsible for transitions and playback chrome.
+
 ### `SongRow`
 
 Standard track cell for album and playlist detail screens.
@@ -200,3 +237,13 @@ SectionHeader("Recent Albums")
 1. Add the color set to `Assets.xcassets` with both Any and Dark Appearance variants.
 2. Add a row to the palette table in `CassetteColors.md` with WCAG notes and permitted uses.
 3. Do **not** add a manual `Color` extension — Xcode generates `Color.<assetName>` automatically.
+
+### Album artwork presentation (1008)
+
+Prepared `ArtworkEdgeAnalysis` v3 selects Uniform, Faded or Standard. Uniform
+uses `SeamlessArtworkHero` with exact edge color and no fade. Texture/gradients
+use `FadedArtworkHero`: full-width square, noninteractive lower gradient and a
+single layout-sized title over a separate dark content canvas. Complex edges
+keep `ImmersiveCoverHero` inset presentation. Both full-width components request
+the 1200 px hero tier; no pixel analysis occurs in view rendering or scrolling.
+See [the implementation and validation report](../../docs/fixes/2026-10-21-album-artwork-presentation-v3.md).

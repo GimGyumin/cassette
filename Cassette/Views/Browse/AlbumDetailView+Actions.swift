@@ -87,6 +87,18 @@ extension AlbumDetailContentView {
 
             Divider()
 
+            #if os(iOS)
+            if !usesDesktopDetail {
+                Picker("Album Artwork", selection: Binding(get: { artworkPreference }, set: setArtworkPreference)) {
+                    Text("Automatic").tag(AlbumArtworkPreference.automatic)
+                    Text("Full-Width Artwork").tag(AlbumArtworkPreference.fullBleed)
+                        .disabled(artworkAnalysis?.isOpaque != true)
+                    Text("Cover Card").tag(AlbumArtworkPreference.card)
+                }
+                Divider()
+            }
+            #endif
+
             Button {
                 playInstantMix(container: container, itemID: albumId, source: .album)
             } label: {
@@ -121,9 +133,9 @@ extension AlbumDetailContentView {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(headerTextColor)
-                .cassetteHeroButton(size: 34)
+                .cassetteHeroButton(size: 44)
         }
         .menuOrder(.fixed)
         .buttonStyle(.plain)

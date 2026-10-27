@@ -21,6 +21,11 @@ extension PlayerService {
     func pause() async {
         guard stopBarrierCount == 0 else { return }
         transport.intent = .pause
+        #if os(iOS)
+        sessionActivationRetryTask?.cancel()
+        sessionActivationRetryTask = nil
+        #endif
+        cancelQualityUpgrade()
         transportCommandID &+= 1
         let commandID = transportCommandID
         let deferredSeekTarget = seekNeedsCommit ? seekState.target : nil
@@ -64,10 +69,10 @@ extension PlayerService {
         hardPausedForCurrentInterruption = false
         sessionActivationRetryTask?.cancel()
         sessionActivationRetryTask = nil
-        // Keep the session hot on wireless routes — setActive(false) forces a slow re-handshake on resume.
-        if !PlayerService.isWirelessSystemRouteActive() {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        }
+        // Keep the playback session active while paused. Deactivating it with
+        // `.notifyOthersOnDeactivation` tells an interrupted app (for example Apple
+        // Music) that it may resume, so pausing Cassette started the other app again.
+        // Stop/end-of-queue also retain the session; system interruptions own handoff.
         #endif
         guard await commitPresentation(context, { $0.playbackState = .paused; return true }) else { return }
         guard commandID == transportCommandID else { return }
@@ -383,7 +388,11 @@ extension PlayerService {
         #if os(iOS)
         sessionActivationRetryTask?.cancel()
         sessionActivationRetryTask = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // Do NOT call setActive(false) here. Even without .notifyOthersOnDeactivation,
+        // deactivating the session signals other audio apps (e.g. Apple Music) that
+        // they may resume — which caused Apple Music to start playing when Cassette stopped.
+        // The session is retained while the app is alive and releases naturally when the
+        // process exits or the system reclaims it.
         #endif
         accumulatedPlayedSeconds = 0
         currentPlaySegmentStart = nil
@@ -485,6 +494,7 @@ extension PlayerService {
         transportCommandID &+= 1
         let context = playbackContext
         seekDownloadTask?.cancel()
+        cancelQualityUpgrade()
         seekDownloadTask = nil
         seekCommitTask?.cancel()
         seekCommitTask = nil
@@ -563,6 +573,7 @@ extension PlayerService {
         let (queue, currentIndex, repeatMode) = await MainActor.run {
             (state.queue, state.currentIndex, state.repeatMode)
         }
+        guard command == transportCommandID, epoch == playbackEpoch, !Task.isCancelled else { return }
         let nextIndex = currentIndex + 1
         Logger.player.info("[TRANSITION] skipToNext: currentIndex=\(currentIndex) nextIndex=\(nextIndex) queueCount=\(queue.count)")
 

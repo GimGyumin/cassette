@@ -26,6 +26,8 @@ nonisolated struct ArtworkPalette: Equatable, Sendable {
     let text4: Color
     /// Packed 0xRRGGBB of `background` for persistence / widgets.
     let packedBackground: Int
+    var edgeAnalysis: ArtworkEdgeAnalysis? = nil
+    var isProvisional: Bool? = nil
 }
 
 /// Outcome of analyzing one artwork: the legacy palette plus a rich, appearance-
@@ -84,14 +86,33 @@ nonisolated enum AlbumColorAnalyzer {
             let stripH = max(1, Int(Double(h) * 0.20))
             let y = max(0, h - stripH)
             if let cropped = cg.cropping(to: CGRect(x: 0, y: y, width: cg.width, height: stripH)) {
-                return resolve(image: cropped)?.raw
+                return resolveColors(image: cropped)?.raw
             }
         }
-        return resolve(image: cg)?.raw
+        return resolveColors(image: cg)?.raw
     }
 
     static func packedBackground(from image: PlatformImage, bottomStrip: Bool = false) -> Int? {
         generateArtworkPalette(from: image, bottomStrip: bottomStrip)?.packedBackground
+    }
+
+    static func edgeAnalysis(from image: PlatformImage) -> ArtworkEdgeAnalysis? {
+        cgImage(from: image).flatMap(ArtworkEdgeAnalyzer.analyze)
+    }
+
+    /// Explicit preparation combines layout facts with the existing color algorithm.
+    /// Power budgets pace preparation; they must not change an album's background color.
+    static func presentationPalette(from image: PlatformImage) -> ArtworkPalette? {
+        guard let cg = cgImage(from: image) else { return nil }
+        return presentationPalette(from: cg)
+    }
+
+    static func presentationPalette(from image: CGImage) -> ArtworkPalette? {
+        guard let edges = ArtworkEdgeAnalyzer.analyze(image) else { return nil }
+        var palette = generateArtworkPalette(from: image)
+        palette.edgeAnalysis = edges
+        palette.isProvisional = false
+        return palette
     }
 
     static func generateArtworkPalette(from image: PlatformImage, bottomStrip: Bool = false) -> ArtworkPalette? {
@@ -114,6 +135,10 @@ nonisolated enum AlbumColorAnalyzer {
     // MARK: - Resolution
 
     private static func resolve(image: CGImage) -> ArtworkColorAnalysisResult? {
+        resolveColors(image: image)
+    }
+
+    private static func resolveColors(image: CGImage) -> ArtworkColorAnalysisResult? {
         guard let raster = Raster.make(from: image, size: analysisSize) else { return nil }
 
         let border = BorderStats.measure(raster, fraction: borderFraction)

@@ -4,6 +4,7 @@
 // See LICENSE file in the project root for full license information.
 
 import Testing
+import SwiftUI
 import Foundation
 import SwiftData
 import SwiftSonic
@@ -705,5 +706,61 @@ struct LyricsLanguageLifecycleTests {
         task.cancel()
         await task.value
         #expect(vm.state == .empty)
+    }
+}
+
+@Suite("Lyrics presentation lifetime")
+@MainActor
+struct LyricsPresentationLifetimeTests {
+    @Test func outgoingViewCannotStopIncomingLyricsOrClearChrome() async throws {
+        let (vm, _) = try makeViewModel(lyrics: syncedList())
+        await vm.load()
+        vm.playerState.playbackState = .playing
+        let outgoing = UUID(), incoming = UUID()
+        vm.setVisible(true, owner: outgoing)
+        vm.setVisible(true, owner: incoming)
+        vm.prefersHiddenChrome = true
+        vm.setVisible(false, owner: outgoing)
+        vm.setVisible(false, owner: outgoing) // Late/duplicate disappearance.
+        vm.setVisible(false) // A legacy caller cannot release the incoming owner.
+        #expect(vm.isShown)
+        #expect(vm.prefersHiddenChrome)
+        #expect(vm.trackingTask != nil)
+        vm.playerState.position = 1.2
+        try await Task.sleep(for: .milliseconds(180))
+        #expect(vm.currentLineIndex == 1)
+        vm.setVisible(false, owner: incoming)
+        #expect(!vm.isShown && vm.trackingTask == nil)
+        #expect(!vm.prefersHiddenChrome)
+    }
+
+    @Test func sameSongResumesAfterBackgroundPauseAndPanelChanges() async throws {
+        let (vm, _) = try makeViewModel(lyrics: syncedList())
+        let host = UUID(), portrait = UUID(), landscape = UUID()
+        vm.playerState.playbackState = .playing
+        vm.setVisible(true, owner: host)
+        await vm.load()
+        vm.reconcileTracking()
+        vm.setVisible(true, owner: portrait)
+        vm.setScenePhase(.background)
+        #expect(vm.trackingTask == nil && vm.isShown)
+        vm.setVisible(true, owner: landscape)
+        vm.setVisible(false, owner: portrait)
+        vm.setScenePhase(.active)
+        vm.playerState.position = 2.2
+        try await Task.sleep(for: .milliseconds(180))
+        #expect(vm.currentLineIndex == 2)
+        vm.playerState.playbackState = .paused
+        vm.reconcileTracking()
+        #expect(vm.trackingTask == nil)
+        vm.playerState.playbackState = .playing
+        vm.reconcileTracking()
+        #expect(vm.trackingTask != nil)
+        vm.setVisible(false, owner: landscape)
+        vm.setVisible(false, owner: host)
+        #expect(vm.trackingTask == nil && !vm.isShown)
+        vm.setVisible(true, owner: host)
+        #expect(vm.isShown && vm.trackingTask != nil)
+        vm.setVisible(false, owner: host)
     }
 }

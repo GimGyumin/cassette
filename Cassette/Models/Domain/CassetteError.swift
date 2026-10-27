@@ -24,6 +24,7 @@ nonisolated enum CassetteError: Error, Sendable {
     case invalidHeaderValue(key: String)
     case serverNotFound(id: UUID)
     case seekUnavailable
+    case dolbyAtmosCellularRestricted
     case playbackMethodUnavailable
     case notImplemented
     /// Requested media is not downloaded and device is offline.
@@ -68,6 +69,8 @@ extension CassetteError: LocalizedError {
             return "No server found with ID \(id.uuidString)."
         case .seekUnavailable:
             return String(localized: "Unable to load audio at the requested position. Try seeking again.")
+        case .dolbyAtmosCellularRestricted:
+            return String(localized: "Dolby Atmos streaming over cellular is disabled. Connect to Wi-Fi, download the song, or change the Dolby Atmos setting.")
         case .playbackMethodUnavailable:
             return String(localized: "The selected server playback method is unavailable. Choose Automatic or OpenSubsonic, or check your server support.")
         case .notImplemented:

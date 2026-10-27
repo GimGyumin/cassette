@@ -46,10 +46,13 @@ final class LyricsViewModel {
     /// All lyric rows with an active vocal stream at the current timestamp
     /// (lead + choir + ad-lib may be concurrent — Apple Music multi-track karaoke).
     var activeLineIndices: Set<Int> = []
+    /// Visual lead emphasis survives short vocal gaps, ending just before the next phrase.
+    var emphasizedLineIndices: Set<Int> = []
     /// Per-line inclusive UTF-8 karaoke byte ends for rows in `activeLineIndices`.
     var karaokeByteEnds: [Int: Int] = [:]
     /// Clock used for word-level karaoke progress (ms, lyrics-offset adjusted).
     var karaokePlaybackMs: Int = 0
+    @ObservationIgnored var karaokeSampleHostTime: CFTimeInterval = CACurrentMediaTime()
     /// 0...1 while waiting through a long instrumental / inter-line gap; `nil` when a lyric line is active.
     var instrumentalGapProgress: Double? {
         didSet {
@@ -60,6 +63,8 @@ final class LyricsViewModel {
     private(set) var hasInstrumentalGap = false
     /// Insert the gap indicator after this lyric index (`nil` = before the first timed line).
     var instrumentalGapAfterIndex: Int?
+    var instrumentalGapStartMs = 0
+    var instrumentalGapEndMs = 0
     var availableLanguages: [String] = []
     /// Server-provided translation tracks (`kind=translation`) keyed by language code.
     var availableServerTranslations: [(lang: String, title: String)] = []
@@ -91,6 +96,7 @@ final class LyricsViewModel {
     var displayRows: [LyricDisplayRow] = [] {
         didSet {
             playbackTimeline = LyricPlaybackTimeline(rows: displayRows)
+            rebuildAMLLTimeline()
             guard let first = displayRows.first else {
                 usesSpeakerLayout = false
                 return
@@ -99,6 +105,16 @@ final class LyricsViewModel {
         }
     }
     var playbackTimeline = LyricPlaybackTimeline(rows: [])
+    @ObservationIgnored var emphasisTimeline = AMLLTimeline(bounds: [])
+    @ObservationIgnored var emphasisDisplayIndices: [Int] = []
+    @ObservationIgnored var emphasisLeadStarts: [(index: Int, startMs: Int)] = []
+    @ObservationIgnored var amllTimeline = AMLLTimeline(bounds: [])
+    @ObservationIgnored var amllDisplayIndices: [Int] = []
+    @ObservationIgnored var amllSeekDetector = AMLLSeekDetector()
+    @ObservationIgnored var amllForceSeek = true
+    /// Set only on a discontinuity, so row animations do not observe the media clock.
+    var amllSeekRevision = 0
+    var amllTransitionIsSeek = false
     /// Canonical Apple Music–style lyric document (TTML / karaoke / LRC / plain).
     var lyricDocument: LyricDocument?
     /// Lead timed rows `(displayIndex, startMs)` for instrumental-gap detection — built once per load.
@@ -163,6 +179,10 @@ final class LyricsViewModel {
     var trackingTask: Task<Void, Never>?
     var resumeTask: Task<Void, Never>?
     var isShown = false
+    /// Rotation can overlap outgoing/incoming lyric views. Each presentation
+    /// releases only its own visibility, never the new view's tracking session.
+    @ObservationIgnored var visibilityOwners: Set<UUID> = []
+    @ObservationIgnored var legacyVisibility = false
     /// App is foreground & active. Backgrounding must stop the 30/60Hz tracking loop —
     /// the screen is off, so advancing lyrics/karaoke is pure wasted CPU.
     var isActive = true
